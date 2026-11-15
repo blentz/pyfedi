@@ -15,7 +15,7 @@ from app.constants import DONOR_WHILE_SUBSCRIBED
 from app.email import send_prepaid_reminder, send_verification_email
 from app.models import MemberSubscription, Offer, Payment, PaymentEvent, User, utcnow
 from app.payments.adapters import adapter_for
-from app.payments.events import CustomerKnown, Paid, Refunded, SubscriptionEnded, SubscriptionStarted
+from app.payments.events import CustomerKnown, Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 from app.payments.tasks import cancel_at_provider
 from app.storefront import domain_by_id, paid_registration
 from app.utils import finalize_user_setup, get_setting
@@ -63,6 +63,8 @@ def apply_event(provider_kind: str, event_id: str, events: list) -> bool:
                 to_cancel += _started(provider_kind, event, mismatched, touched, joined)
             elif isinstance(event, SubscriptionEnded):
                 _ended(provider_kind, event, touched)
+            elif isinstance(event, Renewed):
+                _renewed(provider_kind, event.reference, event.paid_through)
             elif isinstance(event, CustomerKnown):
                 _customer_known(event)
         db.session.flush()
@@ -120,6 +122,8 @@ def _started(kind: str, event: SubscriptionStarted, mismatched: bool, touched: s
                                                          current_period_end=_prepaid_until(kind, user, offer),
                                                          created_at=utcnow())
                        .on_conflict_do_nothing())
+    if event.renews_at is not None:
+        _renewed(kind, event.reference, event.renews_at)
     touched.add(user)
     if mismatched:
         return []
@@ -185,6 +189,16 @@ def end_expired_prepaid() -> int:
         refresh_access(user)
     db.session.commit()
     return len(expired)
+
+
+def _renewed(kind: str, reference: str, paid_through) -> None:
+    """Move a subscription's renewal date forward, never back: webhooks arrive in any order. A prepaid one has its end
+    in current_period_end, and one not yet known (its start can come after its first renewal) is left to its start."""
+    subscription = MemberSubscription.query.filter_by(provider_kind=kind, provider_reference=reference).first()
+    if subscription is None or subscription.current_period_end is not None:
+        return
+    if subscription.renews_at is None or paid_through > subscription.renews_at:
+        subscription.renews_at = paid_through
 
 
 def _ended(kind: str, event: SubscriptionEnded, touched: set) -> None:

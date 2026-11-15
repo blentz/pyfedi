@@ -1,5 +1,6 @@
 """What a provider adapter tells core, in nobody's vocabulary but ours. No provider payload gets past an adapter."""
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,14 @@ class SubscriptionStarted:
     reference: str
     user_id: int | None
     offer_id: int | None
+    renews_at: datetime | None = None   # naive UTC: the provider's next billing date, when it renews by itself
+
+
+@dataclass(frozen=True)
+class Renewed:
+    """A subscription that renews by itself is paid through this naive UTC time: the provider's next billing date."""
+    reference: str
+    paid_through: datetime
 
 
 @dataclass(frozen=True)

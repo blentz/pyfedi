@@ -7,8 +7,8 @@ import pytest
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
 from app.models import MemberSubscription, Offer, Payment, PaymentEvent, utcnow
-from app.payments.core import apply_event, holds_offer, refresh_donor
-from app.payments.events import CustomerKnown, Paid, Refunded, SubscriptionEnded, SubscriptionStarted
+from app.payments.core import apply_event, end_expired_prepaid, holds_offer, refresh_donor
+from app.payments.events import CustomerKnown, Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 from tests.factories import make_instance, make_user
 
 
@@ -191,6 +191,58 @@ class TestEndings:
         apply('evt_1', started(member, offer))
         apply('evt_2', started(member, offer))
         assert MemberSubscription.query.count() == 1
+
+
+class TestRenewals:
+    """A subscription that renews by itself keeps the provider's next billing date: what it is paid through."""
+
+    def test_a_subscription_can_start_with_its_renewal_date(self, member):
+        when = utcnow().replace(microsecond=0) + timedelta(days=30)
+        apply('evt_1', SubscriptionStarted('sub_1', member.id, an_offer().id, renews_at=when))
+        assert MemberSubscription.query.one().renews_at == when
+
+    def test_a_renewal_moves_the_date_forward(self, member):
+        apply('evt_1', started(member, an_offer()))
+        first = utcnow().replace(microsecond=0) + timedelta(days=30)
+        apply('evt_2', Renewed('sub_1', first))
+        assert MemberSubscription.query.one().renews_at == first
+        apply('evt_3', Renewed('sub_1', first + timedelta(days=30)))
+        assert MemberSubscription.query.one().renews_at == first + timedelta(days=30)
+
+    def test_a_late_webhook_never_moves_it_back(self, member):
+        when = utcnow().replace(microsecond=0) + timedelta(days=60)
+        apply('evt_1', SubscriptionStarted('sub_1', member.id, an_offer().id, renews_at=when))
+        apply('evt_2', Renewed('sub_1', when - timedelta(days=30)))
+        assert MemberSubscription.query.one().renews_at == when
+
+    def test_a_renewal_after_the_start_in_one_batch_is_kept(self, member):
+        when = utcnow().replace(microsecond=0) + timedelta(days=30)
+        apply('evt_1', started(member, an_offer()), Renewed('sub_1', when))
+        assert MemberSubscription.query.one().renews_at == when
+
+    def test_a_renewal_of_something_unknown_does_nothing(self, app, db_session):
+        assert apply('evt_1', Renewed('sub_nobody', utcnow())) is True
+        assert MemberSubscription.query.count() == 0
+
+    def test_another_providers_subscription_is_left_alone(self, member):
+        apply('evt_1', started(member, an_offer()))
+        apply_event('paypal', 'evt_2', [Renewed('sub_1', utcnow() + timedelta(days=30))])
+        assert MemberSubscription.query.one().renews_at is None
+
+    def test_a_prepaid_period_is_not_a_renewal(self, member):
+        """Its end is current_period_end, which the expiry sweep keeps to; a renewal date there would mean nothing."""
+        apply('evt_1', started(member, an_offer()))
+        row = MemberSubscription.query.one()
+        row.current_period_end = utcnow() + timedelta(days=10)
+        db.session.commit()
+        apply('evt_2', Renewed('sub_1', utcnow() + timedelta(days=40)))
+        assert MemberSubscription.query.one().renews_at is None
+
+    def test_a_renewal_date_does_not_end_anything_when_it_passes(self, member):
+        """A late payment is the provider's to judge: it says so with an ending, which is when the row ends."""
+        apply('evt_1', SubscriptionStarted('sub_1', member.id, an_offer().id, renews_at=utcnow() - timedelta(days=1)))
+        end_expired_prepaid()
+        assert MemberSubscription.query.one().status == 'active'
 
 
 class TestTheLabel:
