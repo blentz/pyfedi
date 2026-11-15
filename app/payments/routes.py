@@ -109,9 +109,8 @@ def redeem():
 @bp.route('/donations/code/clear', methods=['POST'])
 @login_required
 def clear_code():
-    form = FlaskForm()
-    if form.validate_on_submit():
-        session.pop(HELD_CODE, None)
+    """Forget a held discount code. The site's CSRF protection turns away a POST without its token before this runs."""
+    session.pop(HELD_CODE, None)
     return redirect(url_for('payments.donations'))
 
 
