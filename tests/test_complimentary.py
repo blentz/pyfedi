@@ -17,6 +17,7 @@ from app.complimentary import KIND, complimentary_of, complimentary_offer, end_c
     grant_to_new_account
 from app.models import CmsPage, MemberSubscription, Offer, PromoCode, Site, SiteDomain, utcnow
 from app.payments.adapters import adapter_for
+from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.core import end_expired_prepaid, end_subscriptions_of, refresh_access, remind_expiring_prepaid
 from app.payments.offers import offers_changed, offers_here
 from app.payments.status import subscription_statuses
@@ -102,7 +103,22 @@ class TestTheTier:
 
     def test_its_adapter_offers_nothing_and_cancels_nothing(self, env):
         adapter = adapter_for(KIND)
-        assert not adapter.available() and not adapter.prepaid and adapter.cancel('anything') is None
+        assert not adapter.available() and not adapter.on_onion() and not adapter.prepaid
+        assert adapter.cancel('anything') is None and adapter.cancel_at_period_end('anything') <= utcnow()
+
+    @pytest.mark.parametrize('call', ['checkout', 'portal', 'price', 'credentials'])
+    def test_what_only_a_provider_does_is_refused(self, env, call):
+        adapter = adapter_for(KIND)
+        attempts = {'checkout': lambda: adapter.checkout(env.tier, env.member, 'ok', 'no'),
+                    'portal': lambda: adapter.billing_portal_url('cus', 'back'),
+                    'price': lambda: adapter.describe_price('price'),
+                    'credentials': lambda: adapter.check_credentials({})}
+        with pytest.raises(ProviderError):
+            attempts[call]()
+
+    def test_its_adapter_reads_no_webhook(self, env):
+        with pytest.raises(InvalidWebhook):
+            adapter_for(KIND).parse_webhook(b'{}', {})
 
 
 class TestGranting:
@@ -288,6 +304,20 @@ class TestAdmin:
         db.session.commit()
         post(env, f'/admin/payments/complimentary/{env.member.id}', grant='1')
         assert complimentary_of(env.member) is not None
+
+    def test_an_account_still_joining_is_refused(self, env, treasurer):
+        env.member.registration_pending_since = utcnow()
+        db.session.commit()
+        post(env, f'/admin/payments/complimentary/{env.member.id}', grant='1')
+        assert complimentary_of(env.member) is None
+
+    def test_ending_what_is_not_held_changes_nothing(self, env, treasurer):
+        answer = post(env, f'/admin/payments/complimentary/{env.member.id}', end='1')
+        assert answer.status_code == 302 and complimentary_of(env.member) is None
+
+    def test_a_post_pressing_neither_button_changes_nothing(self, env, treasurer):
+        assert post(env, f'/admin/payments/complimentary/{env.member.id}').status_code == 302
+        assert complimentary_of(env.member) is None
 
     def test_a_remote_account_is_refused(self, env, treasurer):
         remote = make_user(env.baseline.instance_remote, 'faraway')

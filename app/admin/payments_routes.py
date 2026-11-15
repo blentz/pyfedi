@@ -360,7 +360,7 @@ def admin_payments_complimentary(user_id):
     if user is None or user.deleted or not user.is_local():
         abort(404)
     form = ComplimentaryForm()
-    if form.validate_on_submit():
+    if form.validate_on_submit() and (form.grant.data or form.end.data):   # a button pressed, or nothing to do
         if form.end.data:
             if end_complimentary(user):
                 refresh_access(user)
