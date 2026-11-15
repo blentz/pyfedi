@@ -1975,7 +1975,14 @@ commit each:
   copies are made under a record key chosen first, which a retry looks up, and YouTube uploads
   resume where they stopped; a Facebook or Instagram post whose publishing call got no answer
   is shown to its author as "Maybe posted", with Retry, and never retried by itself.
-  Instagram copies keep their id when their link cannot be read. Spec
+  Instagram copies keep their id when their link cannot be read. Work a service finishes later
+  waits as "processing" and is asked after each half minute, for up to half an hour: Instagram
+  publishes a post once Meta says its pictures are ready, as Meta asks. Bluesky gets a post's
+  uploaded MP4 as its video (up to 300 MB, uploaded to the member's own server, no new
+  permission), and text and link when the server will not take it. Each service takes a few
+  copies at once (YouTube two, the others four), and the rest wait their turn. A copy is checked
+  again just before it goes, so a post made private or removed meanwhile is not sent, and a copy
+  made for a post deleted while it went is deleted in turn (`fe0187c3`). Spec
   `docs/superpowers/specs/2026-11-13-connected-accounts-design.md` (rulings C1 to C13;
   `83aa1637`, `5f5f2e77`, `23529744`, `6516ec15`, `c16d585b`, `e527654d`).
 

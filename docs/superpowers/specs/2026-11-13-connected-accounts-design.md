@@ -435,34 +435,52 @@ the ids it has. A shared `PublishedThen` was not needed.
 ### 19.4 Processing (C13 3)
 
 - New row state `processing`; its data goes in `progress` (19.2's column).
-- A service's `send` may return `Pending(data)`: the row is `processing`, `next_attempt_at` a poll interval ahead.
-  The sweep claims due `processing` rows like queued ones and calls `service.check(connection, row)`, a read-only
-  status call, which answers still pending (new data), ready, or failed. On ready, `service.finish(...)` makes the
-  one publishing call (19.2 applies to it). Polls cost no attempt; past a deadline (30 minutes) the row fails.
-- **Instagram** uses it for every post: the container (and a carousel's children) is created, then polled for
-  `status_code` `FINISHED` (`ERROR`/`EXPIRED` fail it) before `media_publish`, as Meta asks.
+- A service's `send` may answer `Pending(data)`: the row is `processing`, its progress `data` plus
+  `processing_since`, `next_attempt_at` 30 seconds ahead. The sweep claims due `processing` rows like queued ones
+  and calls `service.resume(post, tokens, connection, progress)`, which asks how the service is getting on and
+  finishes the copy once it is ready (Sent), or answers Pending again. Asking costs no attempt; a failed ask backs off
+  and counts like a failed send. Past 30 minutes processing the row fails. A deleted post drops a processing copy:
+  nothing of it is public.
+- **Instagram** uses it for every post: the container (and a carousel's children) is created, its `status_code` is
+  read at once, and `media_publish` follows on `FINISHED` (19.2 applies to it); `IN_PROGRESS` waits, `ERROR` or
+  `EXPIRED` fail the copy, and `PUBLISHED` (an earlier attempt's publish whose answer was lost) is unconfirmed.
 - **Bluesky video** (19.5) polls the video job.
 
 ### 19.5 Bluesky video (C13 4)
 
-A post's uploaded video goes to Bluesky as `app.bsky.embed.video` (one video, alt text, the post text cut as
-today). Upload goes through the video service (`app.bsky.video.uploadVideo` with a service-auth token for the
-member's PDS, then `getJobStatus` polled by 19.4); the blob it returns goes into the record. Size and length limits
-from `app.bsky.video.getUploadLimits`, asked before uploading. Spike first: whether the granular OAuth scopes allow
-`com.atproto.server.getServiceAuth` for the video service, and what the harness PDS (no video service) can stand
-in with; until then a video post still goes to Bluesky as text and link.
+Spike (2026-11-14): Bluesky's video tutorial gives two ways. The video service (`video.bsky.app`) needs a
+service-auth token, i.e. an `rpc:com.atproto.repo.uploadBlob?aud=...` scope the connections were never granted: every
+member would reconnect. The other, which the guide calls the easiest, is the one taken: the video goes to the
+member's PDS with `com.atproto.repo.uploadBlob`, as a picture does (`blob:*/*` covers it), in an
+`app.bsky.embed.video` embed; Bluesky processes it once the post is there, so no processing state is needed.
+
+- The current lexicon (`@atproto/api`): the video blob is `video/mp4` only, at most 300,000,000 bytes; `alt`,
+  `aspectRatio`, `captions` and `presentation` optional. PieFed sends the blob and the aspect ratio from the video's
+  probed width and height, no alt (an upload has none of its own).
+- A post's uploaded MP4 goes as the video with the post text, no link unless cut. Anything else, an MP4 past the
+  limit, a content warning, or a PDS that refuses it (its own limit may be lower: self-hosted PDSes default lower)
+  goes as text and link, as before.
+- The blob is uploaded once: it is kept in the copy's progress (19.2), so a later attempt reuses it. The body is
+  streamed from the stored file, from its start again on a DPoP nonce retry.
+- Bluesky-hosted accounts need a verified email to post video, and have a daily count; that is Bluesky's, applied
+  after the post is made, and not checked here.
 
 ### 19.6 Sends at once (C13 5)
 
-Each service kind declares `max_concurrent` (Facebook/Instagram through Facebook 4, Instagram Login 4, YouTube 2,
-Bluesky 4). `perform` takes a Redis slot (`connections:slots:<kind>:<app client id>`, an expiring counter, given
-back in `finally`) before calling the service; with none free the row waits a minute, costing no attempt, like a
-pause (§18.3).
+`dispatch.SLOTS` caps the sends at once per service kind and app: Facebook (and Instagram through Facebook) 4,
+Instagram Login 4, YouTube 2, Bluesky 4. `perform` takes a slot (a Redis counter
+`connections:slots:<kind>:<app client id>`, kept two hours past its last use so a dead worker's slot comes back) for
+the work and gives it back after, whatever the outcome. With none free the row waits a minute at no cost of an
+attempt, like a pause (§18.3). Kinds not in the table (none today) have no cap.
 
 ### 19.7 Steps
 
 - **Q1**: 19.2 and 19.3: `social_crosspost.progress` (JSON) and `state` widened to 20 characters, migration
   `f3b7d1a9c5e2`; `Progress` passed to `send` and saved before the call it guards.
-- **Q2**: 19.4, Instagram moved onto it.
-- **Q3**: 19.5, spike first.
+- **Q2**: 19.4, Instagram moved onto it: `Pending`, `Service.resume`, row state `processing`.
+- **Q3**: 19.5: the spike chose the PDS upload; no new scope.
 - **Q4**: 19.6.
+
+Also from the review of Q2 (`fe0187c31`): each send and resume checks the post again first, and outcomes are
+recorded under a row lock against the state the row was claimed in, so a copy made for a post deleted meanwhile is
+deleted in turn.

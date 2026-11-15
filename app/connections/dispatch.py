@@ -20,12 +20,14 @@ send-queue`) and an immediate task never do the same row twice, and a worker tha
 an hour later. A transient failure sets the next attempt by backoff; five failed sends make the row `failed`. What a
 send did so far (`progress`) is kept on the row across attempts, so a retry carries on rather than starting over.
 """
+from contextlib import contextmanager
 from datetime import timedelta
 
 from flask import current_app
 from flask_babel import _
 from sqlalchemy import update
 
+import app as app_pkg
 from app import celery, db
 from app.clock import utcnow
 from app.connections import (SERVICES, AuthFailed, Pending, Progress, QuotaWait, Sent, ServiceError, Transient,
@@ -44,6 +46,10 @@ SENT_STATES = ('sent', 'editing', 'deleting')
 WORK = {'queued': 'send', 'processing': 'resume', 'editing': 'edit', 'deleting': 'delete'}
 POLL = timedelta(seconds=30)    # between asks while the service works on a copy (the sweep runs each minute)
 PROCESSING_LIMIT = 30 * 60      # seconds a copy may stay processing before it fails
+# sends at once per service kind and app (spec 19.6, as Postiz caps each provider's queue); others wait a minute
+SLOTS = {'facebook': 4, 'instagram': 4, 'youtube': 2, 'bluesky': 4}
+SLOT_HOLD = 2 * 3600            # seconds a slot count lives unused: a worker that died gives its slot back by then
+BUSY_WAIT = timedelta(minutes=1)
 
 
 # --------------------------------------------------------------------------
@@ -296,6 +302,34 @@ def _perform(row_id: int, work: str, service, connection) -> None:
         row.last_error = _('Waiting: %(service)s asked for a pause.', service=service.label)
         db.session.commit()
         return
+    with _slot(kind, app) as free:
+        if not free:   # as many copies as this service takes at once are on their way: wait, at no cost (spec 19.6)
+            row.next_attempt_at = utcnow() + BUSY_WAIT
+            row.last_error = _('Waiting: other copies are on their way to %(service)s.', service=service.label)
+            db.session.commit()
+            return
+        _attempt(row_id, work, service, connection)
+
+
+@contextmanager
+def _slot(kind: str, app):
+    """One of the sends a service kind's app takes at once (SLOTS), held for the work and given back after: yields
+    whether one was free. A kind with no cap always has one."""
+    limit = SLOTS.get(kind)
+    if limit is None:
+        yield True
+        return
+    key = f"connections:slots:{kind}:{app.client_id if app is not None else 'none'}"
+    taken = app_pkg.redis_client.incr(key)
+    app_pkg.redis_client.expire(key, SLOT_HOLD)
+    try:
+        yield taken <= limit
+    finally:
+        app_pkg.redis_client.decr(key)
+
+
+def _attempt(row_id: int, work: str, service, connection) -> None:
+    """Do the work at the service, and record what came of it."""
     try:
         tokens = usable_tokens(connection.id, service)
         row = db.session.get(SocialCrosspost, row_id)

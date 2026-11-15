@@ -880,6 +880,37 @@ def test_a_copy_still_processing_when_its_post_went_stays_dropped(world, http_mo
     assert (row.state, row.remote_id) == ('deleted', None)
 
 
+SLOT = 'connections:slots:fake:none'
+
+
+def test_a_service_busy_with_its_share_of_sends_makes_the_next_wait(world, http_mock, monkeypatch, redis_double):
+    monkeypatch.setitem(dispatch.SLOTS, 'fake', 1)
+    redis_double.set(SLOT, 1)   # another worker holds the one slot
+    row = a_row(world, a_post(world))
+    perform(row.id)   # no HTTP route: a send now would fail the test
+    row = fresh(row)
+    assert (row.state, row.attempts) == ('queued', 0)
+    assert row.last_error == 'Waiting: other copies are on their way to Fake.'
+    assert timedelta(seconds=50) < row.next_attempt_at - utcnow() <= dispatch.BUSY_WAIT
+    assert int(redis_double.get(SLOT)) == 1   # its try is given back
+    redis_double.set(SLOT, 0)
+    http_mock.post(f'{BASE}/posts').respond(503)
+    row = _due(row)
+    assert (row.state, row.attempts) == ('queued', 1) and int(redis_double.get(SLOT)) == 0
+    assert 0 < redis_double.ttl(SLOT) <= dispatch.SLOT_HOLD
+    http_mock.post(f'{BASE}/posts').respond(200, json=SENT)
+    assert _due(row).state == 'sent' and int(redis_double.get(SLOT)) == 0
+
+
+def test_a_slot_names_the_app_it_is_for(app, redis_double, monkeypatch):
+    monkeypatch.setitem(dispatch.SLOTS, 'fake', 2)
+    with dispatch._slot('fake', SimpleNamespace(client_id='app-7')) as free:
+        assert free and int(redis_double.get('connections:slots:fake:app-7')) == 1
+    with dispatch._slot('uncapped', None) as free:
+        assert free
+    assert int(redis_double.get('connections:slots:fake:app-7')) == 0
+
+
 def test_an_unconfirmed_copy_waits_for_the_author(world, monkeypatch):
     def unconfirmed(post, tokens, connection, progress=None):
         raise Unconfirmed('Fake may have posted it: no answer came back. Check before trying again.')
