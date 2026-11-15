@@ -55,6 +55,13 @@ an earlier one. Taps that an app can swallow while it starts or while its keyboa
 number of times (`Device.tap_until`, and `hide_keyboard` waits until the keyboard has gone), and tabs are tapped as
 the lowest element with that label (`Device.tap_tab`), never by a substring that a feed post could also contain.
 
+Timing under load (2026-11-15): the web apps run before the emulator boots (`run.sh` stops the last one first), since
+its load slowed their pages past their waits in full runs while they passed every step alone. An app whose step
+fails that should pass runs once more from fresh state (`steps.run_with_retry`: PieFed restored, a new browser
+context or the app reinstalled); its first try's evidence is kept as `<app>-try1-*`, its result records `retried`,
+and the gate prints "passed on retry" without counting a problem. adb reads whose output arrives cut short are asked
+again (`android_device.retrying_reads`); a command that changes something is never run twice.
+
 ## The matrix
 
 `matrix.json` names every app, its platform, how it is checked, and what it is expected to do. A step with no
@@ -74,7 +81,7 @@ matrix in the unit suite.
    `{"github": "<owner>/<repo>", "asset": "<regex>"}`, with `"prerelease": true` to take prereleases) with its
    `package`, or `rss`. Every app is driven: a check that stops short of the app's own screens is not one.
 2. For a web app, a service in `compose.interop.yaml` (profile `apps`), its name in Caddy's aliases and
-   `interop/Caddyfile`, and its image in `run.sh`'s `WEB_IMAGES` and `APPS_SERVICES`.
+   `interop/Caddyfile`, and its image in `run.sh`'s `WEB_IMAGES` and `WEB_SERVICES`.
 3. For a driven app, a driver class in `test_web_apps.py` or `test_android_apps.py`: `login`, `view` and `post`, each
    raising on failure. Find controls by accessible name (web) or by resource id, text or content description
    (Android); a screenshot of a failing step lands in `results/`.
