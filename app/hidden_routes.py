@@ -117,6 +117,7 @@ NON_OBJECT_ARGUMENTS = {
     'activity_id': None, 'page_id': None, 'revision_id': None, 'slug': None,
     'domain_id': None,   # a link domain (/d/) or, for an admin, a hosted domain's settings
     'role_id': ('/admin/',), 'grant_id': ('/admin/',),   # a role and a grant (RBAC), Admin's pages alone
+    'code_id': ('/admin/payments/codes/',),   # a gift or referral code (paid membership G6), monetization's page
     'app_id': ('/user/settings/apps/',),   # an OAuth app; revoking touches the signed-in person's own tokens alone
     # Mastodon's API (plan W1.2): a status id is a snowflake naming a post or comment, a list id a joined community;
     # their routes answer a hidden one as one nobody holds themselves (app.mastodon.timelines.readable, _joined)

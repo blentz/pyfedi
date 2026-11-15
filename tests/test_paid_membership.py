@@ -552,6 +552,11 @@ class TestRedeeming:
         self.redeem(env, referrer.referral_code)
         assert gift_of(user) is None
 
+    def test_an_empty_code_changes_nothing(self, env):
+        user = member(env, 'redeemer')
+        login(env.client, user)
+        assert self.redeem(env, '').status_code == 302 and gift_of(user) is None
+
     def test_a_visitor_is_sent_to_log_in(self, env):
         response = env.client.post('/donations/redeem', data={'code': 'x'}, base_url=env.base)
         assert response.status_code == 302 and '/auth/login' in response.headers['Location']

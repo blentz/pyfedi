@@ -8,6 +8,9 @@ from flask import g
 from app import db
 from app.models import MemberSubscription, Offer, PromoCode, PromoCodeUse, Site, utcnow
 from app.payments.adapters import adapter_for
+from app.payments.adapters.base import InvalidWebhook, ProviderError
+from app.payments.gifts import referral_gift_code
+from app.payments.holding import first_charge_after
 from app.payments.core import end_expired_prepaid
 from app.payments.gifts import find_gift_code, start_gift
 from tests.factories import make_user
@@ -142,3 +145,34 @@ class TestUseIsCheckedAtTheMomentOfUse:
         code.active = False
         db.session.commit()
         assert start_gift(env.member, code) is None
+
+
+class TestNothingElseIsAskedOfAGift:
+    @pytest.mark.parametrize('call', [
+        lambda gift, env: gift.checkout(env.knight, env.member, 'ok', 'no'),
+        lambda gift, env: gift.billing_portal_url('cus', 'back'),
+        lambda gift, env: gift.describe_price('price'),
+        lambda gift, env: gift.check_credentials({}),
+    ], ids=['checkout', 'portal', 'price', 'credentials'])
+    def test_what_only_a_provider_does_is_refused(self, env, call):
+        with pytest.raises(ProviderError):
+            call(adapter_for('gift'), env)
+
+    def test_it_has_no_webhook_to_read(self, env):
+        with pytest.raises(InvalidWebhook):
+            adapter_for('gift').parse_webhook(b'{}', {})
+
+    def test_cancelling_one_ends_it_now(self, env):
+        assert adapter_for('gift').cancel_at_period_end('gift:x') <= utcnow()
+
+
+class TestEdges:
+    def test_a_member_with_no_referral_code_has_no_row(self, env):
+        assert referral_gift_code(env.member) is None
+
+    def test_a_guest_or_a_one_off_is_charged_now(self, env):
+        gift = Offer(provider_kind='btcpay', kind='donation', title='Tip', offer_group='tips', amount_minor=300,
+                     currency='usd')
+        db.session.add(gift)
+        db.session.commit()
+        assert first_charge_after(None, env.knight) is None and first_charge_after(env.member, gift) is None

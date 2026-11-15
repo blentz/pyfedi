@@ -1,4 +1,5 @@
 """Admin -> Payments -> Codes (paid membership plan phase 2, G6): the default gift, gift codes, members' referral codes."""
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -159,3 +160,21 @@ class TestChangingACode:
 
     def test_an_unknown_code_is_404(self, env, admin):
         assert post(env, '/admin/payments/codes/99999', offer_id=env.knight.id, days=30).status_code == 404
+
+
+class TestTheEditPage:
+    def test_it_shows_the_code_with_its_last_day(self, env, admin):
+        code = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, days=30,
+                         expires_at=datetime(2027, 1, 31, 23, 59, 59))
+        db.session.add(code)
+        db.session.commit()
+        page = env.client.get(f'/admin/payments/codes/{code.id}').get_data(as_text=True)
+        assert 'gift-month' in page and 'value="2027-01-31"' in page
+
+    def test_it_names_whose_referral_code_it_is(self, env, admin):
+        set_setting(GENERATORS_SETTING, 'all')
+        member = somebody(env, 'referrer')
+        generate_code(member)
+        db.session.commit()
+        row = PromoCode.query.filter_by(owner_id=member.id).one()
+        assert "referrer's referral code" in env.client.get(f'/admin/payments/codes/{row.id}').get_data(as_text=True)
