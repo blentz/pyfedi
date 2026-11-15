@@ -15,6 +15,7 @@ from markupsafe import Markup
 from sqlalchemy import and_, false, func
 from werkzeug.datastructures import MultiDict
 from wtforms import Label
+from wtforms.validators import Length, Optional
 
 from app import cache, db, plugins
 from app.activitypub.util import users_total
@@ -34,7 +35,7 @@ from app.referral import REFERRAL_MODE, record_referral, referral_mode_on, refer
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, onion_proof_refused, prepare_onion_proof
 from app.payments.offers import money
-from app.payments.registration import registration_checkout, registration_offer
+from app.payments.registration import registration_checkout, registration_offer, registration_tiers
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, captcha_enabled, \
     finalize_user_setup, get_request, get_setting, gibberish, \
     ip_address, is_safe_redirect_target, markdown_to_html, render_template, safe_redirect_target, user_cookie_banned, \
@@ -225,20 +226,39 @@ def handle_abandoned_open_instance():
 
 
 def register_on_paid_domain(form):
-    """/register where it costs a first fee (M10). The site's mode closes it and nothing else: payment is the gate, so no
-    referral code or application question applies, and money isn't taken for an application an admin may refuse (plan S10).
-    Nor does it reach OAuth, LDAP or a directory's password (C10, S11)."""
+    """/register where it costs a first fee (M10), for any of the domain's tiers (paid membership plan M3). The site's
+    mode closes it and nothing else: payment is the gate, so no application question applies, and money isn't taken for
+    an application an admin may refuse (plan S10). Nor does it reach OAuth, LDAP or a directory's password (C10, S11).
+    On the default domain with referral codes on, a code still admits for free, and an empty one means paying (M4)."""
     offer = registration_offer()
+    tiers = registration_tiers()
+    codes = current_storefront().is_default and referral_mode_on(g.site)
     if g.site.registration_mode != 'Closed' and offer is not None:
-        del form.question
+        if codes:
+            form.question.validators = [Optional(), Length(max=512)]
+            form.question.label = Label('question', _('Referral code, if you have one. Leave it empty to pay instead.'))
+        else:
+            del form.question
         if not g.site.tos_url or not g.site.tos_url.strip():
             del form.terms
+        form.tier.choices = [(tier.id, _('%(tier)s, %(price)s for a %(period)s', tier=tier.title,
+                                         period=_('year') if tier.interval == 'year' else _('month'),
+                                         price=money(tier.amount_minor, tier.currency))) for tier in tiers]
+        if request.method == 'GET':
+            asked = request.args.get('offer', type=int)
+            form.tier.data = asked if any(tier.id == asked for tier in tiers) else offer.id
         if request.method == 'POST' and not onion_proof_refused(form) and form.validate_on_submit():
-            return process_registration_form(form, paid=True)
-    return render_registration_form(form, paid_offer=offer)
+            if codes and (form.question.data or '').strip():
+                return process_registration_form(form)   # the referral path: free, or refused if the code is wrong
+            chosen = registration_offer(form.tier.data) if form.tier.data else offer
+            if chosen.id != (form.tier.data or offer.id):
+                form.tier.errors = list(form.tier.errors) + [_('Choose one of the tiers.')]
+            else:
+                return process_registration_form(form, paid=True, tier=chosen)
+    return render_registration_form(form, paid_offer=offer, tiers=tiers)
 
 
-def process_registration_form(form, paid=False):
+def process_registration_form(form, paid=False, tier=None):
     # One reserved-name list, shared with the OAuth signup path -- see
     # app/utils.py's RESERVED_USER_NAMES and D1139.
     disallowed_usernames = RESERVED_USER_NAMES
@@ -264,7 +284,7 @@ def process_registration_form(form, paid=False):
         if user_ip_banned() or user_cookie_banned():   # an account that could never log in shouldn't be charged for
             return render_template("generic_message.html", title=_("Application declined"),
                                    message=_("Sorry, we are not accepting registrations from you."))
-        return register_new_user(form, ip, country, paid=True)
+        return register_new_user(form, ip, country, paid=True, tier=tier)
 
     referrer = None
     if referral_mode_on(g.site):
@@ -328,7 +348,7 @@ def is_country_blocked(country):
     )
 
 
-def register_new_user(form, ip, country, referrer=None, paid=False):
+def register_new_user(form, ip, country, referrer=None, paid=False, tier=None):
     verification_token = random_token(16)
     form.user_name.data = form.user_name.data.strip()
     normalize_username(form)
@@ -336,6 +356,8 @@ def register_new_user(form, ip, country, referrer=None, paid=False):
     user = create_new_user(form, ip, country, verification_token, referrer, pending=paid)
 
     if paid:
+        user.pending_offer_id = tier.id if tier else None   # what logging in again goes back to paying for (M3)
+        db.session.commit()
         return registration_checkout(user)
 
     if requires_email_verification(user):
@@ -559,7 +581,7 @@ def oauth_client_id(provider):
     return '' if is_onion_request() else current_app.config[f"{provider.upper()}_OAUTH_CLIENT_ID"]
 
 
-def render_registration_form(form, paid_offer=None):
+def render_registration_form(form, paid_offer=None, tiers=()):
     paid = paid_registration(current_storefront())
     registration_open = paid_offer is not None if paid \
         else public_registration_open(current_storefront()) or referral_mode_on(g.site)
@@ -569,7 +591,7 @@ def render_registration_form(form, paid_offer=None):
         del form.terms
 
     return render_template("auth/register.html", title=_("Register"), form=form, site=g.site,
-                           registration_open=registration_open, paid_offer=paid_offer,
+                           registration_open=registration_open, paid_offer=paid_offer, tiers=tiers,
                            paid_price=money(paid_offer.amount_minor, paid_offer.currency) if paid_offer else None,
                            onion_proof=prepare_onion_proof(form, 'register'),
                            instance_chooser_enabled=get_setting('enable_instance_chooser', False),

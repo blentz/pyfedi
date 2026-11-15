@@ -3,7 +3,7 @@ from flask_wtf import FlaskForm
 from sqlalchemy import func
 from wtforms import StringField, PasswordField, SubmitField, HiddenField, BooleanField, RadioField, EmailField, \
     TextAreaField, SelectField
-from wtforms.validators import ValidationError, DataRequired, Email, EqualTo, Length
+from wtforms.validators import ValidationError, DataRequired, Email, EqualTo, Length, Optional
 
 from app.local_names import local_named
 from app.models import User, Community, Feed
@@ -40,6 +40,8 @@ class RegistrationForm(FlaskForm):
                               render_kw={'autocomplete': 'new-password', 'title': _l('Minimum length 8, maximum 128')})
     question = TextAreaField(_l('Why would you like to join this site?'), validators=[DataRequired(), Length(min=1, max=512)])
     terms = BooleanField(_l('I agree to the terms of service & privacy policy (see links in footer)'), validators=[DataRequired()])
+    # A paid domain's tiers (paid membership plan M3): filled, and checked, by register_on_paid_domain
+    tier = RadioField(_l('Tier'), coerce=int, choices=[], validate_choice=False, validators=[Optional()])
     captcha = CaptchaField(_l('Enter captcha code below'), validators=[DataRequired()])
     timezone = HiddenField(render_kw={'id': 'timezone'})
     # Onion only, as on LoginForm

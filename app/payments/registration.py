@@ -21,17 +21,30 @@ from app.utils import get_task_session, patch_db_session, render_template
 UNPAID_ACCOUNT_HOURS = 48   # a checkout lasts less (Adapter.checkout), so nobody can pay for an account that is gone
 
 
-def registration_offer() -> Offer | None:
-    """What signing up here pays for, while it can be paid for. None on any other kind of domain."""
+def registration_tiers() -> list[Offer]:
+    """What signing up here may pay for, while it can be paid for: every subscription on offer here in the group of the
+    domain's own (paid membership plan M3). None on any other kind of domain, or while its own isn't on offer."""
     storefront = current_storefront()
     if not paid_registration(storefront):
-        return None
-    return next((offer for offer in offers_here() if offer.id == storefront.registration_offer_id), None)
+        return []
+    offers = offers_here()
+    own = next((offer for offer in offers if offer.id == storefront.registration_offer_id), None)
+    if own is None:
+        return []
+    return [offer for offer in offers if offer.kind == 'subscription' and offer.offer_group == own.offer_group]
+
+
+def registration_offer(chosen: int | None = None) -> Offer | None:
+    """The tier `chosen`, if it is one here; else the domain's own. None where signing up can't be paid for."""
+    tiers = registration_tiers()
+    return next((offer for offer in tiers if offer.id == chosen), None) \
+        or next((offer for offer in tiers if offer.id == current_storefront().registration_offer_id), None)
 
 
 def registration_checkout(user: User):
-    """To the provider's page, for a pending account. What registering and logging in both lead to."""
-    offer = registration_offer()
+    """To the provider's page, for a pending account, for the tier it chose. What registering and logging in both lead
+    to."""
+    offer = registration_offer(user.pending_offer_id)
     try:
         if offer is None:
             raise ProviderError('nothing to pay for')

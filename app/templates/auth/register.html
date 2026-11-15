@@ -13,7 +13,9 @@
                     <div class="card-body p-6" id="registration_form">
                         {% if registration_open and site.registration_mode != 'Closed' %}
                             <h1 class="card-title text-center">{{ _('Create new account') }}</h1>
-                            {% if paid_offer -%}
+                            {% if paid_offer and tiers|length > 1 -%}
+                            <p class="text-center">{{ _('Choose a tier below. You will pay on the next page, and your account starts once the payment is confirmed.') }}</p>
+                            {% elif paid_offer -%}
                             <p class="text-center">{{ _('Joining costs %(price)s, for %(plan)s. You will pay on the next page, and your account starts once the payment is confirmed.', price=paid_price, plan=paid_offer.title) }}</p>
                             {% endif -%}
                             {% if google_oauth -%}
@@ -56,6 +58,9 @@
                                     <a href="#" class="showPassword" title="{{ _('Hide password') }}"><img src="/static/images/eye-password-hide.svg" alt="{{ _('Hide password') }}"></a>
                                 </div>
                                 {{ render_field(form.password2) }}
+                                {% if paid_offer and tiers|length > 1 -%}
+                                    {{ render_field(form.tier) }}
+                                {% endif -%}
                                 {% if site.registration_mode != "Open"%}
                                     {% if form.question -%}
                                         <div class="mb-3 required">{{ form.question.label.text | safe }}

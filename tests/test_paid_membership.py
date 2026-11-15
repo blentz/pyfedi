@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from bs4 import BeautifulSoup
 from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
@@ -13,6 +14,9 @@ from app.auth.oauth_util import refuse_new_oauth_account
 from app.auth.util import sync_user_with_ldap
 from app.storefront import clear_domain_cache, default_domain, open_registrations, paid_registration, \
     public_registration_open, registration_mode_on
+from app.payments.registration import registration_checkout
+from app.referral import GENERATORS_SETTING, generate_code
+from app.utils import set_setting
 from tests.factories import grant_permission, make_user
 
 CHECKOUT = 'https://checkout.example/session'
@@ -235,3 +239,121 @@ class TestOtherWaysInAreClosed:
         clear_domain_cache()
         assert public_registration_open(default_domain())
         assert registration_mode_on(default_domain(), env.site) == 'Open'
+
+
+FORM = {'user_name': 'joiner', 'hp_field': '', 'real_email': 'joiner@example.com', 'password': 'a-good-password',
+        'password2': 'a-good-password', 'timezone': 'UTC', 'submit': 'Register'}
+
+
+@pytest.fixture(autouse=True)
+def no_captcha():
+    with patch('app.auth.forms.captcha_enabled', return_value=False):
+        yield
+
+
+@pytest.fixture
+def rendering(monkeypatch):
+    """The registration page renders its CSRF field only with CSRF on, as the paid-domain tests find."""
+    monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
+
+
+@pytest.fixture
+def provider():
+    with patch('app.payments.adapters.stripe_adapter.StripeAdapter.checkout', return_value=CHECKOUT) as checkout:
+        yield checkout
+
+
+def checked(env, path):
+    page = BeautifulSoup(env.client.get(path, base_url=env.base).get_data(as_text=True), 'html.parser')
+    return [field['value'] for field in page.find_all('input', attrs={'name': 'tier'}) if field.has_attr('checked')]
+
+
+def joiner():
+    return User.query.filter_by(user_name='joiner').first()
+
+
+class TestJoining:
+    """Pick any tier, pay, join (PM1, PM2, plan M3)."""
+
+    def register(self, env, **values):
+        return env.client.post('/auth/register', data={**FORM, **values}, base_url=env.base)
+
+    def test_the_page_lists_every_tier_with_its_price(self, env, rendering):
+        body = env.client.get('/auth/register', base_url=env.base).get_data(as_text=True)
+        assert 'Furcas' in body and '$6.66' in body and 'Astaroth' in body and '$16.66' in body
+        assert 'Gift' not in body   # a one-off is no tier
+
+    def test_a_tier_can_be_preselected(self, env, rendering):
+        assert checked(env, f'/auth/register?offer={env.duke.id}') == [str(env.duke.id)]
+
+    def test_otherwise_the_domains_own_tier_is(self, env, rendering):
+        assert checked(env, '/auth/register') == [str(env.knight.id)]
+
+    def test_joining_makes_a_pending_account_and_pays_for_the_tier_chosen(self, env, provider):
+        response = self.register(env, tier=env.duke.id)
+        assert response.status_code == 302 and response.headers['Location'] == CHECKOUT
+        user = joiner()
+        assert user.registration_pending_since is not None and user.pending_offer_id == env.duke.id
+        assert provider.call_args.args[0].id == env.duke.id
+
+    def test_with_no_choice_it_is_the_domains_own_tier(self, env, provider):
+        self.register(env)
+        assert joiner().pending_offer_id == env.knight.id and provider.call_args.args[0].id == env.knight.id
+
+    def test_something_that_is_no_tier_is_refused(self, env, provider, rendering):
+        self.register(env, tier=env.gift.id, csrf_token=csrf(env))
+        assert joiner() is None and not provider.called
+
+    def test_logging_in_again_goes_back_to_the_tier_chosen(self, env, provider):
+        self.register(env, tier=env.duke.id)
+        provider.reset_mock()
+        with env.app.test_request_context('/', base_url=env.base):
+            g.site = env.site
+            registration_checkout(joiner())
+        assert provider.call_args.args[0].id == env.duke.id
+
+    def test_a_tier_no_longer_offered_falls_back_to_the_domains(self, env, provider):
+        self.register(env, tier=env.duke.id)
+        env.duke.active = False
+        db.session.commit()
+        provider.reset_mock()
+        with env.app.test_request_context('/', base_url=env.base):
+            g.site = env.site
+            registration_checkout(joiner())
+        assert provider.call_args.args[0].id == env.knight.id
+
+
+class TestCodeOrPay:
+    """With referral codes on, a code still admits for free; without one the visitor pays (plan M4)."""
+
+    @pytest.fixture
+    def code(self, env):
+        env.site.registration_mode = 'ReferralCode'
+        env.site.application_question = 'Your referral code'
+        db.session.commit()
+        set_setting(GENERATORS_SETTING, 'all')
+        referrer = member(env, 'referrer')
+        referrer.verified = True
+        generate_code(referrer)
+        db.session.commit()
+        return referrer.referral_code
+
+    def register(self, env, **values):
+        return env.client.post('/auth/register', data={**FORM, **values}, base_url=env.base)
+
+    def test_the_page_offers_both(self, env, rendering, code):
+        body = env.client.get('/auth/register', base_url=env.base).get_data(as_text=True)
+        assert 'name="question"' in body and 'Furcas' in body
+
+    def test_a_working_code_admits_for_free(self, env, code, provider):
+        self.register(env, question=code, tier=env.duke.id)
+        user = joiner()
+        assert user is not None and user.registration_pending_since is None and not provider.called
+
+    def test_a_wrong_code_is_refused_and_nothing_charged(self, env, code, provider):
+        self.register(env, question='not-a-code', tier=env.duke.id)
+        assert joiner() is None and not provider.called
+
+    def test_no_code_means_paying(self, env, code, provider):
+        response = self.register(env, question='', tier=env.duke.id)
+        assert response.headers['Location'] == CHECKOUT and joiner().registration_pending_since is not None
