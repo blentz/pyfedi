@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,7 +17,7 @@ from app.models import Offer, Payment, PaymentProvider
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.credentials import seal
-from app.payments.events import CustomerKnown, Paid, Refunded, SubscriptionEnded, SubscriptionStarted
+from app.payments.events import CustomerKnown, Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 from tests.factories import make_instance, make_user
 
 SECRET = 'whsec_test'
@@ -58,6 +59,13 @@ def parse(adapter, event_type, obj):
 SESSION = {'id': 'cs_1', 'payment_status': 'paid', 'client_reference_id': '7', 'customer': 'cus_1', 'invoice': 'in_1',
            'payment_intent': None, 'subscription': 'sub_1', 'amount_subtotal': 500, 'currency': 'usd',
            'metadata': {'offer_id': '3'}}
+PERIOD_END = 1795000000   # 2026-11-18T09:46:40Z
+PERIOD_END_AT = datetime.fromtimestamp(PERIOD_END, timezone.utc).replace(tzinfo=None)
+
+
+def a_subscription(data):
+    """What stripe.Subscription.retrieve gives: a StripeObject, read through to_dict()."""
+    return SimpleNamespace(to_dict=lambda: data)
 
 
 class TestWho:
@@ -191,6 +199,12 @@ class TestSignatures:
 
 
 class TestACompletedCheckout:
+    @pytest.fixture(autouse=True)
+    def no_period(self):
+        """Stripe is asked what a new subscription is paid through; these tests are about the rest."""
+        with patch('stripe.Subscription.retrieve', return_value=a_subscription({})) as retrieve:
+            yield retrieve
+
     def test_a_subscription(self, adapter):
         assert parse(adapter, 'checkout.session.completed', SESSION)[1] == [
             CustomerKnown(7, 'cus_1'), Paid('in_1', 500, 'usd', 7, 3), SubscriptionStarted('sub_1', 7, 3)]
@@ -232,6 +246,39 @@ class TestACompletedCheckout:
         assert parse(adapter, 'checkout.session.completed', {**SESSION, 'metadata': metadata})[1][1].offer_id is None
 
 
+class TestTheFirstPeriod:
+    """A new subscription's renewal date comes from Stripe, as a checkout doesn't carry it."""
+
+    def test_the_current_api_keeps_it_on_the_item(self, adapter):
+        found = a_subscription({'items': {'data': [{'current_period_end': PERIOD_END}]}})
+        with patch('stripe.Subscription.retrieve', return_value=found) as retrieve:
+            events = parse(adapter, 'checkout.session.completed', SESSION)[1]
+        assert events[-1] == SubscriptionStarted('sub_1', 7, 3, renews_at=PERIOD_END_AT)
+        retrieve.assert_called_once_with('sub_1', api_key=KEY)
+
+    def test_an_older_api_keeps_it_on_the_subscription(self, adapter):
+        with patch('stripe.Subscription.retrieve', return_value=a_subscription({'current_period_end': PERIOD_END})):
+            assert parse(adapter, 'checkout.session.completed', SESSION)[1][-1].renews_at == PERIOD_END_AT
+
+    @pytest.mark.parametrize('data', [{}, {'current_period_end': 'soon'}, {'current_period_end': True},
+                                      {'items': {'data': ['x']}}, {'items': {'data': [{'current_period_end': -5}]}}],
+                             ids=['none', 'text', 'bool', 'odd_item', 'negative'])
+    def test_no_usable_date_starts_it_without_one(self, adapter, data):
+        with patch('stripe.Subscription.retrieve', return_value=a_subscription(data)):
+            assert parse(adapter, 'checkout.session.completed', SESSION)[1][-1].renews_at is None
+
+    def test_a_one_off_asks_nothing(self, adapter):
+        session = {**SESSION, 'subscription': None, 'invoice': None, 'payment_intent': 'pi_1'}
+        with patch('stripe.Subscription.retrieve') as retrieve:
+            parse(adapter, 'checkout.session.completed', session)
+        assert not retrieve.called
+
+    def test_stripe_being_down_is_a_failure_to_retry(self, adapter):
+        with patch('stripe.Subscription.retrieve', side_effect=stripe.APIConnectionError('down')), \
+                pytest.raises(ProviderError):
+            parse(adapter, 'checkout.session.completed', SESSION)
+
+
 class TestAnInvoice:
     INVOICE = {'id': 'in_2', 'customer': 'cus_1', 'subtotal': 500, 'currency': 'usd',
                'lines': {'data': [{'price': {'id': 'price_1'}}]}}
@@ -255,6 +302,25 @@ class TestAnInvoice:
                              ids=['free', 'no_amount', 'no_currency', 'no_id'])
     def test_no_money_or_no_name_records_nothing(self, adapter, field, value):
         assert parse(adapter, 'invoice.paid', {**self.INVOICE, field: value})[1] == []
+
+    def test_a_subscriptions_invoice_says_what_it_pays_through(self, adapter):
+        invoice = {**self.INVOICE, 'parent': {'subscription_details': {'subscription': 'sub_1'}},
+                   'lines': {'data': [{'price': {'id': 'price_1'}, 'period': {'end': PERIOD_END}}]}}
+        assert parse(adapter, 'invoice.paid', invoice)[1][1:] == [Renewed('sub_1', PERIOD_END_AT)]
+
+    def test_an_older_api_names_the_subscription_on_the_invoice(self, adapter):
+        invoice = {**self.INVOICE, 'subscription': 'sub_1', 'lines': {'data': [{'period': {'end': PERIOD_END}}]}}
+        assert parse(adapter, 'invoice.paid', invoice)[1][1:] == [Renewed('sub_1', PERIOD_END_AT)]
+
+    @pytest.mark.parametrize('line', [{}, {'period': {}}, {'period': {'end': 'later'}}, {'period': {'end': False}}],
+                             ids=['no_period', 'no_end', 'text', 'bool'])
+    def test_no_usable_end_says_nothing_about_renewing(self, adapter, line):
+        invoice = {**self.INVOICE, 'subscription': 'sub_1', 'lines': {'data': [line]}}
+        assert [type(event) for event in parse(adapter, 'invoice.paid', invoice)[1]] == [Paid]
+
+    def test_a_one_off_invoice_says_nothing_about_renewing(self, adapter):
+        invoice = {**self.INVOICE, 'lines': {'data': [{'period': {'end': PERIOD_END}}]}}
+        assert [type(event) for event in parse(adapter, 'invoice.paid', invoice)[1]] == [Paid]
 
 
 class TestOtherEvents:

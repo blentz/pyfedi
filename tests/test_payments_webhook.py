@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -18,6 +19,15 @@ from app.models import MemberSubscription, Offer, Payment, PaymentEvent, Payment
 from tests.factories import make_user
 
 SECRET = 'whsec_test'
+PERIOD_END = 1795000000
+
+
+@pytest.fixture(autouse=True)
+def stripe_subscription():
+    """A checkout asks Stripe what the new subscription is paid through."""
+    found = SimpleNamespace(to_dict=lambda: {'items': {'data': [{'current_period_end': PERIOD_END}]}})
+    with patch('stripe.Subscription.retrieve', return_value=found) as retrieve:
+        yield retrieve
 
 
 @pytest.fixture
@@ -121,3 +131,18 @@ def test_a_failure_answers_500_so_stripe_tries_again(env, app, monkeypatch):
     monkeypatch.setitem(app.config, 'PROPAGATE_EXCEPTIONS', False)
     with patch('app.payments.routes.apply_event', side_effect=RuntimeError):
         assert signed_post(env.client, completed(env)).status_code == 500
+
+
+def test_a_checkout_and_its_renewals_keep_the_renewal_date(env):
+    signed_post(env.client, completed(env))
+    row = MemberSubscription.query.one()
+    assert row.renews_at == datetime.fromtimestamp(PERIOD_END, timezone.utc).replace(tzinfo=None)
+    env.member.stripe_customer_id = 'cus_1'
+    db.session.commit()
+    later = PERIOD_END + 30 * 86400
+    answer = signed_post(env.client, {'id': 'evt_2', 'type': 'invoice.paid', 'data': {'object': {
+        'id': 'in_2', 'customer': 'cus_1', 'subtotal': 500, 'currency': 'usd', 'parent': {'subscription_details': {'subscription': 'sub_1'}},
+        'lines': {'data': [{'price': {'id': 'price_1'}, 'period': {'end': later}}]}}}})
+    assert answer.status_code == 200
+    db.session.expire_all()
+    assert MemberSubscription.query.one().renews_at == datetime.fromtimestamp(later, timezone.utc).replace(tzinfo=None)

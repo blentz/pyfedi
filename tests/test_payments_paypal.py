@@ -1,6 +1,6 @@
 """PayPal, against mocks: it has not been run against PayPal itself (plan phase 6)."""
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,7 +16,7 @@ from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.adapters.paypal_adapter import LIVE, SANDBOX, PaypalAdapter
 from app.payments.core import apply_event, end_expired_prepaid
 from app.payments.credentials import seal
-from app.payments.events import Paid, SubscriptionEnded, SubscriptionStarted
+from app.payments.events import Paid, Renewed, SubscriptionEnded, SubscriptionStarted
 from app.payments.offers import offers_changed, offers_on
 from app.utils import set_setting
 from tests.factories import grant_permission, make_user
@@ -48,6 +48,10 @@ def env(app, api_baseline, monkeypatch):
     offers_changed()
 
 
+NEXT_BILLING = '2026-12-15T10:00:00Z'
+NEXT_BILLING_AT = datetime(2026, 12, 15, 10, 0, 0)
+
+
 @pytest.fixture
 def adapter():
     return PaypalAdapter()
@@ -59,6 +63,9 @@ def paypal():
         router.post(f'{SANDBOX}/v1/oauth2/token').mock(return_value=httpx.Response(200, json={'access_token': 'tok'}))
         router.post(f'{SANDBOX}/v1/notifications/verify-webhook-signature').mock(
             return_value=httpx.Response(200, json={'verification_status': 'SUCCESS'}))
+        # Each sale asks what its subscription is now paid through
+        router.get(f'{SANDBOX}/v1/billing/subscriptions/I-1', name='subscription').mock(
+            return_value=httpx.Response(200, json={'billing_info': {'next_billing_time': NEXT_BILLING}}))
         yield router
 
 
@@ -258,19 +265,20 @@ class TestEvents:
         connect()
         events = self.events(adapter, 'PAYMENT.SALE.COMPLETED', sale(env))
 
-        assert [type(event).__name__ for event in events] == ['Paid', 'SubscriptionStarted']
+        assert [type(event).__name__ for event in events] == ['Paid', 'SubscriptionStarted', 'Renewed']
         assert events[0].user_id == env.member.id and events[1].reference == 'I-1'
+        assert events[2] == Renewed('I-1', NEXT_BILLING_AT)
 
     def test_a_later_sale_doesnt_start_it_again(self, env, adapter, paypal):
         connect()
         db.session.add(MemberSubscription(user_id=env.member.id, offer_id=env.plan.id, provider_kind='paypal', provider_reference='I-1', status='active'))
         db.session.commit()
 
-        assert [type(event).__name__ for event in self.events(adapter, 'PAYMENT.SALE.COMPLETED', sale(env))] == ['Paid']
+        assert self.events(adapter, 'PAYMENT.SALE.COMPLETED', sale(env))[1:] == [Renewed('I-1', NEXT_BILLING_AT)]
 
     def test_a_sale_with_no_custom_id_asks_paypal(self, env, adapter, paypal):
         connect()
-        paypal.get(f'{SANDBOX}/v1/billing/subscriptions/I-1').mock(return_value=httpx.Response(200, json={'custom_id': f'{env.plan.id}:{env.member.id}'}))
+        paypal.routes['subscription'].mock(return_value=httpx.Response(200, json={'custom_id': f'{env.plan.id}:{env.member.id}'}))
         resource = {**sale(env), 'custom': ''}
 
         assert self.events(adapter, 'PAYMENT.SALE.COMPLETED', resource)[0].user_id == env.member.id
@@ -280,6 +288,35 @@ class TestEvents:
     def test_a_sale_of_another_shape_grants_nothing(self, env, adapter, paypal, change):
         connect()
         assert self.events(adapter, 'PAYMENT.SALE.COMPLETED', {**sale(env), **change}) == []
+
+    def test_paypal_is_asked_once_for_both(self, env, adapter, paypal):
+        connect()
+        paypal.routes['subscription'].mock(return_value=httpx.Response(200, json={
+            'custom_id': f'{env.plan.id}:{env.member.id}', 'billing_info': {'next_billing_time': NEXT_BILLING}}))
+        events = self.events(adapter, 'PAYMENT.SALE.COMPLETED', {**sale(env), 'custom': ''})
+        assert events[0].user_id == env.member.id and events[-1] == Renewed('I-1', NEXT_BILLING_AT)
+        assert paypal.routes['subscription'].call_count == 1
+
+    @pytest.mark.parametrize('billing', [{}, {'billing_info': {}}, {'billing_info': {'next_billing_time': 'soon'}},
+                                         {'billing_info': 'x'}, {'billing_info': {'next_billing_time': 7}},
+                                         {'billing_info': {'next_billing_time': '2026-12-15T10:00:00'}}],
+                             ids=['none', 'no_time', 'not_a_time', 'odd_info', 'number', 'no_zone'])
+    def test_no_usable_billing_time_says_nothing_about_renewing(self, env, adapter, paypal, billing):
+        connect()
+        paypal.routes['subscription'].mock(return_value=httpx.Response(200, json=billing))
+        assert 'Renewed' not in [type(event).__name__ for event in self.events(adapter, 'PAYMENT.SALE.COMPLETED', sale(env))]
+
+    def test_paypal_being_down_is_a_failure_to_retry(self, env, adapter, paypal):
+        connect()
+        paypal.routes['subscription'].mock(return_value=httpx.Response(500))
+        with pytest.raises(ProviderError):
+            self.events(adapter, 'PAYMENT.SALE.COMPLETED', sale(env))
+
+    def test_an_offset_time_is_kept_in_utc(self, env, adapter, paypal):
+        connect()
+        paypal.routes['subscription'].mock(return_value=httpx.Response(200, json={
+            'billing_info': {'next_billing_time': '2026-12-15T12:00:00+02:00'}}))
+        assert self.events(adapter, 'PAYMENT.SALE.COMPLETED', sale(env))[-1] == Renewed('I-1', NEXT_BILLING_AT)
 
     @pytest.mark.parametrize('kind', ['BILLING.SUBSCRIPTION.CANCELLED', 'BILLING.SUBSCRIPTION.EXPIRED', 'BILLING.SUBSCRIPTION.SUSPENDED'],
                              ids=['cancelled', 'expired', 'suspended'])
@@ -355,7 +392,7 @@ class TestCancelling:
 
     def test_the_billing_date_is_read_first(self, env, adapter, paypal):
         connect()
-        paypal.get(f'{SANDBOX}/v1/billing/subscriptions/I-1').mock(return_value=httpx.Response(200, json={'billing_info': {'next_billing_time': '2026-12-01T10:00:00Z'}}))
+        paypal.routes['subscription'].mock(return_value=httpx.Response(200, json={'billing_info': {'next_billing_time': '2026-12-01T10:00:00Z'}}))
         cancel = paypal.post(f'{SANDBOX}/v1/billing/subscriptions/I-1/cancel').mock(return_value=httpx.Response(204))
 
         ends = adapter.cancel_at_period_end('I-1')
@@ -364,7 +401,7 @@ class TestCancelling:
 
     def test_no_date_cancels_nothing(self, env, adapter, paypal):
         connect()
-        paypal.get(f'{SANDBOX}/v1/billing/subscriptions/I-1').mock(return_value=httpx.Response(200, json={}))
+        paypal.routes['subscription'].mock(return_value=httpx.Response(200, json={}))
         cancel = paypal.post(f'{SANDBOX}/v1/billing/subscriptions/I-1/cancel').mock(return_value=httpx.Response(204))
 
         with pytest.raises(ProviderError):

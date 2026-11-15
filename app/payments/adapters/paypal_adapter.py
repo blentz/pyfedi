@@ -17,7 +17,7 @@ from app.models import MemberSubscription, Offer, Payment, PaymentProvider
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.adapters.btcpay_adapter import from_minor, to_minor
 from app.payments.credentials import CredentialsUnavailable, unseal
-from app.payments.events import Paid, Refunded, SubscriptionEnded, SubscriptionStarted
+from app.payments.events import Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 
 LIVE, SANDBOX = 'https://api-m.paypal.com', 'https://api-m.sandbox.paypal.com'
 TIMEOUT_SECONDS = 20
@@ -58,6 +58,18 @@ def _approval(answer: dict) -> str:
         raise ProviderError('PayPal gave no approval address')
     return link
 
+
+
+def _next_billing(subscription: dict) -> datetime | None:
+    """A subscription's next billing time, which is what it is paid through, as naive UTC. None if PayPal gave none."""
+    text = _text(_mapping(subscription, 'billing_info'), 'next_billing_time')
+    try:
+        moment = datetime.fromisoformat(text.replace('Z', '+00:00')) if text else None
+    except ValueError:
+        return None
+    if moment is None or moment.tzinfo is None:
+        return None
+    return moment.astimezone(timezone.utc).replace(tzinfo=None)
 
 class PaypalAdapter:
     kind = 'paypal'
@@ -202,8 +214,9 @@ class PaypalAdapter:
         subscription = _text(resource, 'billing_agreement_id')
         if not reference or not subscription:
             return []
-        custom = _text(resource, 'custom') or _text(resource, 'custom_id') \
-            or _text(self._request('GET', config, f'/v1/billing/subscriptions/{subscription}'), 'custom_id')
+        # One request answers both who it is for, when the sale doesn't say, and what it is now paid through
+        details = self._request('GET', config, f'/v1/billing/subscriptions/{subscription}')
+        custom = _text(resource, 'custom') or _text(resource, 'custom_id') or _text(details, 'custom_id')
         offer_id, user_id = _parse_custom(custom)
         try:
             minor = to_minor(_text(amount, 'total'), _text(amount, 'currency'))
@@ -212,6 +225,9 @@ class PaypalAdapter:
         events = [Paid(reference=reference, amount_minor=minor, currency=_text(amount, 'currency'), user_id=user_id, offer_id=offer_id)]
         if not MemberSubscription.query.filter_by(provider_kind=self.kind, provider_reference=subscription).first():
             events.append(SubscriptionStarted(reference=subscription, user_id=user_id, offer_id=offer_id))
+        paid_through = _next_billing(details)
+        if paid_through:
+            events.append(Renewed(reference=subscription, paid_through=paid_through))
         return events
 
     def _refund(self, reference: str, value: str, currency: str) -> list:
@@ -235,13 +251,11 @@ class PaypalAdapter:
         """PayPal has no such thing: cancelling is at once. What's been paid for runs to the next billing date, which is
         read first, and our own record of it is what `core` keeps to (MemberSubscription.ends_at)."""
         config = self._configured()
-        subscription = self._request('GET', config, f'/v1/billing/subscriptions/{reference}')
-        try:
-            ends = datetime.fromisoformat(_text(_mapping(subscription, 'billing_info'), 'next_billing_time').replace('Z', '+00:00'))
-        except ValueError:
-            raise ProviderError('PayPal gave no billing date') from None
+        ends = _next_billing(self._request('GET', config, f'/v1/billing/subscriptions/{reference}'))
+        if ends is None:
+            raise ProviderError('PayPal gave no billing date')
         self.cancel(reference)
-        return ends.astimezone(timezone.utc).replace(tzinfo=None)
+        return ends
 
     def billing_portal_url(self, customer: str, return_url: str) -> str:
         raise ProviderError('a member manages their card at PayPal')

@@ -4,6 +4,7 @@ Credentials come from the sealed provider row, and until an admin imports them f
 passes `api_key=` and never sets `stripe.api_key`, which is shared by every thread in the process. A ProviderError names
 the kind of failure and never carries Stripe's message, which can echo part of a key.
 """
+import dataclasses
 import hashlib
 from datetime import datetime, timedelta, timezone
 
@@ -12,7 +13,7 @@ from flask import current_app
 from app.models import Offer, Payment, PaymentProvider, User, utcnow
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.credentials import CredentialsUnavailable, unseal
-from app.payments.events import CustomerKnown, Paid, Refunded, SubscriptionEnded, SubscriptionStarted
+from app.payments.events import CustomerKnown, Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 
 CHECKOUT_HOURS_FOR_PENDING_ACCOUNT = 23   # Stripe allows 24 at most, counted by its own clock
 PAID = ('paid', 'no_payment_required')
@@ -42,6 +43,18 @@ def _number(value) -> int | None:
     return int(value) if isinstance(value, str) and value.isascii() and value.isdigit() else None
 
 
+def _moment(value) -> datetime | None:
+    """A naive UTC time from Stripe's seconds since the epoch, or None."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return datetime.fromtimestamp(value, timezone.utc).replace(tzinfo=None)
+
+
+def _first_line(invoice: dict) -> dict:
+    lines = _mapping(invoice, 'lines').get('data')
+    return lines[0] if isinstance(lines, list) and lines and isinstance(lines[0], dict) else {}
+
+
 def _offer_id_for_price(price_id: str | None) -> int | None:
     if not price_id:
         return None
@@ -51,8 +64,7 @@ def _offer_id_for_price(price_id: str | None) -> int | None:
 
 def _invoice_price_id(invoice: dict) -> str | None:
     """The first line's price, wherever this webhook's API version keeps it."""
-    lines = _mapping(invoice, 'lines').get('data')
-    line = lines[0] if isinstance(lines, list) and lines and isinstance(lines[0], dict) else {}
+    line = _first_line(invoice)
     return _text(_mapping(line, 'price'), 'id') or _text(_mapping(_mapping(line, 'pricing'), 'price_details'), 'price')
 
 
@@ -82,7 +94,15 @@ def _invoice_events(invoice: dict) -> list:
         return []
     customer = _text(invoice, 'customer')
     user = User.query.filter_by(stripe_customer_id=customer).first() if customer else None
-    return [Paid(reference, amount, currency, user.id if user else None, _offer_id_for_price(_invoice_price_id(invoice)))]
+    events = [Paid(reference, amount, currency, user.id if user else None, _offer_id_for_price(_invoice_price_id(invoice)))]
+    # A subscription's invoice pays for the period on its line, which is what the subscription is paid through. The
+    # current API names the subscription under parent, older ones on the invoice.
+    subscription = _text(_mapping(_mapping(invoice, 'parent'), 'subscription_details'), 'subscription') \
+        or _text(invoice, 'subscription')
+    paid_through = _moment(_mapping(_first_line(invoice), 'period').get('end'))
+    if subscription and paid_through:
+        events.append(Renewed(subscription, paid_through))
+    return events
 
 
 def _subscription_ended_events(subscription: dict) -> list:
@@ -98,6 +118,7 @@ _HANDLERS = {
 }
 
 
+CHECKOUT_EVENTS = ('checkout.session.completed', 'checkout.session.async_payment_succeeded')
 REFUND_EVENT = 'charge.refunded'
 REQUIRED_EVENTS = (*_HANDLERS, REFUND_EVENT)
 
@@ -173,9 +194,23 @@ class StripeAdapter:
             raise InvalidWebhook('not from Stripe') from None
         event = event.to_dict()   # stripe >= 13: a StripeObject is no dict (no .get)
         event_id = _text(event, 'id') or hashlib.sha256(body).hexdigest()
-        handler = {**_HANDLERS, REFUND_EVENT: self._refund_events}.get(event.get('type')) \
+        handler = {**_HANDLERS, REFUND_EVENT: self._refund_events, **{kind: self._checkout_events for kind in CHECKOUT_EVENTS}}\
+            .get(event.get('type')) \
             if isinstance(event.get('type'), str) else None
         return event_id, handler(_mapping(_mapping(event, 'data'), 'object')) if handler else []
+
+    def _checkout_events(self, session: dict) -> list:
+        """A checkout doesn't say what a new subscription is paid through, so Stripe is asked. Its first invoice says too,
+        but may arrive before the subscription is known. A ProviderError sends the webhook back to Stripe to try again."""
+        return [dataclasses.replace(event, renews_at=self._period_end(event.reference))
+                if isinstance(event, SubscriptionStarted) else event for event in _session_events(session)]
+
+    def _period_end(self, reference: str) -> datetime | None:
+        subscription = self._call(lambda stripe: stripe.Subscription.retrieve, reference, api_key=self._key()).to_dict()
+        items = _mapping(subscription, 'items').get('data')
+        item = items[0] if isinstance(items, list) and items and isinstance(items[0], dict) else {}
+        # The current API keeps the period on each item; older ones on the subscription
+        return _moment(item.get('current_period_end')) or _moment(subscription.get('current_period_end'))
 
     def _refund_events(self, charge: dict) -> list:
         """A whole refund only: part of one leaves the payment standing. A one-off is recorded by its payment intent and
