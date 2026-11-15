@@ -14,6 +14,7 @@ from app.onion import clearnet_only, is_onion_request
 from app.payments import bp
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
+from app.payments.btc_price import todays_btc_price
 from app.payments.core import active_subscriptions_of, apply_event, cancel_subscription
 from app.payments.discounts import find_discount_code, reserve
 from app.payments.forms import RedeemCodeForm
@@ -24,6 +25,7 @@ from app.storefront import current_storefront, paid_registration
 from app.utils import get_setting, login_required, login_required_if_private_instance, render_template
 
 HISTORY_ROWS = 100
+NOT_CANCELLED = ('gift', COMPLIMENTARY)   # by the member: neither is a payment (B6, K6)
 HELD_CODE = 'discount_code'   # a discount code a member typed, for their next checkout (plan phase 3 D1)
 
 
@@ -87,6 +89,8 @@ def donations():
                            held_code=find_discount_code(session.get(HELD_CODE))
                            if current_user.is_authenticated and not complimentary else None,
                            complimentary=complimentary,
+                           btc_prices={offer.id: todays_btc_price(offer.amount_minor, offer.currency)
+                                       for offer in offers if offer.provider_kind == 'btcpay'},
                            clear_form=FlaskForm(), currency=get_setting('payment_currency'))
 
 
@@ -180,9 +184,8 @@ def _start_checkout(offer, user, discount=None):
 def cancel(subscription_id):
     subscription = MemberSubscription.query.filter_by(id=subscription_id, user_id=current_user.id,
                                                       status='active').first()
-    if subscription is None or adapter_for(subscription.provider_kind).prepaid:   # that just runs out
-        abort(404)
-    if subscription.provider_kind == COMPLIMENTARY:   # only an admin ends that (K6)
+    # Gifts and complimentary membership are not payments; one already cancelled has its end
+    if subscription is None or subscription.provider_kind in NOT_CANCELLED or subscription.ends_at is not None:
         abort(404)
     try:
         cancel_subscription(subscription)

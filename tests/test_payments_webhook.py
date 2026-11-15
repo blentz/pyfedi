@@ -114,9 +114,12 @@ def test_a_refund_of_a_subscription_payment_marks_its_invoice(env):
     signed_post(env.client, completed(env))
     found = SimpleNamespace(data=[SimpleNamespace(invoice='in_1')])
     refund = {'id': 'evt_2', 'type': 'charge.refunded', 'data': {'object': {'refunded': True, 'payment_intent': 'pi_1'}}}
-    with patch('stripe.InvoicePayment.list', return_value=found):
+    with patch('stripe.InvoicePayment.list', return_value=found), patch('app.payments.core.cancel_at_provider') as cancel:
         assert signed_post(env.client, refund).status_code == 200
     assert Payment.query.one().status == 'refunded'
+    # and the subscription stops being charged, running to the end of its month (plan 2026-11-15 B6)
+    cancel.assert_called_once_with('stripe', 'sub_1')
+    assert MemberSubscription.query.filter_by(provider_reference='sub_1').one().ends_at is not None
 
 
 def test_stripe_being_down_during_a_refund_asks_it_to_send_again(env):

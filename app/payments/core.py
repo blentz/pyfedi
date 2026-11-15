@@ -17,6 +17,7 @@ from app.email import send_prepaid_reminder, send_verification_email
 from app.models import MemberSubscription, Offer, Payment, PaymentEvent, User, utcnow
 from app.payments.adapters import adapter_for
 from app.payments.discounts import settle
+from app.payments.ending import end_at_month_end
 from app.payments.events import CustomerKnown, Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 from app.payments.tasks import cancel_at_provider
 from app.storefront import domain_by_id, paid_registration
@@ -60,7 +61,7 @@ def apply_event(provider_kind: str, event_id: str, events: list) -> bool:
             if isinstance(event, Paid):
                 mismatched = _paid(provider_kind, event, touched) or mismatched
             elif isinstance(event, Refunded):
-                _refunded(provider_kind, event, touched)
+                to_cancel += _refunded(provider_kind, event, touched)
             elif isinstance(event, SubscriptionStarted):
                 to_cancel += _started(provider_kind, event, mismatched, touched, joined)
             elif isinstance(event, SubscriptionEnded):
@@ -105,15 +106,26 @@ def _paid(kind: str, event: Paid, touched: set) -> bool:
     return not matches
 
 
-def _refunded(kind: str, event: Refunded, touched: set) -> None:
+def _refunded(kind: str, event: Refunded, touched: set) -> list:
+    """Mark the payment refunded. A subscription's payment also ends the subscription at the end of its month (B6),
+    and the provider is to stop charging: what it must cancel, as (kind, reference)."""
     payment = Payment.query.filter_by(provider_kind=kind, provider_reference=event.reference).first()
     if payment is None:
-        return
+        return []
     payment.status = 'refunded'
     payment.settled_at = utcnow()
     user = db.session.get(User, payment.user_id) if payment.user_id else None
-    if user:
-        touched.add(user)
+    if user is None:
+        return []
+    touched.add(user)
+    offer = _row(Offer, payment.offer_id)
+    if offer is None or offer.kind != 'subscription':
+        return []
+    held = MemberSubscription.query.filter_by(user_id=user.id, offer_id=offer.id, provider_kind=kind, status='active') \
+        .order_by((MemberSubscription.provider_reference == event.reference).desc(), MemberSubscription.id.desc()).first()
+    if held is None or not end_at_month_end(held):
+        return []
+    return [(kind, held.provider_reference)]
 
 
 def _started(kind: str, event: SubscriptionStarted, mismatched: bool, touched: set, joined: list) -> list:
@@ -165,6 +177,7 @@ def remind_expiring_prepaid() -> int:
     fails is tried again the next day."""
     now, sent = utcnow(), 0
     due = MemberSubscription.query.filter(MemberSubscription.status == 'active', MemberSubscription.reminded_at.is_(None),
+                                          MemberSubscription.ends_at.is_(None),   # cancelled: nothing to pay (B7)
                                           MemberSubscription.current_period_end > now,
                                           MemberSubscription.current_period_end < now + timedelta(days=REMINDER_DAYS)).all()
     for subscription in due:
@@ -240,19 +253,15 @@ def _welcome(user: User) -> None:
 
 
 def cancel_subscription(subscription: MemberSubscription) -> None:
-    """The member cancelling. The provider first: if it refuses, nothing here has changed and they are still paying. On
-    a paid domain the plan runs out, rather than taking away what they have paid for (plan S22)."""
+    """The member cancelling. The provider first, which stops charging at once: if it refuses, nothing here has changed
+    and they are still paying. What they have paid for runs to the end of its month, or sooner if it runs out (B6,
+    replacing S22's period end); the daily sweep ends it then."""
     user = db.session.get(User, subscription.user_id)
-    adapter = adapter_for(subscription.provider_kind)
-    if _pays_for_access(user, subscription):
-        subscription.ends_at = adapter.cancel_at_period_end(subscription.provider_reference)
-    else:
-        adapter.cancel(subscription.provider_reference)
-        subscription.status = 'ended'
-        subscription.ended_at = utcnow()
-        db.session.flush()
-        refresh_donor(user)
-        refresh_access(user)
+    adapter_for(subscription.provider_kind).cancel(subscription.provider_reference)
+    end_at_month_end(subscription)
+    db.session.flush()
+    refresh_donor(user)
+    refresh_access(user)
     db.session.commit()
 
 
@@ -263,11 +272,6 @@ def _registration_group(user: User) -> str | None:
         return None
     offer = db.session.get(Offer, domain.registration_offer_id)
     return offer.offer_group if offer else None
-
-
-def _pays_for_access(user: User, subscription: MemberSubscription) -> bool:
-    group = _registration_group(user)
-    return group is not None and _group_of(_row(Offer, subscription.offer_id)) == group
 
 
 def refresh_access(user: User) -> None:

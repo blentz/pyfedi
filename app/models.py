@@ -6809,6 +6809,27 @@ class MemberSubscription(db.Model):
     renews_at = db.Column(db.DateTime)
 
 
+class BtcDailyRate(db.Model):
+    """The price of one bitcoin in a currency, fixed at midnight UTC and held for that day (plan 2026-11-15 B1, B2)."""
+    day = db.Column(db.Date, primary_key=True)
+    currency = db.Column(db.String(3), primary_key=True)   # lower case, as offers keep it
+    rate = db.Column(db.Numeric(24, 8), nullable=False)
+    fixed_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
+class BtcpayInvoice(db.Model):
+    """A BTCPay invoice this site made, with what it asked: its settlement is checked against this, not against the
+    invoice's metadata (B3, B4)."""
+    invoice_id = db.Column(db.String(255), primary_key=True)
+    offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', ondelete='SET NULL'), index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'), index=True)
+    expected_minor = db.Column(db.BigInteger, nullable=False)   # the price in the site's currency, after any code
+    currency = db.Column(db.String(3), nullable=False)
+    sats = db.Column(db.BigInteger, nullable=False)
+    rate_day = db.Column(db.Date, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
 class PromoCode(db.Model):
     """A code to join or renew with (spec 2026-11-15-paid-membership-design.md D3, plan phase 2 G1): a gift of a free
     period of a tier now; percent and amount off later (phase 3). A member's referral code has a row too (owner_id),

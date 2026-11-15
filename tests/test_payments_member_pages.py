@@ -9,7 +9,8 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
-from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCode, PromoCodeUse, Site, SiteDomain
+from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCode, PromoCodeUse, Site, SiteDomain, \
+    utcnow
 from app.payments.core import apply_event
 from app.payments.events import Paid
 from app.payments.offers import money
@@ -340,7 +341,8 @@ class TestCancelling:
             response = post(env, f'/donations/subscriptions/{row.id}/cancel')
         assert response.status_code == 302
         cancel.assert_called_once_with('sub_1', api_key='sk_test')
-        assert row.status == 'ended' and not env.member.is_donor()
+        # charged no more, and what was paid for runs to the end of its month (plan 2026-11-15 B6)
+        assert row.status == 'active' and row.ends_at > utcnow() and env.member.is_donor()
 
     def test_a_provider_refusal_changes_nothing(self, env):
         row = subscribe(env.member, offer=env.offer)

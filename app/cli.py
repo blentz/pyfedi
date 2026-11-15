@@ -41,6 +41,7 @@ from app.email import mail_name, send_email
 from app.federation_urls import activity_id
 from app.error_counts import KEEP_DAYS
 from app.onion_media import DEFAULT_CACHE_BYTES, evict
+from app.payments.btc_price import fix_today
 from app.payments.credentials import generate_key
 from app.payments.registration import remove_unpaid_registrations
 from app.payments.retention import end_expired_subscriptions, pseudonymise_settled
@@ -1625,6 +1626,14 @@ def register(app):
             evict_old_post_media()
             video_uploads.sweep()   # uploads no post came of, a day past their last part (W2.3 ruling U2)
             log_cron_task_to_db("expire_old_media")
+
+    @app.cli.command("fix_btc_price")
+    def fix_btc_price():
+        """ Hourly: fix today's bitcoin price, read just after midnight UTC, unless it is fixed already. Until it can
+        be read, yesterday's holds (plan 2026-11-15-btc-daily-price.md, B1) """
+        with app.app_context():
+            fix_today()
+            log_cron_task_to_db("fix_btc_price")
 
     @app.cli.command("evict_onion_media")
     def evict_onion_media():

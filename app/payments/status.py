@@ -6,7 +6,7 @@ the one that ended last. Its key date depends on how it is paid for:
 * paid_until: a prepaid period (BTCPay), which ends then unless paid again (current_period_end);
 * renews: one that renews by itself (Stripe, PayPal), paid through renews_at; before the provider first said so,
   the newest payment for it stands in (last_paid);
-* cancelled: it stops renewing, and runs until ends_at;
+* cancelled: cancelled or refunded, it runs until ends_at, the end of its month (plan 2026-11-15 B6);
 * mismatch: its first payment didn't match its offer, which an admin should look at;
 * lapsed: it ended (ended_at);
 * complimentary: given by an admin or to an account that held none, with no end date (plan 2026-11-15, K7).
@@ -71,10 +71,10 @@ def _status(row: MemberSubscription, title: str | None, last_paid: dict) -> Subs
         return SubscriptionStatus(title, 'mismatch', None, since)
     if row.provider_kind == COMPLIMENTARY:
         return SubscriptionStatus(title, 'complimentary', None, since)
-    if row.current_period_end is not None:
-        return SubscriptionStatus(title, 'paid_until', row.current_period_end, since)
     if row.ends_at is not None:
         return SubscriptionStatus(title, 'cancelled', row.ends_at, since)
+    if row.current_period_end is not None:
+        return SubscriptionStatus(title, 'paid_until', row.current_period_end, since)
     return SubscriptionStatus(title, 'renews', row.renews_at, since,
                               None if row.renews_at else last_paid.get((row.user_id, row.offer_id)))
 

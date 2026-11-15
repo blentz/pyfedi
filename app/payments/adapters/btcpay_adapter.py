@@ -4,28 +4,33 @@ compose.btcpay-regtest.yaml and tests/test_payments_btcpay_regtest.py.
 Nothing recurs: a crypto subscription is a period paid for in advance, which the member renews (`prepaid`). There is
 nothing to cancel at the provider, and no card to manage. An invoice that is settled is what grants anything, and its
 amount is asked of the server rather than read from the webhook, which doesn't carry one.
+
+An invoice is in bitcoin at the day's fixed rate (btc_price), and recorded with what was asked; its settlement is checked
+against that record (plan 2026-11-15-btc-daily-price.md, B3, B4).
 """
 import hashlib
 import hmac
 import json
 from decimal import Decimal, InvalidOperation
 
-import httpx
 from babel.numbers import get_currency_precision
 
-from app.models import Offer, PaymentProvider
+from app import db
+from app.models import BtcpayInvoice, Offer, utcnow
 from app.onion import is_onion_request
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.discounts import discounted
-from app.payments.credentials import CredentialsUnavailable, unseal
+from app.payments.btc_price import btc_text, checkout_rate, sats_for, to_sats
+from app.payments.btcpay_client import btcpay_config, btcpay_request, read_rate
 from app.payments.events import Paid, Refunded, SubscriptionEnded, SubscriptionStarted
+from app.utils import get_setting
 
-TIMEOUT_SECONDS = 20
 INVOICE_MINUTES = 60   # how long the price holds. Slow confirmation after payment is the server's, and is allowed for
 SIGNATURE_HEADER = 'BTCPay-Sig'
 SETTLED, INVALID = 'InvoiceSettled', 'InvoiceInvalid'
 REQUIRED_EVENTS = (SETTLED, INVALID)
-REQUIRED_PERMISSIONS = ('btcpay.store.cancreateinvoice', 'btcpay.store.canviewinvoices')
+REQUIRED_PERMISSIONS = ('btcpay.store.cancreateinvoice', 'btcpay.store.canviewinvoices',
+                        'btcpay.store.canviewstoresettings')   # the store's rate, for the daily price
 
 
 def _number(value) -> int | None:
@@ -40,6 +45,14 @@ def to_minor(amount: str, currency: str) -> int:
         raise ValueError('not an amount') from error
 
 
+def _paid_in_full(invoice: dict, sats: int) -> bool:
+    """The invoice is in bitcoin for exactly the sats this site asked."""
+    try:
+        return str(invoice.get('currency') or '').upper() == 'BTC' and to_sats(invoice.get('amount')) == sats
+    except ValueError:
+        return False
+
+
 def from_minor(amount_minor: int, currency: str) -> str:
     precision = get_currency_precision(currency.upper())
     return f'{Decimal(amount_minor) / 10 ** precision:.{precision}f}'
@@ -50,14 +63,7 @@ class BtcpayAdapter:
     prepaid = True
 
     def _config(self) -> dict | None:
-        """The address and store, which aren't secret, with the key and signing secret, which are sealed."""
-        row = PaymentProvider.query.filter_by(kind=self.kind).first()
-        if row is None or not row.enabled or not row.credentials:
-            return None
-        try:
-            return {**(row.settings or {}), **unseal(row.credentials)}
-        except CredentialsUnavailable:
-            return None   # C4: no valid key means this is off, and the site carries on
+        return btcpay_config()
 
     def available(self) -> bool:
         config = self._config()
@@ -69,20 +75,7 @@ class BtcpayAdapter:
         return bool(config and config.get('onion_url'))
 
     def _request(self, method: str, config: dict, path: str, **kwargs) -> dict | list:
-        """Not the site's pinned client: an operator's own server is often on a private address. An admin sets this
-        address, and only a yes or no about it comes back to them."""
-        try:
-            response = httpx.request(method, f"{config['url'].rstrip('/')}/api/v1/stores/{config['store_id']}{path}",
-                                     headers={'Authorization': f"token {config['api_key']}"}, timeout=TIMEOUT_SECONDS,
-                                     **kwargs)
-        except httpx.HTTPError as error:
-            raise ProviderError(f'BTCPay unreachable: {type(error).__name__}') from None
-        if response.status_code != 200:
-            raise ProviderError(f'BTCPay refused: {response.status_code}')
-        try:
-            return response.json()
-        except ValueError:
-            raise ProviderError('BTCPay answered with something else') from None
+        return btcpay_request(method, config, path, **kwargs)
 
     def _configured(self) -> dict:
         config = self._config()
@@ -102,9 +95,18 @@ class BtcpayAdapter:
             price = discounted(discount, offer)
             if price is None:
                 raise ProviderError('that code does not apply')
+        # In bitcoin at the day's fixed rate (plan 2026-11-15 B2, B3), and recorded with what was asked
+        rate = checkout_rate(utcnow(), offer.currency)
+        sats = sats_for(price, offer.currency, rate.rate)
         invoice = self._request('POST', config, '/invoices', json={
-            'amount': from_minor(price, offer.currency), 'currency': offer.currency.upper(), 'metadata': metadata,
+            'amount': btc_text(sats), 'currency': 'BTC', 'metadata': metadata,
             'checkout': {'redirectURL': success_url, 'redirectAutomatically': True, 'expirationMinutes': INVOICE_MINUTES}})
+        if not isinstance(invoice, dict) or not isinstance(invoice.get('id'), str) or not invoice['id']:
+            raise ProviderError('BTCPay made no invoice')
+        db.session.add(BtcpayInvoice(invoice_id=invoice['id'], offer_id=offer.id, user_id=user.id if user else None,
+                                     expected_minor=price, currency=offer.currency.lower(), sats=sats, rate_day=rate.day,
+                                     created_at=utcnow()))
+        db.session.commit()
         base = config['onion_url'] if is_onion_request() else config['url']
         return f"{base.rstrip('/')}/i/{invoice['id']}"
 
@@ -137,13 +139,18 @@ class BtcpayAdapter:
         invoice = self._request('GET', config, f'/invoices/{invoice_id}')
         if invoice.get('status') != 'Settled':
             return []
-        metadata = invoice.get('metadata') if isinstance(invoice.get('metadata'), dict) else {}
-        user_id, offer_id = _number(metadata.get('user_id')), _number(metadata.get('offer_id'))
-        currency = invoice.get('currency') or ''
-        try:
-            amount_minor = to_minor(invoice.get('amount'), currency)
-        except (ValueError, TypeError):
-            amount_minor = -1   # recorded, and matches no offer
+        asked = db.session.get(BtcpayInvoice, invoice_id)
+        if asked is not None:   # one this site made: what it asked is what counts (B4)
+            user_id, offer_id, currency = asked.user_id, asked.offer_id, asked.currency
+            amount_minor = asked.expected_minor if _paid_in_full(invoice, asked.sats) else -1
+        else:   # made before the daily price: in the site's currency, read as it always was
+            metadata = invoice.get('metadata') if isinstance(invoice.get('metadata'), dict) else {}
+            user_id, offer_id = _number(metadata.get('user_id')), _number(metadata.get('offer_id'))
+            currency = invoice.get('currency') or ''
+            try:
+                amount_minor = to_minor(invoice.get('amount'), currency)
+            except (ValueError, TypeError):
+                amount_minor = -1   # recorded, and matches no offer
         events = [Paid(reference=invoice_id, amount_minor=amount_minor, currency=currency, user_id=user_id, offer_id=offer_id)]
         offer = Offer.query.filter_by(id=offer_id).first() if offer_id else None
         if user_id and offer is not None and offer.kind == 'subscription':
@@ -164,3 +171,4 @@ class BtcpayAdapter:
 
     def check_credentials(self, values: dict) -> None:
         self._request('GET', values, '/invoices', params={'take': 1})
+        read_rate(values, get_setting('payment_currency') or 'usd')   # the daily price needs it (B1)

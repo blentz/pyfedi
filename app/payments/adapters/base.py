@@ -3,13 +3,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol
 
-
-class InvalidWebhook(Exception):
-    """The body is not from the provider, or isn't a body at all."""
-
-
-class ProviderError(Exception):
-    """The provider refused or could not be reached. Its text never includes a credential."""
+from app.payments.errors import InvalidWebhook, ProviderError  # noqa: F401  (re-exported: adapters raise them from here)
 
 
 class Adapter(Protocol):

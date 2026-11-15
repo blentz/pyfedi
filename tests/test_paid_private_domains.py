@@ -494,18 +494,21 @@ class TestLapsing:
 
 
 class TestCancelling:
-    def test_on_a_paid_domain_it_runs_to_the_end_of_the_period(self, env, cancelled):
+    def test_on_a_paid_domain_it_runs_to_the_end_of_its_month(self, env, cancelled):
+        """Charged no more at once; access to the end of its month, or its renewal date if sooner (plan 2026-11-15
+        B6, replacing S22's provider's period end)."""
         member = a_member(env)
         with patch('app.payments.core.get_setting', return_value=True):
             pay(env, member)
         row = MemberSubscription.query.filter_by(provider_reference='sub_1').one()
-        ends = utcnow() + timedelta(days=20)
-        with patch('app.payments.adapters.stripe_adapter.StripeAdapter.cancel_at_period_end', return_value=ends) as modify:
+        row.renews_at = utcnow() + timedelta(days=20)
+        db.session.commit()
+        with patch('app.payments.adapters.stripe_adapter.StripeAdapter.cancel') as cancel:
             cancel_subscription(row)
 
-        modify.assert_called_once_with('sub_1')
+        cancel.assert_called_once_with('sub_1')
         db.session.refresh(member)
-        assert row.status == 'active' and row.ends_at == ends and member.access_lapsed_at is None
+        assert row.status == 'active' and row.ends_at == row.renews_at and member.access_lapsed_at is None
 
     def test_the_page_shows_the_date_and_no_second_cancel(self, env, cancelled):
         member = a_member(env)
@@ -549,7 +552,7 @@ class TestCancelling:
         db.session.refresh(member)
         assert row.ends_at is None and member.access_lapsed_at is not None
 
-    def test_elsewhere_it_stays_immediate(self, env, cancelled):
+    def test_elsewhere_a_regular_donation_also_runs_to_its_months_end(self, env, cancelled):
         member = make_user(env.baseline.instance_local, 'elsewhere', local=True)
         member.site_domain_id = env.public.id
         db.session.commit()
@@ -560,7 +563,7 @@ class TestCancelling:
             cancel_subscription(row)
 
         cancel.assert_called_once_with('sub_1')
-        assert row.status == 'ended'
+        assert row.status == 'active' and row.ends_at > utcnow()
 
 
 class TestDomainSettings:

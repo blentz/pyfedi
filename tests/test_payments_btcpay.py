@@ -14,11 +14,13 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
-from app.models import PromoCode, MemberSubscription, Offer, Payment, PaymentProvider, Site, SiteDomain, utcnow
+from app.models import BtcDailyRate, PromoCode, MemberSubscription, Offer, Payment, PaymentProvider, Site, SiteDomain, \
+    utcnow
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.adapters.btcpay_adapter import BtcpayAdapter, from_minor, to_minor
 from app.email import send_prepaid_reminder
 from app.payments.core import apply_event, end_expired_prepaid, remind_expiring_prepaid
+from app.payments.events import Refunded, SubscriptionEnded
 from app.payments.credentials import seal
 from app.payments.offers import offers_changed, offers_on
 from app.payments.retention import end_expired_subscriptions
@@ -50,6 +52,8 @@ def env(app, api_baseline, monkeypatch):
                  currency='usd', interval='month', grants_donor=True)
     gift = Offer(provider_kind='btcpay', kind='donation', title='Gift', offer_group='gifts', amount_minor=300, currency='usd')
     db.session.add_all([plan, gift])
+    # Yesterday's fixed price holds for any moment today (plan 2026-11-15 B2): $5.00 is 10000 sats at $50,000
+    db.session.add(BtcDailyRate(day=utcnow().date() - timedelta(days=1), currency='usd', rate=50000, fixed_at=utcnow()))
     member = make_user(api_baseline.instance_local, 'member', local=True)
     db.session.commit()
     yield SimpleNamespace(app=app, client=app.test_client(), plan=plan, gift=gift, member=member, site=site,
@@ -145,7 +149,7 @@ class TestCheckout:
         request = route.calls[0].request
         sent = json.loads(request.content)
         assert request.headers['Authorization'] == 'token k'
-        assert sent['amount'] == '5.00' and sent['currency'] == 'USD'
+        assert sent['amount'] == '0.00010000' and sent['currency'] == 'BTC'
         assert sent['metadata'] == {'offer_id': str(env.plan.id), 'user_id': str(env.member.id)}
         assert sent['checkout']['redirectURL'] == 'https://x/ok'
 
@@ -274,7 +278,8 @@ class TestNothingToStop:
         with pytest.raises(ProviderError):
             call(adapter)
 
-    def test_the_cancel_route_refuses(self, env):
+    def test_the_cancel_route_ends_it_when_its_paid_period_does(self, env):
+        """Cancelling ends it at its month's end, or sooner when what was paid for runs out (plan 2026-11-15 B6)."""
         row = MemberSubscription(user_id=env.member.id, offer_id=env.plan.id, provider_kind='btcpay', provider_reference='inv1',
                                  status='active', current_period_end=utcnow() + timedelta(days=9))
         db.session.add(row)
@@ -286,7 +291,8 @@ class TestNothingToStop:
         with env.client.session_transaction() as session:
             session['csrf_token'] = raw
 
-        assert env.client.post(f'/donations/subscriptions/{row.id}/cancel', data={'csrf_token': token}).status_code == 404
+        assert env.client.post(f'/donations/subscriptions/{row.id}/cancel', data={'csrf_token': token}).status_code == 302
+        assert row.status == 'active' and row.ends_at == row.current_period_end
 
 
 def pay(env, reference, offer=None, amount=500):
@@ -362,12 +368,13 @@ class TestPrepaidPeriods:
         with patch('app.payments.retention.end_expired_prepaid', side_effect=RuntimeError('no')), pytest.raises(RuntimeError):
             end_expired_subscriptions()
 
-    def test_a_refund_ends_it(self, env):
-        from app.payments.events import Refunded, SubscriptionEnded
+    def test_a_refund_ends_it_at_its_months_end(self, env):
+        """Not at once (plan 2026-11-15 B6): at the end of its month, or when its period runs out if sooner."""
         row = pay(env, 'inv1')
         apply_event('btcpay', 'evt_bad', [Refunded(reference='inv1'), SubscriptionEnded(reference='inv1')])
 
-        assert row.status == 'ended' and Payment.query.filter_by(provider_reference='inv1').one().status == 'refunded'
+        assert Payment.query.filter_by(provider_reference='inv1').one().status == 'refunded'
+        assert row.status == 'active' and utcnow() < row.ends_at <= row.current_period_end
 
 
 class TestReminders:
@@ -520,6 +527,8 @@ class TestAdmin:
     @respx.mock
     def test_connecting_checks_the_key_and_seals_it(self, env, admin):
         respx.get(f'{URL}/api/v1/stores/{STORE}/invoices').mock(return_value=httpx.Response(200, json=[]))
+        respx.get(f'{URL}/api/v1/stores/{STORE}/rates').mock(return_value=httpx.Response(200, json=[
+            {'currencyPair': 'BTC_USD', 'errors': [], 'rate': '50000'}]))
         env.client.post('/admin/payments/btcpay', data=self.form(admin))
 
         row = PaymentProvider.query.filter_by(kind='btcpay').one()
@@ -555,6 +564,8 @@ class TestAdmin:
     def test_blank_secrets_keep_what_is_stored(self, env, admin):
         connect()
         route = respx.get(f'https://new.example/api/v1/stores/{STORE}/invoices').mock(return_value=httpx.Response(200, json=[]))
+        respx.get(f'https://new.example/api/v1/stores/{STORE}/rates').mock(return_value=httpx.Response(200, json=[
+            {'currencyPair': 'BTC_USD', 'errors': [], 'rate': '50000'}]))
         env.client.post('/admin/payments/btcpay', data=self.form(admin, api_key='', webhook_secret='', url='https://new.example/'))
 
         row = PaymentProvider.query.filter_by(kind='btcpay').one()
@@ -647,4 +658,4 @@ class TestADiscount:
         monkeypatch.setattr(BtcpayAdapter, '_request', fake)
         with env.app.test_request_context('/'):
             BtcpayAdapter().checkout(env.plan, env.member, 'ok', 'no', discount=code)
-        assert sent['amount'] == '4.00'
+        assert sent['amount'] == '0.00008000'
