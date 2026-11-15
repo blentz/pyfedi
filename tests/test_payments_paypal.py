@@ -128,6 +128,25 @@ class TestCheckout:
         assert sent['application_context']['return_url'] == 'https://x/ok'
         assert route.calls[0].request.headers['Authorization'] == 'Bearer tok'
 
+    def test_a_member_holding_time_is_first_charged_when_it_runs_out(self, env, adapter, paypal):
+        """PM8, plan G5: PayPal's start_time."""
+        connect()
+        ends = utcnow().replace(microsecond=0) + timedelta(days=20)
+        db.session.add(MemberSubscription(user_id=env.member.id, offer_id=env.plan.id, provider_kind='gift',
+                                          provider_reference='gift:1', status='active', current_period_end=ends))
+        db.session.commit()
+        route = paypal.post(f'{SANDBOX}/v1/billing/subscriptions').mock(return_value=httpx.Response(201, json={
+            'links': [{'rel': 'approve', 'href': 'https://paypal.example/approve'}]}))
+        adapter.checkout(env.plan, env.member, 'https://x/ok', 'https://x/no')
+        assert json.loads(route.calls[0].request.content)['start_time'] == ends.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    def test_nothing_held_starts_now(self, env, adapter, paypal):
+        connect()
+        route = paypal.post(f'{SANDBOX}/v1/billing/subscriptions').mock(return_value=httpx.Response(201, json={
+            'links': [{'rel': 'approve', 'href': 'https://paypal.example/approve'}]}))
+        adapter.checkout(env.plan, env.member, 'https://x/ok', 'https://x/no')
+        assert 'start_time' not in json.loads(route.calls[0].request.content)
+
     def test_a_guests_one_off_names_nobody(self, env, adapter, paypal):
         connect()
         route = paypal.post(f'{SANDBOX}/v2/checkout/orders').mock(return_value=httpx.Response(201, json={

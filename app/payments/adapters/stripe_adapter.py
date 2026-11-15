@@ -13,6 +13,7 @@ from flask import current_app
 from app.models import Offer, Payment, PaymentProvider, User, utcnow
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.credentials import CredentialsUnavailable, unseal
+from app.payments.holding import first_charge_after
 from app.payments.events import CustomerKnown, Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 
 CHECKOUT_HOURS_FOR_PENDING_ACCOUNT = 23   # Stripe allows 24 at most, counted by its own clock
@@ -178,6 +179,12 @@ class StripeAdapter:
             params['expires_at'] = int((utcnow() + timedelta(hours=CHECKOUT_HOURS_FOR_PENDING_ACCOUNT)).replace(tzinfo=timezone.utc).timestamp())
         if offer.kind == 'subscription':
             params['subscription_data'] = {'metadata': {'offer_id': str(offer.id)}}
+            # PM8: first charged when what the member holds in its group runs out, at least the 48 hours ahead Stripe
+            # asks of a trial: a little longer free, never shorter
+            after = first_charge_after(user, offer)
+            if after is not None:
+                params['subscription_data']['trial_end'] = int(
+                    max(after, utcnow() + timedelta(hours=48)).replace(tzinfo=timezone.utc).timestamp())
         session = self._call(lambda stripe: stripe.checkout.Session.create, api_key=key, **params)
         return session.url
 

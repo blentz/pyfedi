@@ -17,6 +17,7 @@ from app.models import MemberSubscription, Offer, Payment, PaymentProvider
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.adapters.btcpay_adapter import from_minor, to_minor
 from app.payments.credentials import CredentialsUnavailable, unseal
+from app.payments.holding import first_charge_after
 from app.payments.events import Paid, Refunded, Renewed, SubscriptionEnded, SubscriptionStarted
 
 LIVE, SANDBOX = 'https://api-m.paypal.com', 'https://api-m.sandbox.paypal.com'
@@ -138,9 +139,12 @@ class PaypalAdapter:
         config = self._configured()
         context = {'return_url': success_url, 'cancel_url': cancel_url, 'shipping_preference': 'NO_SHIPPING'}
         if offer.kind == 'subscription':
-            return _approval(self._request('POST', config, '/v1/billing/subscriptions', json={
-                'plan_id': offer.provider_price_id, 'custom_id': _custom(offer, user),
-                'application_context': {**context, 'user_action': 'SUBSCRIBE_NOW'}}))
+            body = {'plan_id': offer.provider_price_id, 'custom_id': _custom(offer, user),
+                    'application_context': {**context, 'user_action': 'SUBSCRIBE_NOW'}}
+            after = first_charge_after(user, offer)   # PM8: first charged when what the member holds runs out
+            if after is not None:
+                body['start_time'] = after.strftime('%Y-%m-%dT%H:%M:%SZ')
+            return _approval(self._request('POST', config, '/v1/billing/subscriptions', json=body))
         return _approval(self._request('POST', config, '/v2/checkout/orders', json={
             'intent': 'CAPTURE', 'application_context': {**context, 'user_action': 'PAY_NOW'},
             'purchase_units': [{'custom_id': _custom(offer, user), 'amount': {

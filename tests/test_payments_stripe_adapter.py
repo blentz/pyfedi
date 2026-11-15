@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -13,7 +13,7 @@ from cryptography.fernet import Fernet
 from flask import current_app
 
 from app import db
-from app.models import Offer, Payment, PaymentProvider
+from app.models import MemberSubscription, Offer, Payment, PaymentProvider, utcnow
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.credentials import seal
@@ -162,6 +162,42 @@ class TestCheckout:
         with patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='u')):
             adapter.checkout(offer, member, 'o', 'c')
         assert stripe.api_key == before
+
+
+class TestNobodyIsShortened:
+    """A member holding time in the tier's group (a gift, a prepaid period) is first charged when it runs out (PM8, plan
+    G5): Stripe's trial, at least the 48 hours ahead it asks for."""
+
+    def holding(self, member, offer, days):
+        row = MemberSubscription(user_id=member.id, offer_id=offer.id, provider_kind='gift', provider_reference=f'gift:{days}',
+                                 status='active', current_period_end=utcnow() + timedelta(days=days))
+        db.session.add(row)
+        db.session.commit()
+        return row
+
+    def params(self, adapter, member, offer):
+        with patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='u')) as create:
+            adapter.checkout(offer, member, 'o', 'c')
+        return create.call_args.kwargs
+
+    def test_the_first_charge_waits_for_what_is_held(self, adapter, member, offer):
+        held = self.holding(member, offer, days=20)
+        trial_end = self.params(adapter, member, offer)['subscription_data']['trial_end']
+        assert trial_end == int(held.current_period_end.replace(tzinfo=timezone.utc).timestamp())
+
+    def test_a_little_left_waits_the_48_hours_stripe_asks_for(self, adapter, member, offer):
+        self.holding(member, offer, days=1)
+        trial_end = self.params(adapter, member, offer)['subscription_data']['trial_end']
+        assert trial_end >= int((utcnow() + timedelta(hours=47, minutes=59)).replace(tzinfo=timezone.utc).timestamp())
+
+    def test_nothing_held_is_charged_now(self, adapter, member, offer):
+        assert 'trial_end' not in self.params(adapter, member, offer)['subscription_data']
+
+    def test_a_one_off_is_charged_now(self, adapter, member, offer):
+        self.holding(member, offer, days=20)
+        offer.kind = 'donation'
+        db.session.commit()
+        assert 'subscription_data' not in self.params(adapter, member, offer)
 
 
 class TestSignatures:
