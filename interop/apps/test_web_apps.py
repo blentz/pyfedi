@@ -9,7 +9,7 @@ accessible names the apps give their controls, so a renamed button fails here wi
 import re
 
 import pytest
-from playwright.sync_api import Page, expect, sync_playwright
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout, expect, sync_playwright
 
 from interop.apps import stack_state, steps
 from interop.apps.conftest import ALICE, SEED_TITLE, find_comment, marker, status_id
@@ -66,8 +66,18 @@ class Voyager:
     def login(self):
         page = self.page
         page.goto(self.base + '/', wait_until='networkidle')
-        page.get_by_role('tab', name='piefed.test').click()
-        page.get_by_role('button', name='Get Started').click()
+        # Ionic can take the tab's click before its router is ready and stay on Posts (2026-11-15, twice in one run,
+        # retry included): click again, a bounded number of times, until the accounts page shows
+        get_started = page.get_by_role('button', name='Get Started')
+        for attempt in range(3):
+            page.get_by_role('tab', name='piefed.test').click()
+            try:
+                get_started.wait_for(timeout=10_000)
+                break
+            except PlaywrightTimeout:
+                if attempt == 2:
+                    raise
+        get_started.click()
         page.get_by_role('button', name='Log In', exact=True).click()
         page.get_by_role('searchbox', name='search text').first.fill('piefed.test')
         page.get_by_role('button', name='Next').click()
