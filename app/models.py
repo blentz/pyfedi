@@ -40,7 +40,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from app import db, login, cache, celery, httpx_client, constants, app_bcrypt, shaped_memo_name
 from app.permission_cache import permission_version
-from app.permissions import recipient_ids, user_access
+from app.permissions import holds_any_grant, recipient_ids, user_access
 from app.oauth_scopes import covers
 from app.constants import AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
@@ -2455,6 +2455,8 @@ class User(UserMixin, db.Model):
     # Referral codes (spec 2026-10-31): NULL until the user generates one; regenerating replaces both (app/referral.py)
     referral_nonce = db.Column(db.String(64))
     referral_code = db.Column(db.String(36), unique=True, index=True)
+    # The tier a pending account chose at /register, which logging in again goes back to paying for (plan M3)
+    pending_offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', ondelete='SET NULL', name='fk_user_pending_offer'))
     markdown_editor = db.Column(db.Boolean, default=True)
     interface_language = db.Column(db.String(10))  # a locale that the translation system understands e.g. 'en' or 'en-us'. If empty, use browser default
     language_id = db.Column(db.Integer, db.ForeignKey('language.id'))  # the default choice in the language dropdown when composing posts & comments. NOT UI language
@@ -2682,13 +2684,17 @@ class User(UserMixin, db.Model):
         return self.registration_pending_since is None
 
     def access_has_lapsed(self) -> bool:
-        """Whether this member of a paid domain is past their grace period, so may only renew or leave (M12). Admins never
-        are: they'd lock themselves out of the pages that put it right."""
+        """Whether this member of a paid domain is past their grace period, so may only renew or leave (M12). Admins and
+        anyone holding a role never are: they'd lock themselves out of the pages that put it right (PM5). Nor is an account
+        made before its domain began charging, which is grandfathered for good (PM5, plan M2)."""
         if self.access_lapsed_at is None:
             return False
         home = storefront.domain_by_id(self.site_domain_id)
-        return storefront.paid_registration(home) and utcnow() > self.access_lapsed_at + timedelta(days=home.lapse_grace_days) \
-            and not self.is_admin()
+        if not storefront.paid_registration(home) or utcnow() <= self.access_lapsed_at + timedelta(days=home.lapse_grace_days):
+            return False
+        if home.paid_since is not None and self.created is not None and self.created < home.paid_since:
+            return False
+        return not (self.is_admin() or holds_any_grant(self.id))
 
     def waiting_for_approval(self):
         application = UserRegistration.query.filter_by(user_id=self.id, status=0).first()
@@ -6267,6 +6273,7 @@ class SiteDomain(db.Model):
     registration_offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', name='fk_site_domain_registration_offer'))   # paid: what the first fee is for
     login_required = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())   # the default domain's is Site.private_instance
     lapse_grace_days = db.Column(db.Integer, nullable=False, default=7, server_default='7')   # paid: how long access outlasts a member's subscription
+    paid_since = db.Column(db.DateTime)   # when it began charging: accounts made before it are grandfathered (plan M2)
     is_default = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     is_onion = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     # Its own instance row (spec 2026-10-19 §3.1): row 1 for the default. Set on insert, below.

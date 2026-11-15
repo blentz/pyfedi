@@ -12,6 +12,7 @@ import re
 import unicodedata
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import datetime
 from functools import lru_cache
 from typing import NamedTuple
 from urllib.parse import unquote, unquote_to_bytes, urlsplit, urlunsplit
@@ -52,6 +53,7 @@ class DomainInfo(NamedTuple):
     login_required: bool = False   # not the default domain's, which is Site.private_instance
     registration_offer_id: int | None = None
     lapse_grace_days: int = 7
+    paid_since: datetime | None = None   # accounts made before it never lapse (plan M2)
 
 
 # Made by `flask init-db` as the local instance, row 1 is the default domain's. Each other domain has a row of its own.
@@ -71,9 +73,10 @@ def public_registration_open(storefront: DomainInfo) -> bool:
 
 def paid_registration(storefront: DomainInfo) -> bool:
     """Whether signing up on `storefront` costs a first fee (M10). Only `/register` knows this: to every other way of
-    making an account a paid domain is simply closed, by `public_registration_open` (plan S9). The default domain's own
-    `registration` column is ignored, as it is there."""
-    return not storefront.is_default and storefront.registration == 'paid'
+    making an account a paid domain is simply closed (plan S9). The default domain's own `registration` column means
+    this alone: 'paid' is its membership switch (paid membership plan M1); for who may register otherwise it is
+    `Site.registration_mode` that counts."""
+    return storefront.registration == 'paid'
 
 
 def registration_mode_on(storefront: DomainInfo, site) -> str:
@@ -139,7 +142,8 @@ def domain_rows() -> tuple[DomainInfo, ...]:
     if not rows:
         return (_synthesised_default(),)
     return tuple(DomainInfo(r.domain, r.scheme, r.federates, r.registration, r.is_default, r.is_onion, r.id,
-                            r.instance_id, r.login_required, r.registration_offer_id, r.lapse_grace_days) for r in rows)
+                            r.instance_id, r.login_required, r.registration_offer_id, r.lapse_grace_days, r.paid_since)
+                 for r in rows)
 
 
 def clear_domain_cache() -> None:
