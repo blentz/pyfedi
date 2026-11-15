@@ -2,9 +2,10 @@
 
 A browser coming back from a provider grants nothing: only a verified webhook does (spec, Security).
 """
-from flask import abort, flash, g, redirect, request, url_for
+from flask import abort, flash, g, redirect, request, session, url_for
 from flask_babel import _
 from flask_login import current_user
+from flask_wtf import FlaskForm
 
 from app import db, limiter
 from app.models import MemberSubscription, Offer, Payment
@@ -13,14 +14,16 @@ from app.payments import bp
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.core import active_subscriptions_of, apply_event, cancel_subscription
+from app.payments.discounts import find_discount_code, reserve
 from app.payments.forms import RedeemCodeForm
 from app.payments.gifts import checking_codes, find_gift_code, start_gift
 from app.payments.offers import LINK, offers_here
 from app.payments.registration import joinable_tier_ids
 from app.storefront import current_storefront, paid_registration
-from app.utils import login_required, login_required_if_private_instance, render_template
+from app.utils import get_setting, login_required, login_required_if_private_instance, render_template
 
 HISTORY_ROWS = 100
+HELD_CODE = 'discount_code'   # a discount code a member typed, for their next checkout (plan phase 3 D1)
 
 
 @bp.route('/payments/webhook/<kind>', methods=['POST'])
@@ -75,7 +78,9 @@ def donations():
                            groups=groups, links=links, subscriptions=subscriptions, payments=payments, titles=titles,
                            member=member, paid_domain=paid_domain, prepaid=prepaid,
                            joinable=joinable_tier_ids(g.site) if current_user.is_anonymous else frozenset(),
-                           redeem_form=RedeemCodeForm() if current_user.is_authenticated else None)
+                           redeem_form=RedeemCodeForm() if current_user.is_authenticated else None,
+                           held_code=find_discount_code(session.get(HELD_CODE)) if current_user.is_authenticated else None,
+                           clear_form=FlaskForm(), currency=get_setting('payment_currency'))
 
 
 @bp.route('/donations/redeem', methods=['POST'])
@@ -87,13 +92,26 @@ def redeem():
     if form.validate_on_submit():
         with checking_codes():   # a wrong code says nothing more than any other, but guessing is slowed (shared bucket)
             gift = find_gift_code(form.code.data)
+            discount = find_discount_code(form.code.data) if gift is None else None
         subscription = start_gift(current_user, gift) if gift is not None else None
-        if subscription is None:
-            db.session.rollback()   # the code's row lock
-            flash(_('That code cannot be used.'), 'error')
-        else:
+        if subscription is not None:
             flash(_('Thank you. Your subscription now runs until %(date)s.',
                     date=subscription.current_period_end.strftime('%Y-%m-%d')))
+        elif discount is not None:   # held for the next checkout (plan phase 3 D1)
+            session[HELD_CODE] = discount.code
+            flash(_('Code %(code)s will be taken off your next payment.', code=discount.code))
+        else:
+            db.session.rollback()   # the code's row lock
+            flash(_('That code cannot be used.'), 'error')
+    return redirect(url_for('payments.donations'))
+
+
+@bp.route('/donations/code/clear', methods=['POST'])
+@login_required
+def clear_code():
+    form = FlaskForm()
+    if form.validate_on_submit():
+        session.pop(HELD_CODE, None)
     return redirect(url_for('payments.donations'))
 
 
@@ -113,14 +131,26 @@ def checkout(offer_id):
 
 @login_required
 def _member_checkout(offer):
-    return _start_checkout(offer, current_user)
+    """With a discount code held (D1): reserved for this offer, or the checkout stops, saying so."""
+    discount = None
+    if session.get(HELD_CODE):
+        found = find_discount_code(session[HELD_CODE])
+        if found is None or reserve(current_user, found, offer) is None:
+            flash(_('Your code cannot be used for this. Clear it to pay the full price.'), 'error')
+            return redirect(url_for('payments.donations'))
+        discount = found
+    answer = _start_checkout(offer, current_user, discount)
+    if discount is not None and answer.status_code in (301, 302, 303):
+        session.pop(HELD_CODE, None)
+    return answer
 
 
-def _start_checkout(offer, user):
+def _start_checkout(offer, user, discount=None):
     try:
         url = adapter_for(offer.provider_kind).checkout(offer, user,
                                                         url_for('payments.result', result='success', _external=True),
-                                                        url_for('payments.result', result='failure', _external=True))
+                                                        url_for('payments.result', result='failure', _external=True),
+                                                        discount=discount)
     except ProviderError:
         return render_template('generic_message.html', title=_('Donation plans'),
                                message=_('The payment provider is unavailable at the moment. Please try again later.')), 503

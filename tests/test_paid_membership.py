@@ -9,7 +9,7 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import CmsPage, MemberSubscription, Offer, PromoCode, Referral, Site, SiteDomain, User, utcnow
+from app.models import CmsPage, MemberSubscription, Offer, PromoCode, PromoCodeUse, Referral, Site, SiteDomain, User, utcnow
 from app.payments.gifts import DEFAULT_GIFT_DAYS_SETTING, DEFAULT_GIFT_OFFER_SETTING, referral_gift_code
 from app.utils import markdown_to_html
 from app.auth.oauth_util import refuse_new_oauth_account
@@ -607,3 +607,94 @@ class TestACodeThatRanOutMeanwhile:
         with patch('app.auth.util.start_gift', return_value=None):
             env.client.post('/auth/register', data={**FORM, 'question': 'gift-last'}, base_url=env.base)
         assert joiner() is None and not provider.called
+
+
+def a_discount(env, code='spring-twenty', **values):
+    row = PromoCode(code=code, kind='percent', percent=20, **values)
+    db.session.add(row)
+    db.session.commit()
+    return row
+
+
+class TestJoiningWithADiscount:
+    """A discount code typed at /register is held by the pending account and taken off its first payment (D1)."""
+
+    def register(self, env, **values):
+        return env.client.post('/auth/register', data={**FORM, **values}, base_url=env.base)
+
+    def test_it_is_taken_off_the_tier_chosen(self, env, provider):
+        code = a_discount(env)
+        response = self.register(env, question='SPRING-TWENTY', tier=env.knight.id)
+        user = joiner()
+        assert response.headers['Location'] == CHECKOUT and user.registration_pending_since is not None
+        assert user.pending_promo_code_id == code.id and provider.call_args.kwargs['discount'].id == code.id
+        use = PromoCodeUse.query.one()
+        assert (use.user_id, use.offer_id, use.expected_minor) == (user.id, env.knight.id, 532)
+
+    def test_one_for_another_tier_is_refused_and_makes_no_account(self, env, provider, rendering):
+        a_discount(env, offer_id=env.duke.id)
+        self.register(env, question='spring-twenty', tier=env.knight.id, csrf_token=csrf(env))
+        assert joiner() is None and not provider.called
+
+    def test_logging_in_again_takes_it_off_again(self, env, provider):
+        code = a_discount(env)
+        self.register(env, question='spring-twenty', tier=env.knight.id)
+        provider.reset_mock()
+        with env.app.test_request_context('/', base_url=env.base):
+            g.site = env.site
+            registration_checkout(joiner())
+        assert provider.call_args.kwargs['discount'].id == code.id and PromoCodeUse.query.count() == 1
+
+    def test_a_code_gone_since_is_paid_in_full(self, env, provider):
+        code = a_discount(env)
+        self.register(env, question='spring-twenty', tier=env.knight.id)
+        code.active = False
+        db.session.commit()
+        provider.reset_mock()
+        with env.app.test_request_context('/', base_url=env.base):
+            g.site = env.site
+            registration_checkout(joiner())
+        assert provider.call_args.kwargs.get('discount') is None
+
+
+class TestAMembersDiscount:
+    """On /donations a discount code is held for the member's next checkout (D1)."""
+
+    def redeem(self, env, code):
+        return env.client.post('/donations/redeem', data={'code': code, 'csrf_token': env.token}, base_url=env.base)
+
+    @pytest.fixture
+    def user(self, env):
+        user = member(env, 'buyer')
+        login(env.client, user)
+        env.token = csrf(env)   # one per test: the app context caches it
+        return user
+
+    def test_it_is_held_and_shown(self, env, user):
+        a_discount(env)
+        self.redeem(env, 'Spring-Twenty')
+        with env.client.session_transaction(base_url=env.base) as session:
+            assert session['discount_code'] == 'spring-twenty'
+        assert 'spring-twenty' in env.client.get('/donations', base_url=env.base).get_data(as_text=True)
+
+    def test_checkout_takes_it_off_and_reserves_it(self, env, user, provider):
+        code = a_discount(env)
+        self.redeem(env, 'spring-twenty')
+        response = env.client.post(f'/donations/checkout/{env.knight.id}', data={'csrf_token': env.token}, base_url=env.base)
+        assert response.headers['Location'] == CHECKOUT and provider.call_args.kwargs['discount'].id == code.id
+        assert PromoCodeUse.query.one().expected_minor == 532
+        with env.client.session_transaction(base_url=env.base) as session:
+            assert 'discount_code' not in session
+
+    def test_one_that_does_not_apply_stops_the_checkout(self, env, user, provider):
+        a_discount(env, offer_id=env.duke.id)
+        self.redeem(env, 'spring-twenty')
+        response = env.client.post(f'/donations/checkout/{env.knight.id}', data={'csrf_token': env.token}, base_url=env.base)
+        assert response.status_code == 302 and '/donations' in response.headers['Location'] and not provider.called
+
+    def test_it_can_be_cleared(self, env, user, provider):
+        a_discount(env)
+        self.redeem(env, 'spring-twenty')
+        env.client.post('/donations/code/clear', data={'csrf_token': env.token}, base_url=env.base)
+        env.client.post(f'/donations/checkout/{env.knight.id}', data={'csrf_token': env.token}, base_url=env.base)
+        assert provider.call_args.kwargs.get('discount') is None

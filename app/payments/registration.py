@@ -9,10 +9,11 @@ from datetime import timedelta
 from flask import redirect, url_for
 from flask_babel import _
 
-from app import celery
-from app.models import MemberSubscription, Offer, User, utcnow
+from app import celery, db
+from app.models import MemberSubscription, Offer, PromoCode, User, utcnow
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
+from app.payments.discounts import reserve, usable
 from app.payments.offers import offers_here
 from app.payments.tasks import cancel_at_provider
 from app.storefront import current_storefront, paid_registration
@@ -55,9 +56,12 @@ def registration_checkout(user: User):
     try:
         if offer is None:
             raise ProviderError('nothing to pay for')
+        # The code typed at /register, reserved for this checkout; one gone since is simply not taken off (D1)
+        code = db.session.get(PromoCode, user.pending_promo_code_id) if user.pending_promo_code_id else None
+        discount = code if code is not None and usable(code) and reserve(user, code, offer) is not None else None
         return redirect(adapter_for(offer.provider_kind).checkout(
             offer, user, url_for('payments.result', result='success', _external=True),
-            url_for('payments.result', result='failure', _external=True)))
+            url_for('payments.result', result='failure', _external=True), discount=discount))
     except ProviderError:
         return render_template('generic_message.html', title=_('Create new account'),
                                message=_('The payment provider is unavailable at the moment. Your account is saved: log in '
