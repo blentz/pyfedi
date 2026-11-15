@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup, NavigableString
 from flask_login import current_user
 from markupsafe import Markup
 
+from app.complimentary import complimentary_of
 from app.onion import is_onion_request
 from app.payments.adapters import adapter_for
 from app.payments.core import active_subscriptions_of
@@ -43,12 +44,13 @@ def checkout_shortcodes(html: str) -> Markup:
         held = {row.offer_id for row in active_subscriptions_of(current_user) if not onion or row.current_period_end}
     held -= prepaid   # one prepaid period is renewed by paying for the next
     joinable = joinable_tier_ids(getattr(flask.g, 'site', None)) if current_user.is_anonymous else frozenset()
+    complimentary = complimentary_of(current_user) is not None   # nothing to pay (K5)
 
     def button(match: re.Match) -> str:
         offer = offers.get(int(match.group(1)))
         label = match.group(2).strip() if match.group(2) else None   # text: the template escapes it
         return flask.render_template('payments/_checkout_button.html', offer=offer, label=label,
-                                     held=offer is not None and offer.id in held,
+                                     held=offer is not None and offer.id in held, complimentary=complimentary,
                                      joinable=offer is not None and offer.id in joinable,
                                      prepaid=offer is not None and offer.id in prepaid)
 

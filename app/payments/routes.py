@@ -8,6 +8,7 @@ from flask_login import current_user
 from flask_wtf import FlaskForm
 
 from app import db, limiter
+from app.complimentary import KIND as COMPLIMENTARY, complimentary_of
 from app.models import MemberSubscription, Offer, Payment
 from app.onion import clearnet_only, is_onion_request
 from app.payments import bp
@@ -58,7 +59,8 @@ def donations():
     onion = is_onion_request()
     member = current_user.is_authenticated and not onion   # the card and the history stay off the onion
     # A prepaid period has nothing to cancel or manage, so it can be shown there. The rest couldn't be acted on.
-    subscriptions = [row for row in active_subscriptions_of(current_user) if not onion or row.current_period_end] \
+    subscriptions = [row for row in active_subscriptions_of(current_user)
+                     if not onion or row.current_period_end or row.provider_kind == COMPLIMENTARY] \
         if current_user.is_authenticated else []
     if not offers and not subscriptions:
         return render_template('generic_message.html', title=_('Donation plans'),
@@ -74,12 +76,17 @@ def donations():
         if member else []
     titles = {offer.id: offer.title for offer in Offer.query.all()}
     paid_domain = paid_registration(current_storefront())   # a fee to belong here is no donation, whatever else is on offer
+    complimentary = complimentary_of(current_user) is not None
+    if complimentary:   # nothing to pay, so nothing on offer (K5)
+        groups, links = {}, []
     return render_template('user/choose_plan.html', title=_('Your membership') if paid_domain else _('Choose a donation plan'),
                            groups=groups, links=links, subscriptions=subscriptions, payments=payments, titles=titles,
                            member=member, paid_domain=paid_domain, prepaid=prepaid,
                            joinable=joinable_tier_ids(g.site) if current_user.is_anonymous else frozenset(),
-                           redeem_form=RedeemCodeForm() if current_user.is_authenticated else None,
-                           held_code=find_discount_code(session.get(HELD_CODE)) if current_user.is_authenticated else None,
+                           redeem_form=RedeemCodeForm() if current_user.is_authenticated and not complimentary else None,
+                           held_code=find_discount_code(session.get(HELD_CODE))
+                           if current_user.is_authenticated and not complimentary else None,
+                           complimentary=complimentary,
                            clear_form=FlaskForm(), currency=get_setting('payment_currency'))
 
 
@@ -89,6 +96,8 @@ def redeem():
     """A member adds a gift code's free period (paid membership G4). A member's referral code is for joining, so it is
     not found here (find_gift_code)."""
     form = RedeemCodeForm()
+    if complimentary_of(current_user) is not None:
+        return _complimentary()
     if form.validate_on_submit():
         with checking_codes():   # a wrong code says nothing more than any other, but guessing is slowed (shared bucket)
             gift = find_gift_code(form.code.data)
@@ -125,7 +134,15 @@ def checkout(offer_id):
         abort(404)
     if current_user.is_anonymous and offer.kind == 'donation':
         return _start_checkout(offer, None)
+    if complimentary_of(current_user) is not None:
+        return _complimentary()
     return _member_checkout(offer)
+
+
+def _complimentary():
+    """Somebody holding complimentary membership is not asked to pay, and their payment is not taken (K5)."""
+    flash(_('Your membership is complimentary: there is nothing to pay.'))
+    return redirect(url_for('payments.donations'))
 
 
 @login_required
@@ -164,6 +181,8 @@ def cancel(subscription_id):
     subscription = MemberSubscription.query.filter_by(id=subscription_id, user_id=current_user.id,
                                                       status='active').first()
     if subscription is None or adapter_for(subscription.provider_kind).prepaid:   # that just runs out
+        abort(404)
+    if subscription.provider_kind == COMPLIMENTARY:   # only an admin ends that (K6)
         abort(404)
     try:
         cancel_subscription(subscription)

@@ -684,6 +684,12 @@ class GiftCodeForm(FlaskForm):
     save_code = SubmitField(_l('Save'))
 
 
+class ComplimentaryForm(FlaskForm):
+    """Complimentary membership for one account (plan 2026-11-15-complimentary-membership.md, K6)."""
+    grant = SubmitField(_l('Give complimentary membership'))
+    end = SubmitField(_l('End complimentary membership'))
+
+
 class PaymentSettingsForm(FlaskForm):
     retention_days = IntegerField(_l('Remove the account link from settled payments after this many days'),
                                   validators=[Optional(), NumberRange(min=1, max=36500)])

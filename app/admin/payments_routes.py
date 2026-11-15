@@ -15,8 +15,9 @@ from sqlalchemy import func
 
 from app import db
 from app.admin import bp
-from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, DefaultGiftForm, GiftCodeForm, LinkOfferForm, \
+from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, ComplimentaryForm, DefaultGiftForm, GiftCodeForm, LinkOfferForm, \
     MembershipForm, OfferForm, PaymentSettingsForm, PaypalCredentialsForm, PaypalOfferForm, StripeCredentialsForm
+from app.complimentary import KIND as COMPLIMENTARY, end_complimentary, grant_complimentary
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, PromoCode, PromoCodeUse, \
     SiteDomain, User, utcnow
 from app.payments.adapters import adapter_for
@@ -27,6 +28,7 @@ from app.payments.adapters.stripe_adapter import REQUIRED_EVENTS
 from app.payments.adapters.paypal_adapter import REQUIRED_EVENTS as PAYPAL_EVENTS
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
 from app.payments.code_text import normalise
+from app.payments.core import refresh_access
 from app.payments.gifts import DEFAULT_GIFT_DAYS_SETTING, DEFAULT_GIFT_OFFER_SETTING
 from app.payments.offers import LINK, offers_changed, offers_on
 from app.storefront import clear_domain_cache, domain_rows
@@ -110,8 +112,8 @@ def _page(stripe_form=None, settings_form=None, btcpay_form=None, paypal_form=No
     settings_form = settings_form or PaymentSettingsForm(retention_days=get_setting(RETENTION_SETTING))
     return render_template('admin/payments.html', title=_('Payments'), roles_with=roles_with('manage monetization'),
                            key_set=credentials_available(), source=_stripe_source(), stripe_form=stripe_form,
-                           settings_form=settings_form, offers=Offer.query.order_by(Offer.offer_group, Offer.position,
-                                                                                    Offer.id).all(),
+                           settings_form=settings_form, offers=Offer.query.filter(Offer.provider_kind != COMPLIMENTARY)
+                           .order_by(Offer.offer_group, Offer.position, Offer.id).all(),
                            import_form=FlaskForm(), currency=get_setting(CURRENCY_SETTING),
                            webhook_url=url_for('payments.payment_webhook', kind='stripe', _external=True),
                            required_events=REQUIRED_EVENTS, retention=get_setting(RETENTION_SETTING),
@@ -331,6 +333,47 @@ def _codes_page(default_form=None, code_form=None):
     return render_template('admin/payments_codes.html', title=_('Codes'), codes=codes, uses=uses, owners=owners,
                            tiers=tiers, default_form=default_form, code_form=code_form, currency=get_setting(CURRENCY_SETTING),
                            roles_with=roles_with('manage monetization'))
+
+
+def _editable_offer(offer_id: int) -> Offer:
+    """An offer the admin may edit or delete: not the hidden complimentary one, which only grants name (K1)."""
+    offer = db.session.get(Offer, offer_id)
+    if offer is None or offer.provider_kind == COMPLIMENTARY:
+        abort(404)
+    return offer
+
+
+def _still_charged(user: User) -> bool:
+    """Whether a provider will charge the account again: a subscription that renews by itself and is not cancelled.
+    Complimentary membership takes no payment (K5), so it waits until that has been stopped."""
+    return any(row.ends_at is None and row.provider_kind != COMPLIMENTARY
+               and not getattr(adapter_for(row.provider_kind), 'prepaid', False)
+               for row in MemberSubscription.query.filter_by(user_id=user.id, status='active'))
+
+
+@bp.route('/payments/complimentary/<int:user_id>', methods=['POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_complimentary(user_id):
+    """Give a local account complimentary membership, or end it (plan 2026-11-15-complimentary-membership.md, K6)."""
+    user = db.session.get(User, user_id)
+    if user is None or user.deleted or not user.is_local():
+        abort(404)
+    form = ComplimentaryForm()
+    if form.validate_on_submit():
+        if form.end.data:
+            if end_complimentary(user):
+                refresh_access(user)
+                flash(_('Complimentary membership ended.'))
+        elif user.registration_pending_since is not None:
+            flash(_('This account has not finished joining.'), 'error')
+        elif _still_charged(user):
+            flash(_('A provider still charges this account. Cancel its subscription first.'), 'error')
+        else:
+            grant_complimentary(user)
+            flash(_('Complimentary membership given.'))
+        db.session.commit()
+    return redirect(url_for('admin.admin_user_edit', user_id=user.id))
 
 
 @bp.route('/payments/codes', methods=['GET'])
@@ -656,7 +699,7 @@ def admin_payments_offer_add():
 @login_required
 @permission_required('manage monetization')
 def admin_payments_offer_edit(offer_id):
-    offer = db.session.get(Offer, offer_id) or abort(404)
+    offer = _editable_offer(offer_id)
     if offer.kind == LINK:
         return _edit_link(offer)
     if offer.provider_kind == 'btcpay':
@@ -692,7 +735,7 @@ def _edit_link(link: Offer):
 @login_required
 @permission_required('manage monetization')
 def admin_payments_offer_delete(offer_id):
-    offer = db.session.get(Offer, offer_id) or abort(404)
+    offer = _editable_offer(offer_id)
     if _names_a_paid_domain(offer):
         flash(_('A paid domain charges this at registration. Change the domain first.'), 'error')
     elif Payment.query.filter_by(offer_id=offer.id).first() or MemberSubscription.query.filter_by(offer_id=offer.id).first():

@@ -53,6 +53,19 @@
             {{ render_field(form.admin_note) }}
             {{ render_field(form.submit) }}
         </form>
+        {% if complimentary_form -%}
+        <h2 class="mt-4" id="complimentary">{{ _('Complimentary membership') }}</h2>
+        <form method="post" action="{{ url_for('admin.admin_payments_complimentary', user_id=user.id) }}">
+            {{ complimentary_form.hidden_tag() }}
+            {% if complimentary -%}
+            <p>{{ _('Held since %(date)s, with no end date. Nothing is charged, and no payment is taken.', date=complimentary.created_at.strftime('%Y-%m-%d')) }}</p>
+            {{ render_field(complimentary_form.end) }}
+            {% else -%}
+            <p>{{ _('Membership with no end date and nothing to pay.') }}</p>
+            {{ render_field(complimentary_form.grant) }}
+            {% endif -%}
+        </form>
+        {% endif -%}
         {% if grants is not none -%}
         <h2 class="mt-4" id="roles">{{ _('Roles') }}</h2>
         {% set next = url_for('admin.admin_user_edit', user_id=user.id) %}

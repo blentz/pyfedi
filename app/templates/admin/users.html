@@ -126,6 +126,7 @@
                             {%- elif sub.state == 'renews' and sub.last_paid -%}{{ _('renews, last paid %(date)s', date=sub.last_paid.strftime('%Y-%m-%d')) }}
                             {%- elif sub.state == 'renews' -%}{{ _('renews') }}
                             {%- elif sub.state == 'cancelled' -%}{{ _('cancelled, ends %(date)s', date=sub.date.strftime('%Y-%m-%d')) }}
+                            {%- elif sub.state == 'complimentary' -%}{{ _('no end date') }}
                             {%- elif sub.state == 'mismatch' -%}<span class="red">{{ _('payment does not match its offer') }}</span>
                             {%- elif sub.date -%}{{ _('lapsed %(date)s', date=sub.date.strftime('%Y-%m-%d')) }}
                             {%- else -%}{{ _('lapsed') }}

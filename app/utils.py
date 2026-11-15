@@ -74,6 +74,7 @@ from py_svg_hush import filter_svg
 from captcha.audio import AudioCaptcha
 from captcha.image import ImageCaptcha
 
+from app.complimentary import grant_to_new_account
 from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, User, Community, DomainBlock, IpBan, \
     Site, Post, utcnow, Filter, CommunityMember, InstanceBlock, CommunityBan, Topic, UserBlock, Language, \
     File, ModLog, CommunityBlock, Feed, FeedMember, CommunityFlair, CommunityJoinRequest, Notification, UserNote, \
@@ -4779,6 +4780,8 @@ def finalize_user_setup(user):
             .returning(Notification.user_id)
     ).all()
     decrement_unread_counts(unread_notification_users)
+
+    grant_to_new_account(user)   # complimentary membership, for one that holds no subscription (K2)
 
     db.session.commit()
 

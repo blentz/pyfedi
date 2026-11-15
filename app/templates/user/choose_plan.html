@@ -12,7 +12,11 @@
 
         {% if subscriptions -%}
             <h2>{{ _('Your subscriptions') if paid_domain or subscriptions|selectattr('current_period_end')|list else _('Your regular donations') }}</h2>
+            {% if complimentary -%}
+            <p>{{ _('Your membership is complimentary: there is nothing to pay.') }}</p>
+            {% else -%}
             <p class="text-muted">{{ _('Thank you for your support. A plan chosen below replaces any other in its group.') }}</p>
+            {% endif -%}
             <div class="row mb-4">
                 {% for subscription in subscriptions -%}
                     <div class="col-12 col-md-6 mb-3">
@@ -21,7 +25,9 @@
                                 <h3 class="card-title">{{ titles.get(subscription.offer_id) or _('Regular donation') }}</h3>
                             </div>
                             <div class="card-body">
-                                {% if subscription.current_period_end -%}
+                                {% if subscription.provider_kind == 'complimentary' -%}
+                                <p>{{ _('Complimentary, with no end date.') }}</p>
+                                {% elif subscription.current_period_end -%}
                                 <p>{{ _('Paid until %(date)s. It does not renew by itself: pay again below before then.', date=subscription.current_period_end.strftime('%Y-%m-%d')) }}</p>
                                 {% elif subscription.ends_at -%}
                                 <p>{{ _('Cancelled. It runs until %(date)s.', date=subscription.ends_at.strftime('%Y-%m-%d')) }}</p>

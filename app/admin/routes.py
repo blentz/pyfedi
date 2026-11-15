@@ -40,7 +40,8 @@ from app.admin.forms import ADMIN_SCOPE_ROLE_DEFAULT, FederationForm, SiteMiscFo
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
     CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
-    EmojiFilterForm, ContactInstanceForm, MastodonDirectoryScanForm, SiteDomainForm, DomainBrandingForm, DomainSettingsForm
+    EmojiFilterForm, ContactInstanceForm, MastodonDirectoryScanForm, SiteDomainForm, DomainBrandingForm, DomainSettingsForm, \
+    ComplimentaryForm
 from flask_wtf import FlaskForm
 from app.admin.util import ban_list_entries, unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
     topics_for_form, move_community_images_to_here, switch_to_unsilenced, switch_to_silenced, serialize_topic_tree, \
@@ -58,6 +59,7 @@ from app.roles import grant_role
 from app.oauth_server import admin_scopes
 from app.permissions import domains_for, holds_any_grant, may_act_on_user
 from app.federation_urls import object_base
+from app.complimentary import complimentary_of
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, Domain, \
@@ -2690,8 +2692,11 @@ def admin_user_edit(user_id):
         form.can_send_pm.data = user.can_send_pm
         form.admin_note.data = user.admin_note
 
+    complimentary = user.is_local() and user_access('manage monetization', current_user.get_id())
     return render_template('admin/edit_user.html', title=_('Edit user'), form=form, user=user,
-                           roles_with=roles_with('administer all users'), **user_grants_panel(user))
+                           roles_with=roles_with('administer all users'), **user_grants_panel(user),
+                           complimentary_form=ComplimentaryForm() if complimentary else None,
+                           complimentary=complimentary_of(user) if complimentary else None)
 
 
 @bp.route('/user/<int:user_id>/resend_email', methods=['POST'])

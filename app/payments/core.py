@@ -11,6 +11,7 @@ from sqlalchemy import or_
 from sqlalchemy.dialects.postgresql import insert
 
 from app import db
+from app.complimentary import complimentary_of
 from app.constants import DONOR_WHILE_SUBSCRIBED
 from app.email import send_prepaid_reminder, send_verification_email
 from app.models import MemberSubscription, Offer, Payment, PaymentEvent, User, utcnow
@@ -272,9 +273,9 @@ def _pays_for_access(user: User, subscription: MemberSubscription) -> bool:
 def refresh_access(user: User) -> None:
     """User.access_lapsed_at, from what the member holds in the group that pays for their domain (M12, plan S19). A plan
     change in the group never lapses, and somebody who has held no plan there never does: an account an admin made, or
-    one from before the domain charged, has nothing to lapse from."""
+    one from before the domain charged, has nothing to lapse from. Complimentary membership never lapses (K4)."""
     group = _registration_group(user)
-    if group is None:
+    if group is None or complimentary_of(user) is not None:
         user.access_lapsed_at = None
         return
     held = [row for row in MemberSubscription.query.filter_by(user_id=user.id)

@@ -1,6 +1,8 @@
 {# One offer's button, for a [checkout N] shortcode in a CMS page (app/payments/shortcodes.py). Like user/choose_plan.html. -#}
 {% if offer is none -%}
 <span class="text-muted">{{ _('Not available') }}</span>
+{%- elif complimentary -%}
+<a class="btn btn-outline-secondary" href="{{ url_for('payments.donations') }}">{{ _('Complimentary') }}</a>
 {%- elif offer.kind == 'link' -%}
 <a class="btn btn-primary" href="{{ offer.url }}" rel="noopener noreferrer nofollow">{{ label or _('Go to this page') }}</a>
 {%- elif held -%}

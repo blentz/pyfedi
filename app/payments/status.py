@@ -8,7 +8,8 @@ the one that ended last. Its key date depends on how it is paid for:
   the newest payment for it stands in (last_paid);
 * cancelled: it stops renewing, and runs until ends_at;
 * mismatch: its first payment didn't match its offer, which an admin should look at;
-* lapsed: it ended (ended_at).
+* lapsed: it ended (ended_at);
+* complimentary: given by an admin or to an account that held none, with no end date (plan 2026-11-15, K7).
 """
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +17,7 @@ from datetime import datetime
 from sqlalchemy import and_, exists, func, not_
 
 from app import db
+from app.complimentary import KIND as COMPLIMENTARY
 from app.models import MemberSubscription, Offer, Payment, User
 
 FILTERS = ('active', 'lapsed', 'never')
@@ -25,7 +27,7 @@ _RANK = {'active': 0, 'mismatch': 1, 'ended': 2}
 @dataclass(frozen=True)
 class SubscriptionStatus:
     title: str | None   # the offer's; None for one migrated with no offer
-    state: str          # paid_until, renews, cancelled, mismatch or lapsed
+    state: str          # paid_until, renews, cancelled, mismatch, lapsed or complimentary
     date: datetime | None
     since: datetime | None
     last_paid: datetime | None = None
@@ -46,7 +48,8 @@ def subscription_statuses(user_ids: list[int]) -> dict[int, SubscriptionStatus]:
         if subscription.user_id not in chosen or key < chosen[subscription.user_id][0]:
             chosen[subscription.user_id] = (key, subscription, title)
     undated = {(row.user_id, row.offer_id) for _, row, _ in chosen.values()
-               if row.status == 'active' and row.current_period_end is None and row.ends_at is None and row.renews_at is None}
+               if row.status == 'active' and row.current_period_end is None and row.ends_at is None and row.renews_at is None
+               and row.provider_kind != COMPLIMENTARY}
     last_paid = {}
     if undated:
         last_paid = {(user_id, offer_id): when for user_id, offer_id, when in db.session.execute(
@@ -66,6 +69,8 @@ def _status(row: MemberSubscription, title: str | None, last_paid: dict) -> Subs
         return SubscriptionStatus(title, 'lapsed', row.ended_at, since)
     if row.status == 'mismatch':
         return SubscriptionStatus(title, 'mismatch', None, since)
+    if row.provider_kind == COMPLIMENTARY:
+        return SubscriptionStatus(title, 'complimentary', None, since)
     if row.current_period_end is not None:
         return SubscriptionStatus(title, 'paid_until', row.current_period_end, since)
     if row.ends_at is not None:
