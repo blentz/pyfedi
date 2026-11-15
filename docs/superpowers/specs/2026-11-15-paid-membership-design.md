@@ -4,7 +4,7 @@ Status: APPROVED 2026-11-15 with the defaults below, Q5 changed (PM8). Phase 1 s
 
 ## Why
 
-hell.cloud's default domain runs in referral-code mode, so nobody without a code can make an account, and the
+The owner's site's default domain runs in referral-code mode, so nobody without a code can make an account, and the
 `/subscribe` page's buttons ask a visitor to log in first: they cannot subscribe without an account, and cannot get an
 account without a code. The owner wants paying to be the other way in, codes to grant a free time-limited
 subscription, and discount codes.
@@ -88,7 +88,7 @@ get `access_lapsed` as today.
 
 ## Phases
 
-1. D1 + D2 + D4: membership switch, pay-to-join with a tier choice, Join buttons, locking. (Unblocks hell.cloud.)
+1. D1 + D2 + D4: membership switch, pay-to-join with a tier choice, Join buttons, locking. (Unblocks the owner's site.)
 2. D3 gifts: promo codes of kind gift, referral codes carrying gifts, admin page for codes.
 3. D3 discounts: percent and amount off for BTCPay and Stripe; PayPal per Q3.
 

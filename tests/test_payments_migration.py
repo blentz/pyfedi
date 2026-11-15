@@ -37,6 +37,7 @@ def conn(app, db_session, monkeypatch):
     db.session.commit()
     connection = db.session.connection()
     with Operations.context(MigrationContext.configure(connection)):
+        load('paid_membership').downgrade()   # its foreign key names the offer table too
         load('prepaid_reminders').downgrade()
         load('paid_private_domains').downgrade()   # its foreign key names the table this one drops
         load().downgrade()
