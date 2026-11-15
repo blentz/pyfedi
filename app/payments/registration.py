@@ -34,6 +34,13 @@ def registration_tiers() -> list[Offer]:
     return [offer for offer in offers if offer.kind == 'subscription' and offer.offer_group == own.offer_group]
 
 
+def joinable_tier_ids(site) -> frozenset[int]:
+    """The offers a visitor here is asked to join for, not to log in for (plan M6): the tiers, while registering is open."""
+    if site is None or site.registration_mode == 'Closed':
+        return frozenset()
+    return frozenset(offer.id for offer in registration_tiers())
+
+
 def registration_offer(chosen: int | None = None) -> Offer | None:
     """The tier `chosen`, if it is one here; else the domain's own. None where signing up can't be paid for."""
     tiers = registration_tiers()

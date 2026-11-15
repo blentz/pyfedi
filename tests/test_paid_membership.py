@@ -9,7 +9,8 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import MemberSubscription, Offer, Site, SiteDomain, User, utcnow
+from app.models import CmsPage, MemberSubscription, Offer, Site, SiteDomain, User, utcnow
+from app.utils import markdown_to_html
 from app.auth.oauth_util import refuse_new_oauth_account
 from app.auth.util import sync_user_with_ldap
 from app.storefront import clear_domain_cache, default_domain, open_registrations, paid_registration, \
@@ -357,3 +358,41 @@ class TestCodeOrPay:
     def test_no_code_means_paying(self, env, code, provider):
         response = self.register(env, question='', tier=env.duke.id)
         assert response.headers['Location'] == CHECKOUT and joiner().registration_pending_since is not None
+
+
+class TestJoinButtons:
+    """A visitor on a paid domain is asked to join, not to log in (plan M6)."""
+
+    def page(self, env, body):
+        db.session.add(CmsPage(url='/subscribe', title='Subscribe', body=body, body_html=markdown_to_html(body)))
+        db.session.commit()
+        return BeautifulSoup(env.client.get('/subscribe', base_url=env.base).get_data(as_text=True), 'html.parser')
+
+    def test_a_tier_says_join_and_leads_to_registering_for_it(self, env):
+        link = self.page(env, f'[checkout {env.duke.id}]').find('a', string='Join')
+        assert link is not None and link['href'] == f'/auth/register?offer={env.duke.id}'
+
+    def test_a_one_off_is_still_given_at_once(self, env):
+        page = self.page(env, f'[checkout {env.gift.id}]')
+        assert page.find('a', string='Join') is None and page.find('form', action=f'/donations/checkout/{env.gift.id}')
+
+    def test_a_subscription_that_is_no_tier_still_asks_to_log_in(self, env):
+        other = Offer(provider_kind='stripe', kind='subscription', title='Patron', offer_group='patrons',
+                      provider_price_id='price_p', amount_minor=900, currency='usd', interval='month')
+        db.session.add(other)
+        db.session.commit()
+        assert self.page(env, f'[checkout {other.id}]').find('a', string='Log in to subscribe') is not None
+
+    def test_with_registration_closed_it_asks_to_log_in(self, env):
+        env.site.registration_mode = 'Closed'
+        db.session.commit()
+        assert self.page(env, f'[checkout {env.duke.id}]').find('a', string='Join') is None
+
+    def test_a_member_still_pays_at_once(self, env):
+        login(env.client, member(env))
+        assert self.page(env, f'[checkout {env.duke.id}]').find('form', action=f'/donations/checkout/{env.duke.id}')
+
+    def test_the_plans_page_says_join_too(self, env):
+        page = BeautifulSoup(env.client.get('/donations', base_url=env.base).get_data(as_text=True), 'html.parser')
+        hrefs = {link['href'] for link in page.find_all('a', string='Join')}
+        assert hrefs == {f'/auth/register?offer={env.knight.id}', f'/auth/register?offer={env.duke.id}'}

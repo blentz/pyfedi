@@ -19,6 +19,7 @@ from app.onion import is_onion_request
 from app.payments.adapters import adapter_for
 from app.payments.core import active_subscriptions_of
 from app.payments.offers import LINK, offers_here
+from app.payments.registration import joinable_tier_ids
 
 SHORTCODE = re.compile(r'\[checkout (\d+)(?: ([^\]]+))?\]')
 LITERAL = {'pre', 'code', 'script', 'style', 'textarea'}
@@ -41,12 +42,14 @@ def checkout_shortcodes(html: str) -> Markup:
         onion = is_onion_request()
         held = {row.offer_id for row in active_subscriptions_of(current_user) if not onion or row.current_period_end}
     held -= prepaid   # one prepaid period is renewed by paying for the next
+    joinable = joinable_tier_ids(getattr(flask.g, 'site', None)) if current_user.is_anonymous else frozenset()
 
     def button(match: re.Match) -> str:
         offer = offers.get(int(match.group(1)))
         label = match.group(2).strip() if match.group(2) else None   # text: the template escapes it
         return flask.render_template('payments/_checkout_button.html', offer=offer, label=label,
                                      held=offer is not None and offer.id in held,
+                                     joinable=offer is not None and offer.id in joinable,
                                      prepaid=offer is not None and offer.id in prepaid)
 
     # Each button goes in after the soup is written out, at a marker no page can contain, so that it is the template's

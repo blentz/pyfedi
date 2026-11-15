@@ -2,7 +2,7 @@
 
 A browser coming back from a provider grants nothing: only a verified webhook does (spec, Security).
 """
-from flask import abort, flash, redirect, request, url_for
+from flask import abort, flash, g, redirect, request, url_for
 from flask_babel import _
 from flask_login import current_user
 
@@ -14,6 +14,7 @@ from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.core import active_subscriptions_of, apply_event, cancel_subscription
 from app.payments.offers import LINK, offers_here
+from app.payments.registration import joinable_tier_ids
 from app.storefront import current_storefront, paid_registration
 from app.utils import login_required, login_required_if_private_instance, render_template
 
@@ -70,7 +71,8 @@ def donations():
     paid_domain = paid_registration(current_storefront())   # a fee to belong here is no donation, whatever else is on offer
     return render_template('user/choose_plan.html', title=_('Your membership') if paid_domain else _('Choose a donation plan'),
                            groups=groups, links=links, subscriptions=subscriptions, payments=payments, titles=titles,
-                           member=member, paid_domain=paid_domain, prepaid=prepaid)
+                           member=member, paid_domain=paid_domain, prepaid=prepaid,
+                           joinable=joinable_tier_ids(g.site) if current_user.is_anonymous else frozenset())
 
 
 @bp.route('/donations/checkout/<int:offer_id>', methods=['POST'])
