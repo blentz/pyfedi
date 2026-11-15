@@ -10,9 +10,9 @@ from flask_wtf import FlaskForm
 
 from app import db
 from app.admin import bp
-from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, LinkOfferForm, OfferForm, PaymentSettingsForm, \
-    PaypalCredentialsForm, PaypalOfferForm, StripeCredentialsForm
-from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, SiteDomain, User
+from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, LinkOfferForm, MembershipForm, OfferForm, \
+    PaymentSettingsForm, PaypalCredentialsForm, PaypalOfferForm, StripeCredentialsForm
+from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, SiteDomain, User, utcnow
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
 from app.payments.adapters.btcpay_adapter import REQUIRED_EVENTS as BTCPAY_EVENTS, REQUIRED_PERMISSIONS as BTCPAY_PERMISSIONS, \
@@ -20,8 +20,8 @@ from app.payments.adapters.btcpay_adapter import REQUIRED_EVENTS as BTCPAY_EVENT
 from app.payments.adapters.stripe_adapter import REQUIRED_EVENTS
 from app.payments.adapters.paypal_adapter import REQUIRED_EVENTS as PAYPAL_EVENTS
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
-from app.payments.offers import LINK, offers_changed
-from app.storefront import domain_rows
+from app.payments.offers import LINK, offers_changed, offers_on
+from app.storefront import clear_domain_cache, domain_rows
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
 
 LEDGER_PAGE = 50
@@ -72,7 +72,27 @@ def _paypal_form() -> PaypalCredentialsForm:
     return PaypalCredentialsForm(enabled=row.enabled if row else True, **(row.settings or {} if row else {}))
 
 
-def _page(stripe_form=None, settings_form=None, btcpay_form=None, paypal_form=None):
+def _home_row() -> SiteDomain | None:
+    return SiteDomain.query.filter_by(is_default=True).first()
+
+
+def _membership_tiers(row: SiteDomain | None) -> list[Offer]:
+    """What joining the default domain may cost: subscriptions usable there."""
+    if row is None:
+        return []
+    return [offer for offer in offers_on(row.id, row.is_onion) if offer.kind == 'subscription']
+
+
+def _membership_form(row: SiteDomain | None) -> MembershipForm:
+    form = MembershipForm(membership=bool(row and row.registration == 'paid'),
+                          membership_offer_id=(row.registration_offer_id if row else None) or 0,
+                          membership_grace_days=row.lapse_grace_days if row and row.registration == 'paid' else 3)
+    form.membership_offer_id.choices = [(0, _('None'))] + [(offer.id, offer.title) for offer in _membership_tiers(row)]
+    return form
+
+
+def _page(stripe_form=None, settings_form=None, btcpay_form=None, paypal_form=None, membership_form=None):
+    home = _home_row()
     paypal = PaymentProvider.query.filter_by(kind='paypal').first()
     row = PaymentProvider.query.filter_by(kind='stripe').first()
     btcpay = PaymentProvider.query.filter_by(kind='btcpay').first()
@@ -90,7 +110,8 @@ def _page(stripe_form=None, settings_form=None, btcpay_form=None, paypal_form=No
                            btcpay_events=BTCPAY_EVENTS, btcpay_permissions=BTCPAY_PERMISSIONS,
                            paypal_form=paypal_form or _paypal_form(), paypal_connected=bool(paypal and paypal.credentials),
                            paypal_webhook_url=url_for('payments.payment_webhook', kind='paypal', _external=True),
-                           paypal_events=PAYPAL_EVENTS)
+                           paypal_events=PAYPAL_EVENTS, home=home,
+                           membership_form=membership_form or _membership_form(home))
 
 
 @bp.route('/payments', methods=['GET'])
@@ -243,6 +264,37 @@ def _apply_price(offer: Offer, price: dict) -> None:
     offer.currency = price['currency']
     offer.interval = price['interval']
     offer.kind = 'subscription' if price['interval'] else 'donation'
+
+
+@bp.route('/payments/membership', methods=['POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_membership():
+    """Turning it on dates it, once: an account made before then stays free for good (PM5, plan M2). Turning it off
+    forgets the date, so turning it on again grandfathers everyone who joined in between."""
+    row = _home_row()
+    if row is None:
+        flash(_('This site has no domain settings yet: add its domain on the domains page first.'), 'error')
+        return redirect(url_for('admin.admin_payments'))
+    form = _membership_form(row)
+    if not form.validate_on_submit():
+        return _page(membership_form=form)
+    tiers = {offer.id for offer in _membership_tiers(row)}
+    if form.membership.data:
+        if form.membership_offer_id.data not in tiers:
+            flash(_('Choose a subscription that is on offer here.'), 'error')
+            return redirect(url_for('admin.admin_payments'))
+        if row.registration != 'paid':
+            row.paid_since = utcnow()
+        row.registration = 'paid'
+        row.registration_offer_id = form.membership_offer_id.data
+        row.lapse_grace_days = form.membership_grace_days.data
+    else:
+        row.registration, row.paid_since = 'anyone', None
+    db.session.commit()
+    clear_domain_cache()
+    flash(_('Membership saved.'))
+    return redirect(url_for('admin.admin_payments'))
 
 
 @bp.route('/payments/settings', methods=['POST'])

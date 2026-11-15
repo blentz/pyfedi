@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from flask import current_app, g
+from flask import current_app, g, session as flask_session
+from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.models import MemberSubscription, Offer, Site, SiteDomain, User, utcnow
@@ -104,3 +105,87 @@ class TestLapsing:
         db.session.commit()
         db.session.expire_all()
         assert db.session.get(User, user.id).pending_offer_id is None
+
+
+def login(client, user):
+    with client.session_transaction() as session:
+        session['_user_id'] = str(user.id)
+        session['_fresh'] = True
+
+
+def csrf(env):
+    """One per test: the shared app context caches it."""
+    with env.app.test_request_context():
+        token = generate_csrf()
+        raw = flask_session['csrf_token']
+    with env.client.session_transaction(base_url=env.base) as session:
+        session['csrf_token'] = raw
+    return token
+
+
+class TestTheSwitch:
+    """On the payments page, beside what it charges (plan M8): choosing what joining costs is monetization's."""
+
+    @pytest.fixture
+    def admin(self, env):
+        holder = member(env, 'treasurer')
+        grant_permission(holder, 'manage monetization')
+        login(env.client, holder)
+        return holder
+
+    def switch(self, env, **values):
+        return env.client.post('/admin/payments/membership', data={'save_membership': 'Save', 'csrf_token': csrf(env), **values},
+                               base_url=env.base)
+
+    def free(self, env):
+        env.home.registration, env.home.paid_since = 'anyone', None
+        db.session.commit()
+        clear_domain_cache()
+
+    def test_the_page_shows_it(self, env, admin):
+        body = env.client.get('/admin/payments', base_url=env.base).get_data(as_text=True)
+        assert 'name="membership_offer_id"' in body and 'Furcas' in body
+
+    def test_turning_it_on_charges_and_dates_it(self, env, admin):
+        self.free(env)
+        before = utcnow()
+        assert self.switch(env, membership='y', membership_offer_id=env.duke.id, membership_grace_days=3).status_code == 302
+        row = db.session.get(SiteDomain, env.home.id)
+        assert (row.registration, row.registration_offer_id, row.lapse_grace_days) == ('paid', env.duke.id, 3)
+        assert row.paid_since >= before.replace(microsecond=0)
+        assert paid_registration(default_domain())
+
+    def test_saving_again_keeps_the_date(self, env, admin):
+        since = env.home.paid_since
+        assert self.switch(env, membership='y', membership_offer_id=env.knight.id, membership_grace_days=5).status_code == 302
+        row = db.session.get(SiteDomain, env.home.id)
+        assert row.paid_since == since and row.lapse_grace_days == 5
+
+    def test_turning_it_off_frees_it(self, env, admin):
+        self.switch(env, membership_offer_id=env.knight.id, membership_grace_days=3)
+        row = db.session.get(SiteDomain, env.home.id)
+        assert row.registration == 'anyone' and row.paid_since is None
+        assert not paid_registration(default_domain())
+
+    def test_a_one_off_cannot_be_what_joining_costs(self, env, admin):
+        self.free(env)
+        assert self.switch(env, membership='y', membership_offer_id=env.gift.id, membership_grace_days=3).status_code in (200, 302)
+        assert db.session.get(SiteDomain, env.home.id).registration == 'anyone'
+
+    def test_on_needs_a_tier(self, env, admin):
+        self.free(env)
+        self.switch(env, membership='y', membership_offer_id=0, membership_grace_days=3)
+        assert db.session.get(SiteDomain, env.home.id).registration == 'anyone'
+
+    def test_without_a_default_domain_row_there_is_nothing_to_switch(self, env, admin):
+        db.session.delete(env.home)
+        db.session.commit()
+        clear_domain_cache()
+        response = self.switch(env, membership='y', membership_offer_id=env.knight.id, membership_grace_days=3)
+        assert response.status_code == 302 and SiteDomain.query.count() == 0
+
+    def test_nobody_else_may(self, env):
+        login(env.client, member(env, 'nobody'))
+        assert self.switch(env, membership='y', membership_offer_id=env.knight.id,
+                           membership_grace_days=3).status_code in (302, 403)
+        assert db.session.get(SiteDomain, env.home.id).registration_offer_id == env.knight.id

@@ -641,6 +641,19 @@ class StripeCredentialsForm(FlaskForm):
     save_stripe = SubmitField(_l('Save'))
 
 
+class MembershipForm(FlaskForm):
+    """Paid membership on the default domain (spec 2026-11-15-paid-membership-design.md, plan M1, M8)."""
+    membership = BooleanField(_l('Joining this site needs a subscription'),
+                              description=_l('Accounts made before this is turned on stay free for good, as do admins '
+                                             'and anyone holding a role.'))
+    membership_offer_id = SelectField(_l('Its tiers are the subscriptions in the group of'), coerce=int, choices=[],
+                                      validators=[Optional()], render_kw={'class': 'form-select'},
+                                      description=_l('This one is preselected; any subscription in its group may be chosen.'))
+    membership_grace_days = IntegerField(_l('Days of access after a subscription ends'), default=3,
+                                         validators=[DataRequired(), NumberRange(min=1, max=3650)])
+    save_membership = SubmitField(_l('Save'))
+
+
 class PaymentSettingsForm(FlaskForm):
     retention_days = IntegerField(_l('Remove the account link from settled payments after this many days'),
                                   validators=[Optional(), NumberRange(min=1, max=36500)])

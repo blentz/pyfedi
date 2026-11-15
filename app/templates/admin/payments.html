@@ -116,6 +116,20 @@
             </table>
         {% endif -%}
 
+        <h3 class="mt-4">{{ _('Membership') }}</h3>
+        {% if home -%}
+        <p class="small field_hint">{{ _('Whether joining %(domain)s needs a subscription. With referral codes on, a code still admits for free.', domain=home.domain) }}</p>
+        <form method="post" action="{{ url_for('admin.admin_payments_membership') }}">
+            {{ membership_form.hidden_tag() }}
+            {{ render_field(membership_form.membership) }}
+            {{ render_field(membership_form.membership_offer_id) }}
+            {{ render_field(membership_form.membership_grace_days) }}
+            {{ render_field(membership_form.save_membership) }}
+        </form>
+        {%- else -%}
+        <p class="small field_hint">{{ _('This site has no domain settings yet: add its domain on the domains page first.') }}</p>
+        {%- endif %}
+
         <h3 class="mt-4">{{ _('Ledger settings') }}</h3>
         <form method="post" action="{{ url_for('admin.admin_payments_settings') }}">
             {{ settings_form.hidden_tag() }}
