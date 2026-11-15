@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -20,7 +21,7 @@ import respx
 from flask import current_app, g
 
 from app import db
-from app.models import MemberSubscription, Offer, Payment, PaymentProvider, Site
+from app.models import BtcDailyRate, MemberSubscription, Offer, Payment, PaymentProvider, Site, utcnow
 from app.payments.adapters.base import ProviderError
 from app.payments.adapters.btcpay_adapter import BtcpayAdapter
 from app.payments.credentials import seal
@@ -73,7 +74,8 @@ def server():
         'btcpay.store.canmodifystoresettings', 'btcpay.store.cancreateinvoice', 'btcpay.store.canviewinvoices',
         'btcpay.store.webhooks.canmodifywebhooks']}).json()['apiKey']
     least = client.post('/api/v1/api-keys', auth=ADMIN, json={'label': 'least', 'permissions': [
-        'btcpay.store.cancreateinvoice', 'btcpay.store.canviewinvoices']}).json()['apiKey']
+        'btcpay.store.cancreateinvoice', 'btcpay.store.canviewinvoices',
+        'btcpay.store.canviewstoresettings']}).json()['apiKey']   # the store's rate, for the daily price
     headers = {'Authorization': f'token {key}'}
     store = client.post('/api/v1/stores', headers=headers, json={'name': 'test', 'defaultCurrency': 'USD'}).json()['id']
     assert client.post(f'/api/v1/stores/{store}/payment-methods/BTC-CHAIN/wallet/generate', auth=ADMIN,
@@ -95,6 +97,8 @@ def env(app, api_baseline, server, monkeypatch):
     plan = Offer(provider_kind='btcpay', kind='subscription', title='Prepaid', offer_group='plans', amount_minor=500, currency='usd',
                  interval='month', grants_donor=True)
     db.session.add(plan)
+    # The day's price fixed already, so the invoice is in BTC without the server's rate source (plan 2026-11-15 B2)
+    db.session.add(BtcDailyRate(day=utcnow().date() - timedelta(days=1), currency='usd', rate=50000, fixed_at=utcnow()))
     member = make_user(api_baseline.instance_local, 'member', local=True)
     db.session.commit()
     return SimpleNamespace(client=app.test_client(), plan=plan, member=member, app=app)
