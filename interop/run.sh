@@ -20,7 +20,7 @@ wait_http() {  # wait_http <service> <url>: up to 120s for a 2xx/3xx from inside
 }
 
 PIEFED_SERVICES="caddy piefed-db piefed-redis piefed-web piefed-celery piefed-celery-background"
-APPS_SERVICES="android-emulator voyager-web blorp-web photon-web phanpy-web elk-web"
+WEB_SERVICES="voyager-web blorp-web photon-web phanpy-web elk-web"
 WEB_IMAGES="ghcr.io/aeharding/voyager:latest ghcr.io/blorp-labs/blorp:latest ghcr.io/xyphyn/photon:latest ghcr.io/elk-zone/elk:latest"
 
 # PieFed alone, built from this tree, initialised and seeded: what `clients` needs, and the first half of `up`
@@ -146,15 +146,12 @@ apps() {
     # Caddy joins the emulator's offline network, which a stack started by `up` lacks until it is recreated (its CA
     # lives in the caddy-data volume, which stays)
     $COMPOSE --profile apps up -d --force-recreate --no-deps caddy
-    # recreated every run: a freshly pulled web image, and an emulator wiped of the last run's apps and logins
+    # The web apps first, with no emulator running: its boot and load slowed their pages past their waits in full runs,
+    # while the same apps passed every step run alone (2026-11-15). The last run's emulator is stopped before them.
+    $COMPOSE --profile apps stop android-emulator > /dev/null 2>&1 || true
+    # recreated every run: a freshly pulled web image, and (below) an emulator wiped of the last run's apps and logins
     # shellcheck disable=SC2086
-    $COMPOSE --profile apps up -d --force-recreate --no-deps $APPS_SERVICES
-    for _ in $(seq 1 600); do
-        if $COMPOSE --profile apps exec -T android-emulator test -e /tmp/ready 2>/dev/null; then break; fi
-        sleep 1
-    done
-    $COMPOSE --profile apps exec -T android-emulator test -e /tmp/ready \
-        || { $COMPOSE --profile apps logs --tail 50 android-emulator >&2; echo "run.sh: the emulator never got ready" >&2; return 1; }
+    $COMPOSE --profile apps up -d --force-recreate --no-deps $WEB_SERVICES
     rm -rf interop/apps/results
     mkdir -p interop/apps/results
     # which build of each web app ran: its image has no version the app shows, so its digest and build date stand in
@@ -163,7 +160,17 @@ apps() {
     done > interop/apps/results/images.txt
     echo "phanpy $phanpy_release (the release's static build)" >> interop/apps/results/images.txt
     # the tests' own failures are harness errors and show in their output; the matrix decides the run
-    $COMPOSE --profile apps run --rm apps-runner python -m pytest -c interop/apps/pytest.ini interop/apps "$@" || true
+    $COMPOSE --profile apps run --rm apps-runner python -m pytest -c interop/apps/pytest.ini \
+        interop/apps/test_web_apps.py "$@" || true
+    $COMPOSE --profile apps up -d --force-recreate --no-deps android-emulator
+    for _ in $(seq 1 600); do
+        if $COMPOSE --profile apps exec -T android-emulator test -e /tmp/ready 2>/dev/null; then break; fi
+        sleep 1
+    done
+    $COMPOSE --profile apps exec -T android-emulator test -e /tmp/ready \
+        || { $COMPOSE --profile apps logs --tail 50 android-emulator >&2; echo "run.sh: the emulator never got ready" >&2; return 1; }
+    $COMPOSE --profile apps run --rm apps-runner python -m pytest -c interop/apps/pytest.ini \
+        --ignore=interop/apps/test_web_apps.py interop/apps "$@" || true
     # on the host, not in a container: podman-compose's `run` loses the exit status, and the checker is standard library
     python3 -m interop.apps.matrix
 }

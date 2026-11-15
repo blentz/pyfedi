@@ -15,7 +15,7 @@ import time
 import httpx
 import pytest
 
-from interop.apps import apks, steps
+from interop.apps import apks, stack_state, steps
 from interop.apps.conftest import ALICE, DORA, PHOTO_TITLE, SEED_TITLE, TESS, TUBE, TUBE_TITLE, VIDEO_FIXTURE, find_comment, find_post, \
     marker, png, tube_video
 from interop.apps.matrix import RESULTS, load_matrix
@@ -1007,17 +1007,24 @@ DRIVERS = {'newpipe-android': NewPipe, 'summit-android': Summit, 'voyager-androi
 
 
 @pytest.mark.parametrize('name', sorted(DRIVERS), ids=sorted(DRIVERS))
-def test_android_app(world, device, name):
+def test_android_app(world, device, baseline, name):
     app = MATRIX[name]
     with httpx.Client(timeout=300, follow_redirects=True) as http:
         apk, version = apks.fetch(app['apk'], http)
     if app['apk'].get('extract_native_libs'):
         apk = apks.with_native_libs_extracted(apk)
-    device.install(apk, app['package'])
-    device.launch(app['package'])
-    driver = DRIVERS[name](device, app['package'], world)
+
+    def attempt(retry):
+        if retry:   # from scratch: PieFed as the test began, and the app uninstalled with its data, then installed again
+            device.stop(app['package'])
+            device.reset(device.session_packages)
+            stack_state.restore(baseline)
+        device.install(apk, app['package'])
+        device.launch(app['package'])
+        driver = DRIVERS[name](device, app['package'], world)
+        return ({'login': driver.login, 'view': driver.view, 'post': driver.post},
+                lambda step: device.screenshot(RESULTS / f'{name}-{step}.png'))
     try:
-        steps.run(name, app, {'login': driver.login, 'view': driver.view, 'post': driver.post}, version=version,
-                  on_failure=lambda step: device.screenshot(RESULTS / f'{name}-{step}.png'))
+        steps.run_with_retry(name, app, attempt, version=version)
     finally:
         device.stop(app['package'])

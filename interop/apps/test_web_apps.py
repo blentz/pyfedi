@@ -11,7 +11,7 @@ import re
 import pytest
 from playwright.sync_api import Page, expect, sync_playwright
 
-from interop.apps import steps
+from interop.apps import stack_state, steps
 from interop.apps.conftest import ALICE, SEED_TITLE, find_comment, marker, status_id
 from interop.apps.matrix import RESULTS, load_matrix
 
@@ -27,8 +27,8 @@ def browser():
         browser.close()
 
 
-@pytest.fixture
-def page(browser):
+def new_page(browser) -> Page:
+    """A page in a context of its own: nothing an earlier try stored carries over."""
     # a phone-sized window: the apps are mobile-first, and their desktop layouts hide controls behind other menus
     context = browser.new_context(ignore_https_errors=True, viewport={'width': 412, 'height': 915})
     context.set_default_timeout(TIMEOUT)
@@ -40,8 +40,7 @@ def page(browser):
         f'failed: {request.method} {request.url} {request.failure}'))
     page.on('response', lambda response: (response.status >= 400 or 'piefed.test' in response.url)
             and page.trouble.append(f'{response.status}: {response.request.method} {response.url}'))
-    yield page
-    context.close()
+    return page
 
 
 def _screenshot(page: Page, name: str):
@@ -274,8 +273,19 @@ DRIVERS = {'voyager-web': Voyager, 'blorp-web': Blorp, 'photon-web': Photon, 'ph
 
 
 @pytest.mark.parametrize('name', sorted(DRIVERS), ids=sorted(DRIVERS))
-def test_web_app(world, page, name):
+def test_web_app(world, browser, baseline, name):
     app = MATRIX[name]
-    driver = DRIVERS[name](page, app['web'], world)
-    steps.run(name, app, {'login': driver.login, 'view': driver.view, 'post': driver.post},
-              version=app['image'], on_failure=_screenshot(page, name))
+    pages = []
+
+    def attempt(retry):
+        if retry:   # from scratch: PieFed as the test began, and a browser context with nothing stored
+            stack_state.restore(baseline)
+        page = new_page(browser)
+        pages.append(page)
+        driver = DRIVERS[name](page, app['web'], world)
+        return {'login': driver.login, 'view': driver.view, 'post': driver.post}, _screenshot(page, name)
+    try:
+        steps.run_with_retry(name, app, attempt, version=app['image'])
+    finally:
+        for page in pages:
+            page.context.close()

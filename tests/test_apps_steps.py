@@ -57,3 +57,59 @@ def test_an_unsupported_step_is_recorded_so_and_blocks_nothing(results, tmp_path
     assert results('a') == {'login': 'passed', 'view': 'unsupported', 'post': 'passed'}
     assert captured == []
     assert json.loads((tmp_path / 'a.json').read_text())['steps']['view']['detail'] == 'no timelines yet'
+
+
+def test_a_failure_is_tried_again_from_fresh_and_passes(results, tmp_path):
+    calls = []
+
+    def attempt(retry):
+        calls.append(retry)
+        if not retry:
+            (tmp_path / 'a-view.png').write_bytes(b'png')
+
+            def view():
+                raise AssertionError('slow screen')
+            return {'login': lambda: 'in', 'view': view, 'post': lambda: None}, lambda step: None
+        return {'login': lambda: 'in', 'view': lambda: 'seen', 'post': lambda: 'posted'}, lambda step: None
+    steps.run_with_retry('a', {}, attempt, version='1', results_dir=tmp_path)
+    assert calls == [False, True]
+    assert results('a') == {'login': 'passed', 'view': 'passed', 'post': 'passed'}
+    data = json.loads((tmp_path / 'a.json').read_text())
+    assert data['retried'] == {'view': 'AssertionError: slow screen'} and data['version'] == '1'
+    assert (tmp_path / 'a-try1-view.png').read_bytes() == b'png' and not (tmp_path / 'a-view.png').exists()
+
+
+def test_a_second_failure_is_the_result_and_the_first_is_kept(results, tmp_path):
+    def attempt(retry):
+        def view():
+            raise AssertionError('again' if retry else 'first')
+        return {'login': lambda: None, 'view': view, 'post': lambda: None}, None
+    steps.run_with_retry('a', {}, attempt, results_dir=tmp_path)
+    data = json.loads((tmp_path / 'a.json').read_text())
+    assert results('a') == {'login': 'passed', 'view': 'failed', 'post': 'blocked'}
+    assert data['steps']['view']['detail'] == 'AssertionError: again' and data['retried'] == {'view': 'AssertionError: first'}
+
+
+def test_a_clean_run_is_not_tried_again(results, tmp_path):
+    calls = []
+
+    def attempt(retry):
+        calls.append(retry)
+        return {'login': lambda: None, 'view': lambda: None, 'post': lambda: None}, None
+    steps.run_with_retry('a', {}, attempt, results_dir=tmp_path)
+    assert calls == [False] and 'retried' not in json.loads((tmp_path / 'a.json').read_text())
+
+
+def test_an_expected_failure_is_not_tried_again(results, tmp_path):
+    """The matrix knows this step fails in this app: running it again would only take time."""
+    calls = []
+    app = {'expect': {'post': {'outcome': 'failed', 'reason': 'the app cannot'}}}
+
+    def attempt(retry):
+        calls.append(retry)
+
+        def post():
+            raise AssertionError('as known')
+        return {'login': lambda: None, 'view': lambda: None, 'post': post}, None
+    steps.run_with_retry('a', app, attempt, results_dir=tmp_path)
+    assert calls == [False]

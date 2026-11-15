@@ -136,3 +136,11 @@ def test_the_committed_matrix_is_well_formed():
         assert sum(key in app for key in ('web', 'apk', 'rss')) == 1, f'{name}: one way to check it'
         if 'apk' in app or 'web' in app:
             assert 'package' in app or 'web' in app, name
+
+
+def test_a_retried_app_is_named_but_is_no_problem(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr('interop.apps.matrix.load_matrix', lambda: {'a': {}})
+    (tmp_path / 'a.json').write_text(json.dumps({**_result('a'), 'retried': {'view': 'TimeoutError: slow'}}))
+    assert main([str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert 'a: passed on retry; first try: view: TimeoutError: slow' in out and '0 problem(s)' in out

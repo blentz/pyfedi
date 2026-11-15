@@ -122,6 +122,11 @@ def main(argv: list[str]) -> int:
         (results_dir / 'summary.md').write_text(summary(matrix, results))
     for problem in problems:
         print(problem)
+    for name, result in sorted(results.items()):
+        if result.get('retried'):   # passed the second time: shown, not a problem (steps.run_with_retry)
+            first = '; '.join(f'{step}: {detail}' for step, detail in sorted(result['retried'].items()))
+            outcome = 'retried' if any(problem.startswith(f'{name}/') for problem in problems) else 'passed on retry'
+            print(f'{name}: {outcome}; first try: {first}'[:400])
     print(f'apps: {len(matrix)} in the matrix, {len(results)} ran, {len(problems)} problem(s)')
     return 1 if problems else 0
 

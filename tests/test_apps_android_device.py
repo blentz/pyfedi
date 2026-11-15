@@ -59,3 +59,65 @@ def test_launch_gives_up_when_the_app_never_comes_to_the_front(monkeypatch):
     monkeypatch.setattr(android_device.time, 'monotonic', lambda: next(clock))
     with pytest.raises(AssertionError, match='org.app is not in front'):
         device([]).launch('org.app')
+
+
+class Shell:
+    """adbutils' v1 shell as the harness meets it: some answers come back cut short."""
+
+    def __init__(self, answers):
+        self.answers, self.ran = list(answers), []
+
+    def __call__(self, device, cmdargs, timeout=None):
+        self.ran.append(cmdargs)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def cut_short():
+    return AdbError('shell output invalid', 'ime list -s -a; echo X4EXIT:$?', b'com.example/.Ime\n')
+
+
+def test_a_read_cut_short_is_asked_again():
+    shell = Shell([cut_short(), 'ime-list'])
+    assert android_device.retrying_reads(shell)(object(), 'ime list -s -a') == 'ime-list'
+    assert shell.ran == ['ime list -s -a', 'ime list -s -a']
+
+
+def test_a_read_cut_short_every_time_gives_up():
+    shell = Shell([cut_short(), cut_short(), cut_short()])
+    with pytest.raises(AdbError, match='shell output invalid'):
+        android_device.retrying_reads(shell)(object(), 'dumpsys window')
+    assert len(shell.ran) == 3
+
+
+def test_a_command_that_changes_something_is_never_run_twice():
+    """Its output was cut short after it ran: typing again would type twice."""
+    shell = Shell([cut_short()])
+    with pytest.raises(AdbError):
+        android_device.retrying_reads(shell)(object(), 'input text hello')
+    assert shell.ran == ['input text hello']
+
+
+def test_any_other_error_is_not_retried():
+    shell = Shell([AdbError('device offline')])
+    with pytest.raises(AdbError, match='offline'):
+        android_device.retrying_reads(shell)(object(), 'ime list -s -a')
+    assert len(shell.ran) == 1
+
+
+def test_it_is_put_on_adbutils_device_once(monkeypatch):
+    class Base:
+        def _shell_v1(self, cmdargs, timeout=None):
+            return 'ok'
+    monkeypatch.setattr(android_device, '_AdbDevice', Base)
+    android_device.install_read_retry()
+    android_device.install_read_retry()
+    assert Base._shell_v1.retries_reads and Base._shell_v1.__wrapped__.__name__ == '_shell_v1'
+    assert Base()._shell_v1('getprop ro.build') == 'ok'
+
+
+def test_without_adbutils_there_is_nothing_to_put_it_on(monkeypatch):
+    monkeypatch.setattr(android_device, '_AdbDevice', None)
+    android_device.install_read_retry()   # the unit suite's stand-in module: nothing to do, and no error

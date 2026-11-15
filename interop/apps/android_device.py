@@ -1,5 +1,6 @@
 """The emulator as the apps-runner sees it: adb over the network (android-emulator:5037, ANDROID_ADB_SERVER_HOST and
 _PORT, which adbutils reads), UI automation through uiautomator2. Every wait is bounded."""
+import functools
 import re
 import time
 from pathlib import Path
@@ -7,9 +8,43 @@ from pathlib import Path
 import adbutils
 import uiautomator2
 
+try:
+    from adbutils._device_base import BaseDevice as _AdbDevice
+except ImportError:   # the unit suite's stand-in adbutils has no device class
+    _AdbDevice = None
+
+# Commands that only read: asking again after adb cut their output short changes nothing. Anything else (typing, a
+# tap, an install) has already run when its output is lost, and running it again would do it twice.
+READ_ONLY = ('ime list', 'dumpsys', 'pm list', 'pm path', 'getprop', 'settings get', 'wm size', 'ps ', 'ls ', 'cat ')
+
+
+def retrying_reads(shell_v1, attempts: int = 3):
+    """adbutils' v1 shell, asked again when adb cut a read's output short: it appends `; echo X4EXIT:$?` and raises
+    "shell output invalid" when that marker never arrives, which a loaded host does now and then (uiautomator2 reads
+    `ime list` before typing)."""
+    @functools.wraps(shell_v1)
+    def shell(device, cmdargs, *args, **kwargs):
+        for attempt in range(attempts):
+            try:
+                return shell_v1(device, cmdargs, *args, **kwargs)
+            except Exception as error:
+                if 'shell output invalid' not in str(error) or not str(cmdargs).lstrip().startswith(READ_ONLY) \
+                        or attempt == attempts - 1:
+                    raise
+                time.sleep(0.5)
+    shell.retries_reads = True
+    return shell
+
+
+def install_read_retry() -> None:
+    """Put `retrying_reads` on adbutils' device class, once."""
+    if _AdbDevice is not None and not getattr(_AdbDevice._shell_v1, 'retries_reads', False):
+        _AdbDevice._shell_v1 = retrying_reads(_AdbDevice._shell_v1)
+
 
 class Device:
     def __init__(self):
+        install_read_retry()
         devices = adbutils.adb.device_list()
         if not devices:
             raise RuntimeError('android: the emulator has no device on its adb server')
