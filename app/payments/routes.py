@@ -139,7 +139,8 @@ def _member_checkout(offer):
             return redirect(url_for('payments.donations'))
         discount = found
     answer = _start_checkout(offer, current_user, discount)
-    if discount is not None and answer.status_code in (301, 302, 303):
+    # A redirect to the provider: the code is on its way. A provider that is down answers (page, 503): kept for a retry
+    if discount is not None and not isinstance(answer, tuple):
         session.pop(HELD_CODE, None)
     return answer
 

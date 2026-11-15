@@ -16,6 +16,7 @@ from app.auth.oauth_util import refuse_new_oauth_account
 from app.auth.util import sync_user_with_ldap
 from app.storefront import clear_domain_cache, default_domain, open_registrations, paid_registration, \
     public_registration_open, registration_mode_on
+from app.payments.adapters.base import ProviderError
 from app.payments.registration import registration_checkout
 from app.referral import GENERATORS_SETTING, generate_code
 from app.utils import set_setting
@@ -705,5 +706,17 @@ class TestAMembersDiscount:
         self.redeem(env, 'spring-twenty')
         monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
         env.client.post('/donations/code/clear', data={}, base_url=env.base)
+        with env.client.session_transaction(base_url=env.base) as session:
+            assert session.get('discount_code') == 'spring-twenty'
+
+
+    def test_a_provider_that_is_down_keeps_the_code_for_another_try(self, env, user):
+        """Its answer is a page and a 503, not a redirect: the code stays held (found in a browser check)."""
+        a_discount(env)
+        self.redeem(env, 'spring-twenty')
+        with patch('app.payments.adapters.stripe_adapter.StripeAdapter.checkout', side_effect=ProviderError('down')):
+            response = env.client.post(f'/donations/checkout/{env.knight.id}', data={'csrf_token': env.token},
+                                       base_url=env.base)
+        assert response.status_code == 503
         with env.client.session_transaction(base_url=env.base) as session:
             assert session.get('discount_code') == 'spring-twenty'
