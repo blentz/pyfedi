@@ -89,6 +89,12 @@ class TestWhatItSays:
         holds(member, an_offer('Now'), reference='r2', current_period_end=NOW + timedelta(days=9))
         assert (status_of(member).title, status_of(member).state) == ('Now', 'paid_until')
 
+    def test_one_that_ended_later_doesnt_displace_one_held(self, member):
+        """Rows come in the order they were made: one made after what is held, and since ended, is passed over."""
+        holds(member, an_offer('Now'), reference='r1', renews_at=NOW)
+        holds(member, an_offer('Brief'), reference='r2', status='ended', created=NOW, ended_at=NOW)
+        assert (status_of(member).title, status_of(member).state) == ('Now', 'renews')
+
     def test_the_newest_of_two_held_at_once_wins(self, member):
         holds(member, an_offer('First'), reference='r1', created=NOW - timedelta(days=50), renews_at=NOW)
         holds(member, an_offer('Second'), reference='r2', created=NOW - timedelta(days=5), renews_at=NOW)

@@ -37,7 +37,8 @@ def subscription_statuses(user_ids: list[int]) -> dict[int, SubscriptionStatus]:
         return {}
     rows = db.session.execute(
         db.select(MemberSubscription, Offer.title).outerjoin(Offer, MemberSubscription.offer_id == Offer.id)
-        .where(MemberSubscription.user_id.in_(user_ids), MemberSubscription.status.in_(tuple(_RANK)))).all()
+        .where(MemberSubscription.user_id.in_(user_ids), MemberSubscription.status.in_(tuple(_RANK)))
+        .order_by(MemberSubscription.id)).all()
     chosen = {}
     for subscription, title in rows:
         key = (_RANK[subscription.status], -_timestamp(subscription.ended_at if subscription.status == 'ended'
