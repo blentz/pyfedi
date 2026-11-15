@@ -12,7 +12,8 @@ import pytest
 
 from app import db
 from app.constants import REPORT_STATE_NEW
-from app.models import Referral, Report, Role, RolePermission, SiteDomain, UserRegistration, role_grant
+from app.models import MemberSubscription, Offer, Referral, Report, Role, RolePermission, SiteDomain, UserRegistration, \
+    role_grant
 from app.roles import seed_default_roles
 from app.storefront import clear_domain_cache, default_domain, domain_by_id
 from tests.factories import admin_role, grant_role, limit_role, make_community, make_instance, make_post, make_user
@@ -545,3 +546,66 @@ def test_an_admin_is_offered_everything_but_a_ban_on_the_founder(world):
 
     assert user_links(world, world.on_x[0]) == {'edit': True, 'delete': True, 'ban': True, 'media': True}
     assert user_links(world, world.founder)['ban'] is False   # D583: nobody bans user 1
+
+
+# --------------------------------------------------------------------------
+# Who pays is monetization's business (2026-11-15)
+# --------------------------------------------------------------------------
+
+
+def subscribed(world):
+    """X's user holds a subscription and Y's held one that lapsed."""
+    offer = Offer(provider_kind='btcpay', kind='subscription', title='Furcas', offer_group='tiers', amount_minor=666,
+                  currency='usd', interval='month')
+    db.session.add(offer)
+    db.session.commit()
+    db.session.add_all([
+        MemberSubscription(user_id=world.on_x[0].id, offer_id=offer.id, provider_kind='btcpay', provider_reference='rx',
+                           status='active'),
+        MemberSubscription(user_id=world.on_y[0].id, offer_id=offer.id, provider_kind='btcpay', provider_reference='ry',
+                           status='ended')])
+    db.session.commit()
+
+
+def with_money_on(world, user, domain):
+    role = Role(name=f'money-{user.user_name}')
+    db.session.add(role)
+    db.session.commit()
+    db.session.add(RolePermission(role_id=role.id, permission='manage monetization'))
+    db.session.commit()
+    if domain:
+        limit_role(role, domain)
+    grant_role(user, role)
+
+
+def test_a_user_administrator_without_monetization_sees_no_subscriptions(world):
+    subscribed(world)
+    holder(world, 'usersonly', 'administer all users')
+    page = body(world, '/admin/users')
+    assert 'Furcas' not in page and 'name="subscription"' not in page
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        world.client.get('/admin/users?subscription=never')
+    assert render.call_args.kwargs['subscription'] == '' and render.call_args.kwargs['subscriptions'] == {}
+    assert render.call_args.kwargs['users'].total == 4   # founder, X's, Y's, the holder: nothing filtered
+
+
+def test_monetization_on_one_domain_is_no_monetization(world):
+    """'manage monetization' is instance-wide only (not scopable): a grant on X carries none of it, so X's payments
+    are no more shown than Y's."""
+    subscribed(world)
+    user = holder(world, 'moneyonx', 'administer all users')
+    with_money_on(world, user, world.x)
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        world.client.get('/admin/users?subscription=lapsed')
+    assert render.call_args.kwargs['subscriptions'] == {} and render.call_args.kwargs['subscription'] == ''
+
+
+def test_an_instance_wide_monetization_holder_sees_everyones(world):
+    subscribed(world)
+    user = holder(world, 'moneyall', 'administer all users')
+    with_money_on(world, user, None)
+    page = body(world, '/admin/users')
+    assert 'name="subscription"' in page
+    with patch('app.admin.routes.render_template', return_value='rendered') as render:
+        world.client.get('/admin/users')
+    assert set(render.call_args.kwargs['subscriptions']) == {world.on_x[0].id, world.on_y[0].id}

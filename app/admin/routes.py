@@ -2373,8 +2373,10 @@ def admin_users():
     sort_by = request.args.get('sort_by', 'last_seen DESC')
     last_seen = request.args.get('last_seen', 0, type=int)
     verified = request.args.get('verified', '')
+    # Who pays is monetization's business, which is held instance-wide or not at all (not scopable)
+    show_subscriptions = user_access('manage monetization', current_user.get_id())
     subscription = request.args.get('subscription', '')
-    if subscription not in SUBSCRIPTION_FILTERS:
+    if subscription not in SUBSCRIPTION_FILTERS or not show_subscriptions:
         subscription = ''
     page_length = 500
     if current_user.page_length and current_user.page_length < page_length:
@@ -2415,12 +2417,14 @@ def admin_users():
                        sort_by=sort_by, last_seen=last_seen, verified=verified,
                        subscription=subscription) if users.has_prev and page != 1 else None
     # A remote account can't subscribe here, so only local ones are looked up
-    subscriptions = subscription_statuses([user.id for user in users.items if user.is_local()])
+    subscriptions = subscription_statuses([user.id for user in users.items if user.is_local()]) \
+        if show_subscriptions else {}
 
     return render_template('admin/users.html', title=_('Users'), next_url=next_url, prev_url=prev_url, users=users,
                            local_remote=local_remote, search=search, sort_by=sort_by, last_seen=last_seen,
                            user_notes=user_notes(current_user.get_id()), verified=verified,
                            subscription=subscription, subscriptions=subscriptions,
+                           show_subscriptions=show_subscriptions,
                            can_add_user=bool(creatable_domains()),
                            roles_with=roles_with('administer all users'))
 

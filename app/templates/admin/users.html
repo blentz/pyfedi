@@ -45,6 +45,7 @@
                     <option value="unverified" {{ 'selected' if verified == 'unverified' }}>{{ _('No') }}</option>
                 </select>
             </div>
+            {% if show_subscriptions -%}
             <div style="display:inline">
                 <label for="subscription">{{ _('Subscription') }}: </label>
                 <select name="subscription" id="subscription" class="form-control-sm submit_on_change">
@@ -54,6 +55,7 @@
                     <option value="never" {{ 'selected' if subscription == 'never' }}>{{ _('Never') }}</option>
                 </select>
             </div>
+            {%- endif %}
             <input type="hidden" name="sort_by" value="{{ sort_by }}">
         </form>
         <table class="table table-striped mt-1">
@@ -100,7 +102,7 @@
                        <span class="{{ 'fe fe-chevron-up' if sort_by == 'last_seen ASC' }}{{ 'fe fe-chevron-down' if sort_by == 'last_seen DESC' }}"></span>
                    </button>
                </th>
-               <th>{{ _('Subscription') }}</th>
+               {% if show_subscriptions %}<th>{{ _('Subscription') }}</th>{% endif %}
                <th>{{ _('Actions') }}</th>
             </tr>
             {% for user in users.items %}
@@ -117,7 +119,7 @@
                     <td><span title="{{ _('Created') }}: {{ user.created }}">{{ localize_datetime(user.created, locale) }}</span></td>
                     <td><span title="{{ _('Last Seen') }}: {{ user.last_seen }}">{{ localize_datetime(user.last_seen, locale) }}</span></td>
                     {%- set sub = subscriptions.get(user.id) %}
-                    <td>{% if sub -%}
+                    {% if show_subscriptions %}<td>{% if sub -%}
                         {%- set detail -%}
                             {%- if sub.state == 'paid_until' -%}{{ _('paid until %(date)s', date=sub.date.strftime('%Y-%m-%d')) }}
                             {%- elif sub.state == 'renews' and sub.date -%}{{ _('renews %(date)s', date=sub.date.strftime('%Y-%m-%d')) }}
@@ -130,7 +132,7 @@
                             {%- endif -%}
                         {%- endset -%}
                         <span title="{{ _('Since %(date)s', date=sub.since.strftime('%Y-%m-%d')) if sub.since }}">{{ sub.title or _('Subscription') }} · {{ detail }}</span>
-                    {%- endif %}</td>
+                    {%- endif %}</td>{% endif %}
                     {# Only what its route would allow: a holder limited to some domains may not act on someone with a role (RB6) #}
                     <td>{% if may_act_on_user(current_user, user, 'administer all users') -%}
                             <a href="{{ url_for('admin.admin_user_edit', user_id=user.id) }}">{{ _('Edit') }}</a>,
