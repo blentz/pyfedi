@@ -190,6 +190,33 @@ class TestNobodyIsShortened:
         trial_end = self.params(adapter, member, offer)['subscription_data']['trial_end']
         assert trial_end >= int((utcnow() + timedelta(hours=47, minutes=59)).replace(tzinfo=timezone.utc).timestamp())
 
+    def renewing(self, member, offer, paid):
+        row = MemberSubscription(user_id=member.id, offer_id=offer.id, provider_kind='stripe', provider_reference='sub_t',
+                                 status='active', renews_at=utcnow() + timedelta(days=20), created_at=utcnow())
+        db.session.add(row)
+        if paid:
+            db.session.add(Payment(user_id=member.id, offer_id=offer.id, provider_kind='stripe', provider_reference='in_p',
+                                   amount_minor=500, currency='usd', status='paid', created_at=utcnow()))
+        db.session.commit()
+        return row
+
+    def test_a_renewal_paid_for_counts(self, adapter, member, offer):
+        row = self.renewing(member, offer, paid=True)
+        trial_end = self.params(adapter, member, offer)['subscription_data']['trial_end']
+        assert trial_end == int(row.renews_at.replace(tzinfo=timezone.utc).timestamp())
+
+    def test_a_free_start_not_yet_paid_counts_for_nothing(self, adapter, member, offer):
+        """Or each deferral could stand on the last, and nothing would ever be charged (security review)."""
+        self.renewing(member, offer, paid=False)
+        assert 'trial_end' not in self.params(adapter, member, offer)['subscription_data']
+
+    def test_an_old_payment_does_not_vouch_for_a_new_free_start(self, adapter, member, offer):
+        db.session.add(Payment(user_id=member.id, offer_id=offer.id, provider_kind='stripe', provider_reference='in_old',
+                               amount_minor=500, currency='usd', status='paid', created_at=utcnow() - timedelta(days=90)))
+        db.session.commit()
+        self.renewing(member, offer, paid=False)
+        assert 'trial_end' not in self.params(adapter, member, offer)['subscription_data']
+
     def test_nothing_held_is_charged_now(self, adapter, member, offer):
         assert 'trial_end' not in self.params(adapter, member, offer)['subscription_data']
 
