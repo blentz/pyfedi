@@ -9,7 +9,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
-from app.models import MemberSubscription, Offer, OfferDomain, Payment, Site, SiteDomain
+from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCode, PromoCodeUse, Site, SiteDomain
 from app.payments.core import apply_event
 from app.payments.events import Paid
 from app.payments.offers import money
@@ -109,6 +109,21 @@ class TestStrangers:
         public_site()
         body = env.client.get('/donations').get_data(as_text=True)
         assert 'Log in to subscribe' in body and f'/donations/checkout/{env.offer.id}' not in body
+
+    def test_a_code_left_in_the_browser_takes_nothing_off_a_guests_gift(self, env):
+        """Codes are an account's (paid membership D3): a member's held code, still in the session after they have
+        gone, is no discount for whoever gives once from that browser."""
+        public_site()
+        env.offer.kind, env.offer.interval = 'donation', None
+        db.session.add(PromoCode(code='twenty', kind='percent', percent=20))
+        db.session.commit()
+        with env.client.session_transaction() as session:
+            session['discount_code'] = 'twenty'
+        with patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='https://stripe.test/c')) as create, \
+                patch('stripe.Coupon.create') as coupon:
+            env.client.post(f'/donations/checkout/{env.offer.id}')
+        assert create.called and not coupon.called and 'discounts' not in create.call_args.kwargs
+        assert PromoCodeUse.query.count() == 0
 
     def test_a_one_off_can_be_given_with_no_account_and_no_token(self, env):
         public_site()

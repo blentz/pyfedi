@@ -1,6 +1,7 @@
 """Gift codes (spec 2026-11-15-paid-membership-design.md PM3, PM6, PM8; plan phase 2, G1-G7)."""
 from datetime import timedelta
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from flask import g
@@ -11,7 +12,7 @@ from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.gifts import referral_gift_code
 from app.payments.holding import first_charge_after
-from app.payments.core import end_expired_prepaid
+from app.payments.core import end_expired_prepaid, remind_expiring_prepaid
 from app.payments.gifts import find_gift_code, start_gift
 from tests.factories import make_user
 
@@ -112,6 +113,13 @@ class TestAGift:
         assert start_gift(env.member, code) is not None
         assert start_gift(env.member, code) is None
         assert len(gifts_of(env.member)) == 1
+
+    def test_its_end_is_mentioned_once_beforehand(self, env):
+        """A gift is prepaid-like (G3): the member is told before it runs out, as for a paid period."""
+        subscription = start_gift(env.member, a_code(env, days=3))
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            assert remind_expiring_prepaid() == 1 and remind_expiring_prepaid() == 0
+        mail.assert_called_once_with(env.member, 'Furcas', subscription.current_period_end)
 
     def test_it_ends_when_its_time_is_up(self, env):
         subscription = start_gift(env.member, a_code(env))
