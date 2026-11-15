@@ -64,11 +64,11 @@ DEFAULT_INSTANCE_ID = 1
 REFERRAL_MODE = 'ReferralCode'
 
 def public_registration_open(storefront: DomainInfo) -> bool:
-    """Whether anyone may sign up on `storefront`. The default domain is governed by `Site.registration_mode` alone
-    (its own `registration` column is ignored); any other domain takes public sign-ups only when it is 'anyone', and
-    then `Site.registration_mode` applies as well. A 'closed' domain's accounts are made by the admin
-    add-user form alone."""
-    return storefront.is_default or storefront.registration == 'anyone'
+    """Whether anyone may sign up on `storefront` for free, by any way in. The default domain is governed by
+    `Site.registration_mode` unless it charges (paid membership, plan M1, M5); any other domain takes public sign-ups
+    only when it is 'anyone', and then `Site.registration_mode` applies as well. A 'closed' domain's accounts are made
+    by the admin add-user form alone, and a paid one's by /register, which leads to the provider."""
+    return not paid_registration(storefront) and (storefront.is_default or storefront.registration == 'anyone')
 
 
 def paid_registration(storefront: DomainInfo) -> bool:
@@ -84,9 +84,11 @@ def registration_mode_on(storefront: DomainInfo, site) -> str:
     (`public_registration_open`). The default domain's is the Site row's own. Referral-code mode is offered as
     'RequireApplication' (spec 2026-10-31 RC6): clients that know only Lemmy's three modes then show the question
     field the code is typed into."""
-    if not public_registration_open(storefront):
+    referral_codes = site.registration_mode == REFERRAL_MODE
+    # A paid default domain still admits a referral code (paid membership plan M4), which is all a client can send
+    if not public_registration_open(storefront) and not (storefront.is_default and referral_codes):
         return 'Closed'
-    return 'RequireApplication' if site.registration_mode == REFERRAL_MODE else site.registration_mode
+    return 'RequireApplication' if referral_codes else site.registration_mode
 
 
 def open_registrations(storefront: DomainInfo, site) -> bool:

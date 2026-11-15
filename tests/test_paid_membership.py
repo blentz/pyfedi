@@ -9,7 +9,10 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.models import MemberSubscription, Offer, Site, SiteDomain, User, utcnow
-from app.storefront import clear_domain_cache, default_domain, paid_registration
+from app.auth.oauth_util import refuse_new_oauth_account
+from app.auth.util import sync_user_with_ldap
+from app.storefront import clear_domain_cache, default_domain, open_registrations, paid_registration, \
+    public_registration_open, registration_mode_on
 from tests.factories import grant_permission, make_user
 
 CHECKOUT = 'https://checkout.example/session'
@@ -189,3 +192,46 @@ class TestTheSwitch:
         assert self.switch(env, membership='y', membership_offer_id=env.knight.id,
                            membership_grace_days=3).status_code in (302, 403)
         assert db.session.get(SiteDomain, env.home.id).registration_offer_id == env.knight.id
+
+
+class TestOtherWaysInAreClosed:
+    """Paying needs the provider's page, which only /register leads to (plan M5): every other way of making an account
+    is closed on a paid default domain, as on a paid sister domain (S9, S11). A referral code still admits (M4)."""
+
+    def test_the_api_refuses(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
+        response = env.client.post('/api/alpha/user/register', base_url=env.base, json={
+            'username': 'joiner', 'email': 'joiner@example.com', 'password': 'a-good-password',
+            'password_verify': 'a-good-password'})
+        assert response.status_code == 400 and 'registration_closed' in response.get_data(as_text=True)
+        assert User.query.filter_by(user_name='joiner').first() is None
+
+    def test_it_is_not_public(self, env):
+        assert not public_registration_open(default_domain())
+
+    def test_clients_are_told_it_is_closed(self, env):
+        assert registration_mode_on(default_domain(), env.site) == 'Closed'
+        assert not open_registrations(default_domain(), env.site)
+
+    def test_with_referral_codes_clients_are_still_offered_the_code(self, env):
+        env.site.registration_mode = 'ReferralCode'
+        db.session.commit()
+        assert registration_mode_on(default_domain(), env.site) == 'RequireApplication'
+        assert not open_registrations(default_domain(), env.site)
+
+    def test_an_oauth_signup_is_refused(self, env):
+        with env.app.test_request_context('/', base_url=env.base):
+            g.site = env.site
+            assert refuse_new_oauth_account() is not None
+
+    def test_a_directory_is_not_written(self, env):
+        with patch('app.auth.util.sync_user_to_ldap') as write:
+            sync_user_with_ldap(member(env), 'a-good-password')
+        write.assert_not_called()
+
+    def test_a_free_default_domain_is_open_as_before(self, env):
+        env.home.registration = 'anyone'
+        db.session.commit()
+        clear_domain_cache()
+        assert public_registration_open(default_domain())
+        assert registration_mode_on(default_domain(), env.site) == 'Open'
