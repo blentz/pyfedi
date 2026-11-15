@@ -1,0 +1,62 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
+{% set active_child = 'admin_payments' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h2>{{ title }}</h2>
+        <p><a href="{{ url_for('admin.admin_payments') }}">{{ _('Back to payments') }}</a></p>
+
+        <h3 class="mt-4">{{ _("Members' referral codes") }}</h3>
+        <p class="small field_hint">{{ _('Joining with a member\'s referral code gives this, unless the code has a gift of its own. Change one member\'s from the list below.') }}</p>
+        <form method="post" action="{{ url_for('admin.admin_payments_codes_default') }}">
+            {{ default_form.hidden_tag() }}
+            {{ render_field(default_form.default_offer_id) }}
+            {{ render_field(default_form.default_days) }}
+            {{ render_field(default_form.save_default) }}
+        </form>
+
+        <h3 class="mt-4">{{ _('Make a gift code') }}</h3>
+        <form method="post" action="{{ url_for('admin.admin_payments_codes_add') }}">
+            {{ code_form.hidden_tag() }}
+            {{ render_field(code_form.code) }}
+            {{ render_field(code_form.offer_id) }}
+            {{ render_field(code_form.days) }}
+            {{ render_field(code_form.max_uses) }}
+            {{ render_field(code_form.expires_at) }}
+            {{ render_field(code_form.active) }}
+            {{ render_field(code_form.save_code) }}
+        </form>
+
+        {% if codes -%}
+        <h3 class="mt-4">{{ _('Codes') }}</h3>
+        <table class="table">
+            <thead>
+                <tr><th>{{ _('Code') }}</th><th>{{ _('Whose') }}</th><th>{{ _('Gives') }}</th><th>{{ _('Used') }}</th>
+                    <th>{{ _('Last day') }}</th><th>{{ _('Can be used') }}</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for code in codes -%}
+                <tr id="code-{{ code.id }}">
+                    <td><code>{{ code.code }}</code></td>
+                    <td>{% if code.owner_id %}{{ owners[code.owner_id].user_name if code.owner_id in owners else '' }}{% else %}{{ _('Gift code') }}{% endif %}</td>
+                    <td>{% if code.offer_id and code.days %}{{ _('%(tier)s for %(days)d days', tier=tiers.get(code.offer_id, '?'), days=code.days) }}{% else %}{{ _('The default') if code.owner_id else _('Nothing') }}{% endif %}</td>
+                    <td>{{ uses.get(code.id, 0) }}{% if code.max_uses %} / {{ code.max_uses }}{% endif %}</td>
+                    <td>{{ code.expires_at.strftime('%Y-%m-%d') if code.expires_at else '' }}</td>
+                    <td>{{ _('Yes') if code.active else _('No') }}</td>
+                    <td><a href="{{ url_for('admin.admin_payments_code_edit', code_id=code.id) }}">{{ _('Edit') }}</a></td>
+                </tr>
+                {% endfor -%}
+            </tbody>
+        </table>
+        {% endif -%}
+    </div>
+</div>
+{% endblock %}

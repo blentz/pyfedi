@@ -654,6 +654,28 @@ class MembershipForm(FlaskForm):
     save_membership = SubmitField(_l('Save'))
 
 
+class DefaultGiftForm(FlaskForm):
+    """What a member's new referral code gives (paid membership Q1, G2)."""
+    default_offer_id = SelectField(_l("A member's referral code gives"), coerce=int, choices=[], validators=[Optional()],
+                                   render_kw={'class': 'form-select'})
+    default_days = IntegerField(_l('For this many days'), default=30, validators=[Optional(), NumberRange(min=1, max=3650)])
+    save_default = SubmitField(_l('Save'))
+
+
+class GiftCodeForm(FlaskForm):
+    """A gift code: a free period of a tier (paid membership G6)."""
+    code = StringField(_l('Code'), validators=[Optional(), Length(max=64)],
+                       description=_l('Leave empty to have one made. One you type needs at least 8 characters, so it '
+                                      'cannot be guessed.'))
+    offer_id = SelectField(_l('Tier'), coerce=int, choices=[], render_kw={'class': 'form-select'})
+    days = IntegerField(_l('Days'), default=30, validators=[DataRequired(), NumberRange(min=1, max=3650)])
+    max_uses = IntegerField(_l('How many may use it (blank for any number)'),
+                            validators=[Optional(), NumberRange(min=1, max=1000000)])
+    expires_at = DateField(_l('Last day it can be used'), validators=[Optional()])
+    active = BooleanField(_l('Can be used'), default=True)
+    save_code = SubmitField(_l('Save'))
+
+
 class PaymentSettingsForm(FlaskForm):
     retention_days = IntegerField(_l('Remove the account link from settled payments after this many days'),
                                   validators=[Optional(), NumberRange(min=1, max=36500)])

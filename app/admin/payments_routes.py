@@ -3,16 +3,22 @@
 A credential goes in through a form and never comes back out: password fields render no value, a blank field keeps what
 is stored, and a refusal from the provider leaves the old credentials in place.
 """
+import secrets
+from datetime import datetime
+
 from babel.numbers import list_currencies
 from flask import abort, current_app, flash, redirect, request, url_for
 from flask_babel import _
+from flask_login import current_user
 from flask_wtf import FlaskForm
+from sqlalchemy import func
 
 from app import db
 from app.admin import bp
-from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, LinkOfferForm, MembershipForm, OfferForm, \
-    PaymentSettingsForm, PaypalCredentialsForm, PaypalOfferForm, StripeCredentialsForm
-from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, SiteDomain, User, utcnow
+from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, DefaultGiftForm, GiftCodeForm, LinkOfferForm, \
+    MembershipForm, OfferForm, PaymentSettingsForm, PaypalCredentialsForm, PaypalOfferForm, StripeCredentialsForm
+from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, PromoCode, PromoCodeUse, \
+    SiteDomain, User, utcnow
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
 from app.payments.adapters.btcpay_adapter import REQUIRED_EVENTS as BTCPAY_EVENTS, REQUIRED_PERMISSIONS as BTCPAY_PERMISSIONS, \
@@ -20,6 +26,7 @@ from app.payments.adapters.btcpay_adapter import REQUIRED_EVENTS as BTCPAY_EVENT
 from app.payments.adapters.stripe_adapter import REQUIRED_EVENTS
 from app.payments.adapters.paypal_adapter import REQUIRED_EVENTS as PAYPAL_EVENTS
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
+from app.payments.gifts import DEFAULT_GIFT_DAYS_SETTING, DEFAULT_GIFT_OFFER_SETTING, normalise
 from app.payments.offers import LINK, offers_changed, offers_on
 from app.storefront import clear_domain_cache, domain_rows
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
@@ -28,6 +35,8 @@ LEDGER_PAGE = 50
 CURRENCY_SETTING = 'payment_currency'
 RETENTION_SETTING = 'payment_retention_days'
 STATUSES = ('paid', 'refunded', 'mismatch')
+# A made code: no 0/o or 1/l, which are misread when a code is read out
+CODE_ALPHABET, CODE_LENGTH, TYPED_CODE_MINIMUM = 'abcdefghjkmnpqrstuvwxyz23456789', 12, 8
 
 
 def _stored_stripe() -> dict:
@@ -295,6 +304,108 @@ def admin_payments_membership():
     clear_domain_cache()
     flash(_('Membership saved.'))
     return redirect(url_for('admin.admin_payments'))
+
+
+def _gift_tiers() -> list[Offer]:
+    """What a gift may be a free period of: the subscriptions on offer."""
+    return Offer.query.filter_by(kind='subscription', active=True).order_by(Offer.offer_group, Offer.position, Offer.id).all()
+
+
+def _tier_choices(none: bool = False) -> list[tuple[int, str]]:
+    return ([(0, _('None'))] if none else []) + [(offer.id, offer.title) for offer in _gift_tiers()]
+
+
+def _codes_page(default_form=None, code_form=None):
+    codes = PromoCode.query.order_by(PromoCode.owner_id.isnot(None), PromoCode.created_at.desc(), PromoCode.id.desc()).all()
+    uses = dict(db.session.execute(db.select(PromoCodeUse.promo_code_id, func.count())
+                                   .group_by(PromoCodeUse.promo_code_id)).all())
+    owners = {user.id: user for user in User.query.filter(User.id.in_({code.owner_id for code in codes if code.owner_id}))}
+    tiers = {offer.id: offer.title for offer in Offer.query.all()}
+    if default_form is None:
+        default_form = DefaultGiftForm(default_offer_id=get_setting(DEFAULT_GIFT_OFFER_SETTING, 0) or 0,
+                                       default_days=get_setting(DEFAULT_GIFT_DAYS_SETTING, None) or 30)
+    default_form.default_offer_id.choices = _tier_choices(none=True)
+    code_form = code_form or GiftCodeForm()
+    code_form.offer_id.choices = _tier_choices()
+    return render_template('admin/payments_codes.html', title=_('Codes'), codes=codes, uses=uses, owners=owners,
+                           tiers=tiers, default_form=default_form, code_form=code_form,
+                           roles_with=roles_with('manage monetization'))
+
+
+@bp.route('/payments/codes', methods=['GET'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_codes():
+    """Gift codes and members' referral codes (paid membership plan phase 2, G6)."""
+    return _codes_page()
+
+
+@bp.route('/payments/codes/default', methods=['POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_codes_default():
+    form = DefaultGiftForm()
+    form.default_offer_id.choices = _tier_choices(none=True)
+    if not form.validate_on_submit():
+        return _codes_page(default_form=form)
+    set_setting(DEFAULT_GIFT_OFFER_SETTING, form.default_offer_id.data or None)
+    set_setting(DEFAULT_GIFT_DAYS_SETTING, form.default_days.data if form.default_offer_id.data else None)
+    flash(_('Default gift saved.'))
+    return redirect(url_for('admin.admin_payments_codes'))
+
+
+def _apply_code(form: GiftCodeForm, code: PromoCode) -> None:
+    code.offer_id = form.offer_id.data
+    code.days = form.days.data
+    code.max_uses = form.max_uses.data or None
+    code.expires_at = datetime.combine(form.expires_at.data, datetime.max.time()).replace(microsecond=0) \
+        if form.expires_at.data else None
+    code.active = form.active.data
+
+
+@bp.route('/payments/codes/add', methods=['POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_codes_add():
+    form = GiftCodeForm()
+    form.offer_id.choices = _tier_choices()
+    if not form.validate_on_submit():
+        return _codes_page(code_form=form)
+    text = normalise(form.code.data) or ''.join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+    if len(text) < TYPED_CODE_MINIMUM:
+        form.code.errors.append(_('A code needs at least %(count)d characters, so it cannot be guessed.',
+                                  count=TYPED_CODE_MINIMUM))
+        return _codes_page(code_form=form)
+    if PromoCode.query.filter_by(code=text).first() is not None:
+        form.code.errors.append(_('That code is taken.'))
+        return _codes_page(code_form=form)
+    code = PromoCode(code=text, kind='gift', created_by=current_user.id, created_at=utcnow())
+    _apply_code(form, code)
+    db.session.add(code)
+    db.session.commit()
+    flash(_('Code %(code)s saved.', code=text))
+    return redirect(url_for('admin.admin_payments_codes'))
+
+
+@bp.route('/payments/codes/<int:code_id>', methods=['GET', 'POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_code_edit(code_id):
+    """A code's gift, limits and whether it can be used; a member's referral code gets a gift of its own (PM7)."""
+    code = db.session.get(PromoCode, code_id) or abort(404)
+    form = GiftCodeForm(obj=code)
+    del form.code
+    form.offer_id.choices = _tier_choices()
+    if request.method == 'GET' and code.expires_at:
+        form.expires_at.data = code.expires_at.date()
+    if form.validate_on_submit():
+        _apply_code(form, code)
+        db.session.commit()
+        flash(_('Code saved.'))
+        return redirect(url_for('admin.admin_payments_codes'))
+    owner = db.session.get(User, code.owner_id) if code.owner_id else None
+    return render_template('admin/payments_code.html', title=_('Code'), code=code, owner=owner, form=form,
+                           roles_with=roles_with('manage monetization'))
 
 
 @bp.route('/payments/settings', methods=['POST'])

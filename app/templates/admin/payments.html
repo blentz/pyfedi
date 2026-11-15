@@ -13,6 +13,7 @@
     <div class="col-md-8">
         <h2>{{ title }}</h2>
         <p><a href="{{ url_for('admin.admin_payments_ledger') }}">{{ _('Payment ledger') }}</a></p>
+        <p><a href="{{ url_for('admin.admin_payments_codes') }}">{{ _('Gift and referral codes') }}</a></p>
 
         {% if not key_set -%}
             <div class="alert alert-warning" role="alert">
