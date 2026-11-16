@@ -15,6 +15,7 @@ import pytest
 from redis.exceptions import RedisError
 
 from app import create_app
+from app.mail_transport import ErrorMailHandler
 from app.storefront import default_domain
 from app.auth.util import sync_user_with_ldap
 from app.log_scrub import ONION_EXCEPTION_MESSAGE, OnionScrubFilter, drop_onion_event
@@ -207,6 +208,12 @@ class FakeSMTP:
     def __init__(self, *args, **kwargs):
         pass
 
+    def starttls(self, *args, **kwargs):
+        pass
+
+    def login(self, *args, **kwargs):
+        pass
+
     def send_message(self, message, *args, **kwargs):
         self.sent.append(message)
 
@@ -217,15 +224,16 @@ class FakeSMTP:
 @pytest.fixture
 def factory_mail(restores_the_shared_logger, onion, monkeypatch):
     """An app built by the real create_app with ERRORS_TO and the onion proxy configured, a route that fails with
-    a message naming a user and an URL, and the mail the factory's own SMTPHandler would have sent."""
+    a message naming a user and an URL, and the mail the factory's own error mailer would have sent."""
     FakeSMTP.sent = []
     monkeypatch.setattr('smtplib.SMTP', FakeSMTP)
+    monkeypatch.setattr('smtplib.SMTP_SSL', FakeSMTP)   # MAIL_USE_TLS unset is implicit TLS
     config = type('Mailing', (TestConfig,), {
         'MAIL_SERVER': 'mail.example.org', 'MAIL_PORT': 25, 'ERRORS_TO': 'ops@example.org',
         'MAIL_FROM': 'piefed@example.org', 'ONION_PROXY_IP': '10.89.0.2', 'PROPAGATE_EXCEPTIONS': False})
     factory_app = create_app(config)
     [handler] = [h for h in factory_app.logger.handlers if isinstance(h, SMTPHandler)]
-    assert handler.emit.__func__ is SMTPHandler.emit      # the real emit, not a stand-in
+    assert handler.emit.__func__ is ErrorMailHandler.emit      # the real emit, not a stand-in
 
     @factory_app.route('/boom')
     def boom():

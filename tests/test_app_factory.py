@@ -324,20 +324,25 @@ def test_the_mailer_carries_credentials_only_when_one_is_set(
         assert handler.username is None
 
 
-@pytest.mark.parametrize('use_tls, expected', [
-    (True, ()),
-    (False, None),
-])
-def test_the_mailer_uses_tls_only_when_asked_to(restores_the_shared_logger, use_tls,
-                                                expected):
-    """`:337-339`. `secure=()` is smtplib's "STARTTLS with no key material",
-    and `None` is "do not". The empty tuple is easy to read as "nothing set",
-    which is why this row asserts the difference rather than truthiness.
+@pytest.mark.parametrize('use_tls', [True, False])
+def test_the_mailer_uses_the_member_mail_transport(restores_the_shared_logger, use_tls):
+    """MAIL_USE_TLS picks STARTTLS or implicit TLS for error reports exactly as it does for member mail; how each is
+    secured is tests/test_mail_transport.py's.
     """
+    from app.mail_transport import ErrorMailHandler
+
     built = create_app(_config(MAIL_SERVER='smtp.example', ERRORS_TO='e@example.com',
                                MAIL_USE_TLS=use_tls))
 
-    assert _mail_handlers(built)[0].secure == expected
+    handler = _mail_handlers(built)[0]
+    assert isinstance(handler, ErrorMailHandler)
+    assert handler.use_tls is use_tls
+
+
+def test_the_mailer_mails_at_most_once_per_configured_interval(restores_the_shared_logger):
+    built = create_app(_config(MAIL_SERVER='smtp.example', ERRORS_TO='e@example.com', ERROR_MAIL_INTERVAL=60.0))
+
+    assert _mail_handlers(built)[0].interval == 60.0
 
 
 def test_the_mailer_reports_only_errors(restores_the_shared_logger):

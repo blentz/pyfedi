@@ -388,14 +388,15 @@ def test_marking_a_read_notification_read_again_changes_no_count(app, env):
     ('email_notifs', 'email_unread'),
 ])
 def test_an_unsubscribe_link_turns_the_setting_off(app, env, path, column):
-    """These are GETs by protocol -- they arrive from an email -- and each
-    carries the account's verification token instead of a session."""
+    """Each carries the account's verification token instead of a session. A
+    GET only asks (mail scanners follow every link); the page's button POSTs,
+    tests/test_email_unsubscribe_links.py has both."""
     client, owner, other = env
     owner.verification_token = 'a-token'
     setattr(owner, column, True)
     db.session.commit()
 
-    response = app.test_client().get(
+    response = app.test_client().post(
         f'/user/{path}/{owner.id}/a-token/unsubscribe')
 
     assert response.status_code == 200
@@ -417,7 +418,7 @@ def test_an_unsubscribe_link_with_the_wrong_token_changes_nothing(app, env,
     setattr(owner, column, True)
     db.session.commit()
 
-    response = app.test_client().get(
+    response = app.test_client().post(
         f'/user/{path}/{owner.id}/the-wrong-token/unsubscribe')
 
     assert response.status_code == 200

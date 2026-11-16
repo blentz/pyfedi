@@ -1,6 +1,5 @@
 import html
 import smtplib
-import uuid
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate
@@ -13,6 +12,7 @@ from flask_babel import _  # todo: set the locale based on account_id so that _(
 
 from app import celery, db
 from app.branding import branding_for
+from app.mail_transport import message_id, tls_context
 from app.models import Site
 from app.storefront import default_domain, default_storefront, home_storefront, storefront_html, storefront_url
 from app.utils import get_setting, markdown_to_html, html_to_text
@@ -101,7 +101,7 @@ def send_topic_suggestion(communities_for_topic, user, recipients, subject, topi
 
 
 @celery.task
-def send_async_email(subject, sender, recipients, text_body, html_body, reply_to):
+def send_async_email(subject, sender, recipients, text_body, html_body, reply_to, list_unsubscribe=None):
     if 'ngrok.app' in sender:  # for local development
         sender = 'PieFed <noreply@piefed.social>'
         return_path = 'bounces@piefed.social'
@@ -115,10 +115,14 @@ def send_async_email(subject, sender, recipients, text_body, html_body, reply_to
             email_sender = SMTPEmailService(current_app.config['MAIL_USERNAME'],
                                             current_app.config['MAIL_PASSWORD'],
                                             (current_app.config['MAIL_SERVER'], current_app.config['MAIL_PORT']),
-                                            use_tls=current_app.config['MAIL_USE_TLS'])
+                                            use_tls=current_app.config['MAIL_USE_TLS'],
+                                            timeout=current_app.config['MAIL_TIMEOUT'])
             email_sender.set_message(text_body, subject, sender, html_body)  # sender = 'John Doe <j.doe@server.com>'
             if reply_to:
                 email_sender.set_reply_to(reply_to)
+            email_sender.set_return_path(return_path or None)
+            if list_unsubscribe:
+                email_sender.set_list_unsubscribe(list_unsubscribe)
             email_sender.set_recipients(recipients)
             email_sender.connect()
             email_sender.send_all(close_connection=True)
@@ -170,11 +174,13 @@ def send_async_email(subject, sender, recipients, text_body, html_body, reply_to
                 return e.response['Error']['Message']
 
 
-def send_email(subject, sender, recipients: List[str], text_body, html_body, reply_to=None):
+def send_email(subject, sender, recipients: List[str], text_body, html_body, reply_to=None, list_unsubscribe=None):
+    """`list_unsubscribe`: for mail an account opted into, the URL that opts it out, sent as List-Unsubscribe with
+    one-click POST (RFC 8058) over SMTP. SES's send_email takes no custom headers, so the SES path leaves it out."""
     if current_app.debug:
-        send_async_email(subject, sender, recipients, text_body, html_body, reply_to)
+        send_async_email(subject, sender, recipients, text_body, html_body, reply_to, list_unsubscribe)
     else:
-        send_async_email.delay(subject, sender, recipients, text_body, html_body, reply_to)
+        send_async_email.delay(subject, sender, recipients, text_body, html_body, reply_to, list_unsubscribe)
 
 
 class SMTPEmailService:
@@ -184,9 +190,10 @@ class SMTPEmailService:
     :param in_password: Password for mail server login (required)
     :param in_server: SMTP server to connect to
     :param use_tls: Select whether to connect over SSL (False) or TLS (True). Keep in mind that SMTP servers use different ports for SSL and TLS.
+    :param timeout: Seconds to wait on the server before giving up, so a silent server cannot hold a worker for good
     """
 
-    def __init__(self, in_username, in_password, in_server, use_tls):
+    def __init__(self, in_username, in_password, in_server, use_tls, timeout=30):
         self.username = in_username
         self.password = in_password
         self.server_name = in_server[0]
@@ -194,18 +201,20 @@ class SMTPEmailService:
         self.use_tls = use_tls
 
         if not self.use_tls:
-            self.smtpserver = smtplib.SMTP_SSL(self.server_name, self.server_port)
+            self.smtpserver = smtplib.SMTP_SSL(self.server_name, self.server_port, timeout=timeout,
+                                               context=tls_context())
         else:
-            self.smtpserver = smtplib.SMTP(self.server_name, self.server_port)
+            self.smtpserver = smtplib.SMTP(self.server_name, self.server_port, timeout=timeout)
         self.connected = False
         self.recipients = []
+        self.return_path = None
 
     def __str__(self):
         return "Type: Mail Sender \n" \
                "Connection to server {}, port {} \n" \
                "Connected: {} \n" \
-               "Username: {}, Password: {}".format(
-            self.server_name, self.server_port, self.connected, self.username, self.password)
+               "Username: {}".format(
+            self.server_name, self.server_port, self.connected, self.username)
 
     def set_message(self, plaintext, subject="", in_from=None, htmltext=None):
         """
@@ -237,7 +246,7 @@ class SMTPEmailService:
         self.msg["To"] = None
         self.msg["CC"] = None
         self.msg["BCC"] = None
-        self.msg["Message-ID"] = f"<{uuid.uuid4()}@{self.server_name}>"
+        self.msg["Message-ID"] = message_id(self.msg['From'], self.server_name)
         self.msg['Date'] = formatdate(localtime=True)
 
     def clear_message(self):
@@ -254,6 +263,15 @@ class SMTPEmailService:
     
     def set_reply_to(self, reply_to):
         self.msg.add_header("Reply-To", reply_to)
+
+    def set_list_unsubscribe(self, url):
+        """RFC 2369's List-Unsubscribe and RFC 8058's one-click POST, which Gmail and Yahoo expect on opted-in mail."""
+        self.msg['List-Unsubscribe'] = f'<{url}>'
+        self.msg['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
+
+    def set_return_path(self, address):
+        """The envelope sender, where bounces go. None leaves smtplib to take it from the From header."""
+        self.return_path = address
 
     def set_plaintext(self, in_body_text):
         """
@@ -311,7 +329,7 @@ class SMTPEmailService:
         Must be called before sending messages. Connects to SMTP server using the username and password.
         """
         if self.use_tls:
-            self.smtpserver.starttls()
+            self.smtpserver.starttls(context=tls_context())
         if self.username and self.password:
             self.smtpserver.login(self.username, self.password)
         self.connected = True
@@ -337,7 +355,7 @@ class SMTPEmailService:
 
         for recipient in self.recipients:
             self.msg.replace_header("To", recipient)
-            self.smtpserver.send_message(self.msg)
+            self.smtpserver.send_message(self.msg, from_addr=self.return_path)
 
         if close_connection:
             self.disconnect()

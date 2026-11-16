@@ -20,6 +20,7 @@ Also measured and left alone: a subject or a recipient carrying a newline is
 the message is serialised, so Python's own library refuses the injection
 before it reaches the wire. The tests below pin that refusal.
 """
+import ssl
 from email.errors import HeaderParseError
 from unittest.mock import MagicMock, patch
 
@@ -70,6 +71,12 @@ def ses(monkeypatch):
         monkeypatch.setitem(current_app.config, key, value)
 
 
+def assert_verifying(context):
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
 def a_service(use_tls=True):
     with patch('smtplib.SMTP') as plain, patch('smtplib.SMTP_SSL') as secure:
         service = SMTPEmailService('postmaster', 'secret',
@@ -89,7 +96,7 @@ class TestWhereAMessageIsHandedOff:
         with patch('app.email.send_async_email') as task:
             send_email('a subject', 'a@b.test', ['c@d.test'], 'text', '<p>x</p>')
         task.assert_called_once_with('a subject', 'a@b.test', ['c@d.test'],
-                                     'text', '<p>x</p>', None)
+                                     'text', '<p>x</p>', None, None)
 
     def test_otherwise_it_is_queued(self, env, monkeypatch):
         monkeypatch.setitem(current_app.config, 'DEBUG', False)
@@ -98,7 +105,14 @@ class TestWhereAMessageIsHandedOff:
                        '<p>x</p>', reply_to='e@f.test')
         task.delay.assert_called_once_with('a subject', 'a@b.test',
                                            ['c@d.test'], 'text', '<p>x</p>',
-                                           'e@f.test')
+                                           'e@f.test', None)
+
+    def test_an_unsubscribe_link_goes_with_it(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
+        with patch('app.email.send_async_email') as task:
+            send_email('a subject', 'a@b.test', ['c@d.test'], 'text', '<p>x</p>',
+                       list_unsubscribe='https://probeland.test/unsub/1/tok')
+        assert task.delay.call_args.args[-1] == 'https://probeland.test/unsub/1/tok'
 
 
 class TestSendingThroughAnSmtpServer:
@@ -108,14 +122,34 @@ class TestSendingThroughAnSmtpServer:
                              kwargs.pop('sender', 'Probeland <a@b.test>'),
                              kwargs.pop('recipients', ['c@d.test']),
                              'text', '<p>x</p>',
-                             kwargs.pop('reply_to', None))
+                             kwargs.pop('reply_to', None),
+                             kwargs.pop('list_unsubscribe', None))
         return service
+
+    def test_an_unsubscribe_link_when_one_is_given(self, env, smtp):
+        service = self.sent(list_unsubscribe='https://probeland.test/unsub/1/tok')
+        service.return_value.set_list_unsubscribe.assert_called_once_with('https://probeland.test/unsub/1/tok')
+
+    def test_and_none_without_one(self, env, smtp):
+        assert self.sent().return_value.set_list_unsubscribe.call_count == 0
+
+    def test_a_task_queued_before_the_link_existed_still_runs(self, env, smtp):
+        """Celery may hold messages queued with six arguments across a deploy."""
+        with patch('app.email.SMTPEmailService') as service:
+            send_async_email('a subject', 'a@b.test', ['c@d.test'], 'text', '<p>x</p>', None)
+        service.return_value.send_all.assert_called_once()
 
     def test_the_server_it_is_told_to_use(self, env, smtp):
         service = self.sent()
         assert service.call_args.args[0] == 'postmaster'
         assert service.call_args.args[2] == ('mail.probeland.test', 587)
-        assert service.call_args.kwargs == {'use_tls': True}
+        assert service.call_args.kwargs == {'use_tls': True, 'timeout': 30}
+
+    def test_the_timeout_it_is_told_to_use(self, env, smtp, monkeypatch):
+        """Without one a mail server that accepts the connection and then says nothing holds a Celery worker for
+        good."""
+        monkeypatch.setitem(current_app.config, 'MAIL_TIMEOUT', 7)
+        assert self.sent().call_args.kwargs['timeout'] == 7
 
     def test_the_message_is_composed_and_sent(self, env, smtp):
         service = self.sent()
@@ -135,6 +169,15 @@ class TestSendingThroughAnSmtpServer:
     def test_and_none_when_it_is_not(self, env, smtp):
         service = self.sent()
         assert service.return_value.set_reply_to.call_count == 0
+
+    def test_bounces_go_to_the_bounce_address(self, env, smtp):
+        service = self.sent()
+        service.return_value.set_return_path.assert_called_once_with('bounces@probeland.test')
+
+    def test_and_to_the_sender_when_none_is_configured(self, env, smtp, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'BOUNCE_ADDRESS', '')
+        service = self.sent()
+        service.return_value.set_return_path.assert_called_once_with(None)
 
     def test_one_recipient_given_as_a_bare_string(self, env, smtp):
         """`send_topic_suggestion` passes `g.site.contact_email`, which is
@@ -300,19 +343,37 @@ class TestConnectingToTheServer:
     def test_tls_opens_a_plain_connection_and_upgrades_it(self, env):
         service = a_service(use_tls=True)
         plain, secure = service.constructors
-        plain.assert_called_once_with('mail.probeland.test', 587)
+        assert plain.call_args.args == ('mail.probeland.test', 587)
         assert secure.call_count == 0
         service.connect()
         service.smtpserver.starttls.assert_called_once()
         assert service.connected is True
 
+    def test_the_upgrade_checks_the_server_certificate(self, env):
+        """smtplib's default context verifies nothing: anyone on the path could pose as the server and read the
+        password the login sends next."""
+        service = a_service(use_tls=True)
+        service.connect()
+        assert_verifying(service.smtpserver.starttls.call_args.kwargs['context'])
+
     def test_without_tls_it_opens_an_ssl_connection(self, env):
         service = a_service(use_tls=False)
         plain, secure = service.constructors
-        secure.assert_called_once_with('mail.probeland.test', 587)
+        assert secure.call_args.args == ('mail.probeland.test', 587)
         assert plain.call_count == 0
         service.connect()
         assert service.smtpserver.starttls.call_count == 0
+
+    @pytest.mark.parametrize('use_tls', [True, False])
+    def test_the_connection_has_a_timeout(self, env, use_tls):
+        service = a_service(use_tls=use_tls)
+        opened = service.constructors[0 if use_tls else 1]
+        assert opened.call_args.kwargs['timeout'] == 30
+
+    def test_the_ssl_connection_checks_the_server_certificate(self, env):
+        service = a_service(use_tls=False)
+        plain, secure = service.constructors
+        assert_verifying(secure.call_args.kwargs['context'])
 
     def test_it_logs_in_when_it_has_credentials(self, env):
         service = a_service()
@@ -340,6 +401,12 @@ class TestConnectingToTheServer:
         assert 'mail.probeland.test' in described
         assert 'Connected: False' in described
 
+    def test_what_it_says_about_itself_leaves_out_the_password(self, env):
+        """A description that reaches a log or a traceback must not carry MAIL_PASSWORD."""
+        described = str(a_service())
+        assert 'postmaster' in described
+        assert 'secret' not in described
+
 
 class TestComposingTheMessage:
     def test_a_message_with_both_a_text_and_an_html_version(self, env):
@@ -348,8 +415,26 @@ class TestComposingTheMessage:
         assert service.msg.is_multipart()
         assert service.msg['Subject'] == 'a subject'
         assert service.msg['From'] == 'a@b.test'
-        assert service.msg['Message-ID'].endswith('@mail.probeland.test>')
+        assert service.msg['Message-ID'].endswith('@b.test>')
         assert service.msg['Date']
+
+    def test_the_message_id_names_the_sender_s_domain_not_the_mail_server_s(self, env):
+        """A Message-ID on the relay's domain (smtp.titan.email) instead of the From domain is a spam signal."""
+        service = a_service()
+        service.set_message('the text', 'a subject', 'Probeland <noreply@probeland.test>')
+        assert service.msg['Message-ID'].endswith('@probeland.test>')
+
+    def test_message_ids_differ(self, env):
+        service = a_service()
+        service.set_message('the text', 'a subject', 'a@b.test')
+        first = service.msg['Message-ID']
+        service.set_message('the text', 'a subject', 'a@b.test')
+        assert service.msg['Message-ID'] != first
+
+    def test_a_sender_with_no_domain_falls_back_to_the_mail_server_s(self, env):
+        service = a_service()
+        service.set_message('the text', 'a subject')   # From is the login, 'postmaster'
+        assert service.msg['Message-ID'].endswith('@mail.probeland.test>')
 
     def test_a_message_with_only_text(self, env):
         service = a_service()
@@ -379,6 +464,14 @@ class TestComposingTheMessage:
         service.set_message('the text', 'a subject', 'a@b.test')
         service.set_reply_to('e@f.test')
         assert service.msg['Reply-To'] == 'e@f.test'
+
+    def test_one_click_unsubscribe_headers(self, env):
+        """RFC 2369 and RFC 8058: mail clients show an unsubscribe button and POST to the link."""
+        service = a_service()
+        service.set_message('the text', 'a subject', 'a@b.test', '<p>x</p>')
+        service.set_list_unsubscribe('https://probeland.test/unsub/1/tok')
+        assert service.msg['List-Unsubscribe'] == '<https://probeland.test/unsub/1/tok>'
+        assert service.msg['List-Unsubscribe-Post'] == 'List-Unsubscribe=One-Click'
 
     def test_the_body_can_be_emptied(self, env):
         service = a_service()
@@ -445,7 +538,7 @@ class TestSendingIt:
         service.set_recipients(['a@b.test', 'c@d.test'])
         service.connect()
         sent = []
-        service.smtpserver.send_message = lambda msg: sent.append(msg['To'])
+        service.smtpserver.send_message = lambda msg, from_addr=None: sent.append(msg['To'])
         service.send_all(close_connection=False)
         assert sent == ['a@b.test', 'c@d.test']
 
@@ -457,7 +550,7 @@ class TestSendingIt:
         service.set_recipients(['a@b.test', 'c@d.test'])
         service.connect()
         sent = []
-        service.smtpserver.send_message = lambda msg: sent.append(
+        service.smtpserver.send_message = lambda msg, from_addr=None: sent.append(
             msg.as_string())
         service.send_all(close_connection=False)
         assert 'c@d.test' not in sent[0]
@@ -478,6 +571,25 @@ class TestSendingIt:
         service.send_all(close_connection=False)
         assert service.connected is True
 
+    def test_the_envelope_sender_is_the_bounce_address_when_one_is_set(self, env):
+        """Bounces go to the envelope sender (Return-Path), not to From: without this they land in MAIL_FROM's
+        mailbox, which the bounce job would empty."""
+        service = a_service()
+        service.set_message('the text', 'a subject', 'Probeland <noreply@probeland.test>')
+        service.set_return_path('bounces@probeland.test')
+        service.set_recipients(['a@b.test'])
+        service.connect()
+        service.send_all(close_connection=False)
+        assert service.smtpserver.send_message.call_args.kwargs['from_addr'] == 'bounces@probeland.test'
+
+    def test_and_smtplib_takes_it_from_the_from_header_when_none_is(self, env):
+        service = a_service()
+        service.set_message('the text', 'a subject', 'Probeland <noreply@probeland.test>')
+        service.set_recipients(['a@b.test'])
+        service.connect()
+        service.send_all(close_connection=False)
+        assert service.smtpserver.send_message.call_args.kwargs['from_addr'] is None
+
     def test_sending_before_connecting_is_refused(self, env):
         service = a_service()
         service.set_message('the text', 'a subject', 'a@b.test')
@@ -496,7 +608,7 @@ class TestHeadersThatCarryANewline:
                             'a@b.test')
         service.set_recipients(['a@b.test'])
         service.connect()
-        service.smtpserver.send_message = lambda msg: msg.as_string()
+        service.smtpserver.send_message = lambda msg, from_addr=None: msg.as_string()
         with pytest.raises(HeaderParseError):
             service.send_all(close_connection=False)
 
@@ -505,6 +617,6 @@ class TestHeadersThatCarryANewline:
         service.set_message('the text', 'a subject', 'a@b.test')
         service.set_recipients(['a@b.test\nBcc: victim@example.test'])
         service.connect()
-        service.smtpserver.send_message = lambda msg: msg.as_string()
+        service.smtpserver.send_message = lambda msg, from_addr=None: msg.as_string()
         with pytest.raises(HeaderParseError):
             service.send_all(close_connection=False)

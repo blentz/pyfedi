@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 import boto3
 import httpx
-from flask import current_app, flash, render_template
+from flask import current_app, flash, render_template, url_for
 from flask_babel import _
 from flask_login import current_user
 from sqlalchemy import text, desc
@@ -119,6 +119,10 @@ def send_newsletter(form):
         with home_storefront(reader):   # each reader's links name their own domain (spec §3.2)
             body_text = render_template('email/newsletter.txt', recipient=reader, content=form.body_text.data)
             body_html = render_template('email/newsletter.html', recipient=reader, content=form.body_html.data)
+            # an account without a token has no link, in the body or the header, as newsletter.html does
+            unsubscribe = url_for('user.user_newsletter_unsubscribe', user_id=reader.id,
+                                  token=reader.verification_token, _external=True) \
+                if reader.verification_token else None
         if form.test.data:
             to = current_user.email
         else:
@@ -126,7 +130,7 @@ def send_newsletter(form):
 
         send_email(subject=form.subject.data, sender=f'{mail_name(reader)} <{current_app.config["MAIL_FROM"]}>',
                    recipients=[to],
-                   text_body=body_text, html_body=body_html)
+                   text_body=body_text, html_body=body_html, list_unsubscribe=unsubscribe)
 
         if form.test.data:
             break

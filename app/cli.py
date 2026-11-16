@@ -1730,11 +1730,15 @@ def register(app):
                                 html_body = flask.render_template('email/unread_notifications.html', user=user,
                                                                   notifications=notifications,
                                                                   posts=posts, site=site)
+                                # no token, no link: as unread_notifications.html does
+                                unsubscribe = flask.url_for('user.user_email_notifs_unsubscribe', user_id=user.id,
+                                                            token=user.verification_token, _external=True) \
+                                    if user.verification_token else None
                             send_email(_('[PieFed] You have unread notifications'),
                                        sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
                                        recipients=[user.email],
                                        text_body=text_body,
-                                       html_body=html_body)
+                                       html_body=html_body, list_unsubscribe=unsubscribe)
                             user.email_unread_sent = True
 
 

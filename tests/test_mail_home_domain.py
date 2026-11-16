@@ -160,6 +160,10 @@ def test_a_newsletter_is_rendered_for_each_recipient(app, accounts):
     assert CANONICAL not in by_recipient[onion_user.email]
     assert f'https://{CANONICAL}/' in by_recipient[clear_user.email]
     assert ONION not in by_recipient[clear_user.email]
+    links = {call.kwargs['recipients'][0]: call.kwargs['list_unsubscribe'] for call in send.call_args_list}
+    assert links[onion_user.email] == f'http://{ONION}/user/newsletter/{onion_user.id}/tok{onion_user.id}/unsubscribe'
+    assert links[clear_user.email] == \
+        f'https://{CANONICAL}/user/newsletter/{clear_user.id}/tok{clear_user.id}/unsubscribe'
 
 
 def test_home_storefront_outside_a_request_names_the_home_domain(app, accounts):
@@ -200,11 +204,34 @@ def test_the_background_email_of_an_onion_account_links_to_the_onion(app, accoun
                                     created_at=utcnow() - timedelta(hours=1)))
     db.session.commit()
     sent = {}
-    with patch('app.cli.send_email', lambda *a, **k: sent.update({k['recipients'][0]: k['html_body']})):
+    links = {}
+    with patch('app.cli.send_email', lambda *a, **k: (sent.update({k['recipients'][0]: k['html_body']}),
+                                                      links.update({k['recipients'][0]: k['list_unsubscribe']}))):
         cli.register(current_app)
         result = current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
     assert result.exception is None, result.exception
+    assert links[onion_user.email] == f'http://{ONION}/user/email_notifs/{onion_user.id}/tok{onion_user.id}/unsubscribe'
+    assert links[clear_user.email] == \
+        f'https://{CANONICAL}/user/email_notifs/{clear_user.id}/tok{clear_user.id}/unsubscribe'
     assert f'http://{ONION}/' in sent[onion_user.email]
     assert CANONICAL not in sent[onion_user.email]
     assert f'https://{CANONICAL}/' in sent[clear_user.email]
     assert ONION not in sent[clear_user.email]
+
+
+def test_a_digest_to_an_account_without_a_token_has_no_unsubscribe_header(app, accounts):
+    """unread_notifications.html says to use the settings instead; url_for cannot build the link."""
+    onion_user, clear_user = accounts
+    clear_user.verification_token = None
+    clear_user.email_unread = True
+    clear_user.email_unread_sent = False
+    clear_user.last_seen = utcnow() - timedelta(days=2)
+    db.session.add(Notification(user_id=clear_user.id, title='a notification', url='/x', notif_type=NOTIF_POST,
+                                created_at=utcnow() - timedelta(hours=1)))
+    db.session.commit()
+    links = {}
+    with patch('app.cli.send_email', lambda *a, **k: links.update({k['recipients'][0]: k['list_unsubscribe']})):
+        cli.register(current_app)
+        result = current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
+    assert result.exception is None, result.exception
+    assert links[clear_user.email] is None

@@ -66,11 +66,15 @@ class Config(object):
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     MAIL_SERVER = os.environ.get('MAIL_SERVER') or None
     MAIL_PORT = int(os.environ.get('MAIL_PORT') or 25)
-    MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS') is not None
+    # True = STARTTLS on a plain connection; False (unset, or a false word) = implicit TLS (SMTP_SSL). Being merely
+    # present used to mean True, so MAIL_USE_TLS=False meant STARTTLS.
+    MAIL_USE_TLS = (os.environ.get('MAIL_USE_TLS') or '').strip().lower() not in ('', '0', 'false', 'no', 'off')
     MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or None
     MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or None
+    MAIL_TIMEOUT = float(os.environ.get('MAIL_TIMEOUT') or 30)   # seconds a silent mail server may hold a Celery worker
     MAIL_FROM = os.environ.get('MAIL_FROM') or 'noreply@' + os.environ.get('SERVER_NAME')
     ERRORS_TO = os.environ.get('ERRORS_TO') or ''
+    ERROR_MAIL_INTERVAL = float(os.environ.get('ERROR_MAIL_INTERVAL') or 300)   # seconds between error reports, per process
     # count WARNING-and-worse log records per day (app/error_counts.py); the tests turn it off
     ERROR_COUNTS = os.environ.get('ERROR_COUNTS', 'True') in ('True', 'true', '1')
     LANGUAGES = ['ca', 'ceb', 'de', 'en', 'es', 'eu', 'fi', 'fil', 'fr', 'hi', 'it', 'ja', 'ko', 'pl', 'ru', 'uk', 'zh']
