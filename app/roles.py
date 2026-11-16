@@ -19,7 +19,7 @@ from app import cache, db
 from app.api.alpha.views import user_view
 from app.complimentary import grant_complimentary
 from app.models import MemberSubscription, ModLog, Offer, Role, RoleGrant, RolePermission, RolePermissionDomain, Settings, SiteDomain, User, \
-    offer_role, unexpired_grant, utcnow
+    offer_role, utcnow
 from app.permission_cache import permissions_changed
 from app.permissions import BY_NAME, INSTANCE_ONLY_PERMISSIONS, STAFF_PERMISSIONS, STAFF_SCOPABLE_PERMISSIONS, \
     home_domain_id
@@ -321,10 +321,12 @@ def _tier_roles_changed(_user) -> None:
 
 
 def _held_scopes(actor: User) -> dict[str, set[int] | None]:
-    """Every permission `actor` holds through an unexpired grant, with the domains it reaches (None: every domain)."""
+    """Every permission `actor` holds for good, with the domains it reaches (None: every domain): through an admin's
+    grant with no end. One held until a date, or through a tier, would outlast itself once attached to a tier
+    (security review 2026-11-16)."""
     held: dict[str, set[int] | None] = {}
     roles = Role.query.join(RoleGrant, RoleGrant.role_id == Role.id) \
-        .filter(RoleGrant.user_id == actor.id, unexpired_grant(RoleGrant.__table__)).all()
+        .filter(RoleGrant.user_id == actor.id, RoleGrant.expires_at.is_(None), RoleGrant.via_tier.is_(False)).all()
     for role in roles:
         for permission, domains in permission_scopes(role).items():
             if permission not in held:
@@ -383,3 +385,9 @@ def _members_of(offer: Offer) -> list[User]:
     from_offer = db.session.query(MemberSubscription.user_id).filter_by(offer_id=offer.id, status='active')
     through_tiers = db.session.query(RoleGrant.user_id).filter(RoleGrant.via_tier.is_(True))
     return User.query.filter(User.id.in_(from_offer.union(through_tiers))).order_by(User.id).all()
+
+
+def may_manage_offer(actor: User, offer: Offer) -> bool:
+    """Whether `actor` may reprice `offer`, hand it out (gift, discount, referral benefit, complimentary) or remove it:
+    a tier carrying a role they could not attach is Admin's alone (T6), or they could give themselves its role."""
+    return all(may_attach(actor, role) for role in offer_roles(offer))

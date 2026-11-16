@@ -8,9 +8,11 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.complimentary import complimentary_offer
-from app.models import MemberSubscription, Offer, Role, RoleGrant, RolePermission, Site, utcnow
+from app.models import MemberSubscription, Offer, PromoCode, Role, RoleGrant, RolePermission, Site, utcnow
+from app.payments.gifts import REFERRAL_BENEFIT_SETTING
 from app.roles import set_offer_roles
 from app.tier_roles import offer_roles, sync_tier_roles
+from app.utils import get_setting
 from tests.factories import admin_role, grant_permission, make_admin, make_user
 
 
@@ -176,3 +178,78 @@ class TestTheGrantsPanel:
         grant = RoleGrant.query.filter_by(user_id=member.id).one()
         post(env, f'/admin/grants/{grant.id}/revoke')
         assert db.session.get(RoleGrant, grant.id) is not None
+
+
+class TestATierGivingAPowerIsAdmins:
+    """T6 (owner 2026-11-16): a tier carrying a role the manager couldn't attach is Admin's alone, wherever it could be
+    handed out or repriced."""
+
+    @pytest.fixture
+    def locked(self, env):
+        set_offer_roles(make_admin(somebody(env, 'boss')), env.knight, [env.helper])
+        return env.knight
+
+    def test_its_offer_cannot_be_edited(self, env, treasurer, locked):
+        assert env.client.get(f'/admin/payments/offers/{locked.id}/edit').status_code == 302
+        post(env, f'/admin/payments/offers/{locked.id}/edit', title='Cheap', amount='0.01')
+        assert db.session.get(Offer, locked.id).title == 'Furcas'
+
+    def test_nor_deleted(self, env, treasurer, locked):
+        post(env, f'/admin/payments/offers/{locked.id}/delete')
+        assert db.session.get(Offer, locked.id) is not None
+
+    def test_another_offer_still_can(self, env, treasurer, locked):
+        assert env.client.get(f'/admin/payments/offers/{env.tip.id}/edit').status_code == 200
+
+    def test_no_gift_code_for_it(self, env, treasurer, locked):
+        post(env, '/admin/payments/codes/add', offer_id=locked.id, days=365, code='')
+        assert PromoCode.query.count() == 0
+
+    @pytest.mark.parametrize('offer', ['tier', 'any'])
+    def test_no_discount_code_reaching_it(self, env, treasurer, locked, offer):
+        post(env, '/admin/payments/codes/add', kind='percent', percent=99, code='',
+             offer_id=locked.id if offer == 'tier' else 0)
+        assert PromoCode.query.count() == 0
+
+    def test_a_discount_for_another_tier_is_fine(self, env, treasurer, locked):
+        other = Offer(provider_kind='btcpay', kind='subscription', title='Patron', offer_group='patrons',
+                      amount_minor=100, currency='usd', interval='month')
+        db.session.add(other)
+        db.session.commit()
+        post(env, '/admin/payments/codes/add', kind='percent', percent=10, code='', offer_id=other.id)
+        assert PromoCode.query.count() == 1
+
+    def test_an_existing_code_cannot_be_turned_to_it(self, env, treasurer, locked):
+        code = PromoCode(code='gift-for-tips', kind='gift', offer_id=env.tip.id, days=30)
+        db.session.add(code)
+        db.session.commit()
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=locked.id, days=365, active='y')
+        assert db.session.get(PromoCode, code.id).offer_id == env.tip.id
+
+    def test_nor_one_for_it_changed(self, env, treasurer, locked):
+        code = PromoCode(code='gift-for-knights', kind='gift', offer_id=locked.id, days=30, active=False)
+        db.session.add(code)
+        db.session.commit()
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=locked.id, days=30, active='y')
+        assert db.session.get(PromoCode, code.id).active is False
+
+    def test_it_is_not_made_the_referral_default(self, env, treasurer, locked):
+        post(env, '/admin/payments/codes/default', benefit=f'gift:{locked.id}', days=365)
+        assert not get_setting(REFERRAL_BENEFIT_SETTING)
+
+    def test_nor_is_the_automatic_default_which_may_choose_it(self, env, treasurer, locked):
+        post(env, '/admin/payments/codes/default', benefit='auto')
+        assert not get_setting(REFERRAL_BENEFIT_SETTING)
+
+    def test_complimentary_carrying_a_power_is_not_given(self, env, treasurer):
+        boss = make_admin(somebody(env, 'boss'))
+        offer = complimentary_offer()
+        db.session.commit()
+        set_offer_roles(boss, offer, [env.helper])
+        member = somebody(env, 'member')
+        post(env, f'/admin/payments/complimentary/{member.id}', grant='y')
+        assert MemberSubscription.query.filter_by(user_id=member.id).count() == 0
+
+    def test_an_admin_may_do_all_of_it(self, env, admin, locked):
+        post(env, '/admin/payments/codes/add', offer_id=locked.id, days=365, code='')
+        assert PromoCode.query.count() == 1

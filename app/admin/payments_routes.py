@@ -18,7 +18,7 @@ from app.admin import bp
 from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, ComplimentaryForm, DefaultBenefitForm, GiftCodeForm, \
     LinkOfferForm, MembershipForm, OfferForm, PaymentSettingsForm, PaypalCredentialsForm, PaypalOfferForm, ReferralCodeForm, \
     StripeCredentialsForm
-from app.complimentary import KIND as COMPLIMENTARY, end_complimentary, grant_complimentary
+from app.complimentary import KIND as COMPLIMENTARY, complimentary_offer, end_complimentary, grant_complimentary
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, PromoCode, PromoCodeUse, \
     Role, SiteDomain, User, utcnow
 from app.local_names import local_named, split_local_name
@@ -31,7 +31,7 @@ from app.payments.adapters.paypal_adapter import REQUIRED_EVENTS as PAYPAL_EVENT
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
 from app.payments.code_text import normalise
 from app.payments.core import refresh_access
-from app.roles import RoleError, describe_scopes, may_attach, permission_scopes, set_offer_roles
+from app.roles import RoleError, describe_scopes, may_attach, may_manage_offer, permission_scopes, set_offer_roles
 from app.payments.discounts import DISCOUNT_KINDS
 from app.payments.gifts import AUTO, REFERRAL_BENEFIT_SETTING, Benefit, default_referral_choice, \
     referral_benefit
@@ -354,7 +354,46 @@ def _editable_offer(offer_id: int) -> Offer:
     offer = db.session.get(Offer, offer_id)
     if offer is None or offer.provider_kind == COMPLIMENTARY:
         abort(404)
+    refusal = _admins_alone([offer])
+    if refusal is not None:
+        flash(refusal, 'error')
+        abort(redirect(url_for('admin.admin_payments')))
     return offer
+
+
+def _subscriptions() -> list[Offer]:
+    return Offer.query.filter(Offer.kind == 'subscription', Offer.provider_kind != COMPLIMENTARY).all()
+
+
+def _offers_reached(kind: str | None, offer_id: int | None) -> list[Offer]:
+    """The subscriptions a code hands out (T6): its tier; for a discount for any offer, every one."""
+    if offer_id:
+        offer = db.session.get(Offer, offer_id)
+        return [offer] if offer is not None else []
+    return _subscriptions() if kind in DISCOUNT_KINDS else []
+
+
+def _benefit_reach(choice: str | None) -> list[Offer]:
+    """The subscriptions a referral benefit (a `_choice_of` value) hands out: automatic may pick any."""
+    kind, _sep, number = (choice or '').partition(':')
+    if kind == AUTO:
+        return _subscriptions()
+    if kind == 'gift' and number.isdigit():
+        return _offers_reached('gift', int(number))
+    if kind == 'discount' and number.isdigit():
+        code = db.session.get(PromoCode, int(number))
+        return _offers_reached(code.kind, code.offer_id) if code is not None else []
+    return []
+
+
+def _admins_alone(offers) -> str | None:
+    """Why the signed-in manager may not hand out or reprice `offers`, or None (T6): one carries a role they could not
+    attach, so this would let them give it to themselves."""
+    locked = sorted({offer.title for offer in offers if not may_manage_offer(current_user, offer)})
+    if not locked:
+        return None
+    return _('Only an admin can do this for %(tiers)s: it gives a role whose permissions you do not hold.',
+             tiers=', '.join(locked))
 
 
 def _still_charged(user: User) -> bool:
@@ -386,6 +425,8 @@ def admin_payments_complimentary(user_id):
             flash(_('This account has not finished joining.'), 'error')
         elif _still_charged(user):
             flash(_('A provider still charges this account. Cancel its subscription first.'), 'error')
+        elif (refusal := _admins_alone([complimentary_offer()])) is not None:
+            flash(refusal, 'error')
         else:
             grant_complimentary(user)
             sync_tier_roles(user)
@@ -409,6 +450,10 @@ def admin_payments_codes_default():
     form = DefaultBenefitForm()
     form.benefit.choices = _benefit_choices(None, own=False)
     if not form.validate_on_submit():
+        return _codes_page(default_form=form)
+    refusal = _admins_alone(_benefit_reach(form.benefit.data))
+    if refusal is not None:
+        form.benefit.errors = list(form.benefit.errors) + [refusal]
         return _codes_page(default_form=form)
     kind, _sep, number = form.benefit.data.partition(':')
     chosen = {'kind': kind}
@@ -502,6 +547,10 @@ def admin_payments_codes_add():
     member = _member_named(form)
     if member is _NO_SUCH_MEMBER:
         return _codes_page(code_form=form)
+    refusal = _admins_alone(_offers_reached(kind, form.offer_id.data))
+    if refusal is not None:
+        form.kind.errors = list(form.kind.errors) + [refusal]
+        return _codes_page(code_form=form)
     text = normalise(form.code.data) or ''.join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
     if len(text) < TYPED_CODE_MINIMUM:
         form.code.errors.append(_('A code needs at least %(count)d characters, so it cannot be guessed.',
@@ -537,6 +586,10 @@ def admin_payments_code_edit(code_id):
             form.amount.data = from_minor(code.amount_minor, get_setting(CURRENCY_SETTING) or 'usd')
         if code.assigned_to:
             form.user_name.data = db.session.get(User, code.assigned_to).user_name
+    if request.method == 'POST' and (refusal := _admins_alone(_offers_reached(code.kind, code.offer_id) +
+                                                             _offers_reached(code.kind, form.offer_id.data))):
+        flash(refusal, 'error')
+        return redirect(url_for('admin.admin_payments_codes'))
     if form.validate_on_submit() and _code_refusal(form, code.kind) is None \
             and (member := _member_named(form)) is not _NO_SUCH_MEMBER:
         _apply_code(form, code)
@@ -560,6 +613,11 @@ def _edit_referral_code(code: PromoCode):
         form.benefit.data = _choice_of(code.benefit, code.offer_id, code.discount_code_id)
         if code.expires_at:
             form.expires_at.data = code.expires_at.date()
+    if request.method == 'POST' and (refusal := _admins_alone(
+            _benefit_reach(_choice_of(code.benefit, code.offer_id, code.discount_code_id)) +
+            _benefit_reach(form.benefit.data))):
+        flash(refusal, 'error')
+        return redirect(url_for('admin.admin_payments_codes'))
     if form.validate_on_submit():
         kind, _sep, number = form.benefit.data.partition(':')
         code.benefit = kind

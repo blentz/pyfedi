@@ -345,3 +345,25 @@ class TestWhoMayAttachWhat:
 
     def test_an_admin_may_attach_any_but_admin(self, env):
         assert may_attach(env.admin, env.helper) and not may_attach(env.admin, admin_role())
+
+
+class TestOnlyLastingPowersCount:
+    """Security review 2026-11-16: a power held for a while, or through a tier, can't be attached to a tier for good."""
+
+    @pytest.fixture
+    def treasurer(self, env):
+        user = member(env, 'treasurer')
+        grant_permission(user, 'manage monetization')
+        return user
+
+    def test_a_power_held_until_a_date(self, env, treasurer):
+        grant_permission(treasurer, 'administer all users')
+        RoleGrant.query.join(Role).filter(Role.name == 'role-administer all users').one().expires_at = \
+            utcnow() + timedelta(days=1)
+        db.session.commit()
+        assert not may_attach(treasurer, env.helper)
+
+    def test_a_power_held_through_a_tier(self, env, treasurer):
+        set_offer_roles(env.admin, env.knight, [env.helper])
+        start(treasurer, env.knight)
+        assert user_access('administer all users', treasurer.id) and not may_attach(treasurer, env.helper)
