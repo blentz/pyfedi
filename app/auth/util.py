@@ -31,7 +31,8 @@ from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow
     verify_password_hash
 from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.log_scrub import log_ldap_sync_failure
-from app.referral import REFERRAL_MODE, record_referral, referral_discount, referral_mode_on, referrer_for
+from app.referral import REFERRAL_MODE, record_referral, referral_discount, referral_discount_refused, \
+    referral_mode_on, referrer_for
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, onion_proof_refused, prepare_onion_proof
 from app.payments.offers import money
@@ -273,7 +274,7 @@ def register_on_paid_domain(form):
                     if discount is not None:
                         chosen = registration_offer(form.tier.data) if form.tier.data else offer
                         if chosen.id == (form.tier.data or offer.id) and discount_usable(discount) \
-                                and discounted(discount, chosen) is not None:
+                                and not referral_discount_refused(referrer) and discounted(discount, chosen) is not None:
                             return process_registration_form(form, paid=True, tier=chosen, discount=discount,
                                                              referrer=referrer)
                         db.session.rollback()   # referrer_for's row lock

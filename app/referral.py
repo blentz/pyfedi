@@ -14,7 +14,7 @@ from flask import current_app, g, url_for
 from sqlalchemy import func
 
 from app import db
-from app.models import PromoCode, Referral, User, utcnow
+from app.models import PromoCode, PromoCodeUse, Referral, User, utcnow
 from app.payments.gifts import referral_benefit, referral_gift_code, start_gift, usable
 from app.storefront import REFERRAL_MODE, DomainInfo, domain_base_url, open_registrations, paid_registration  # noqa: F401 (re-exported)
 from app.utils import get_setting
@@ -130,15 +130,26 @@ def record_referral(referrer: User, referred: User) -> Referral:
     if benefit is not None and benefit.offer is not None:
         db.session.flush()   # the gift's subscription names the new account
         start_gift(referred, code, commit=False, offer=benefit.offer, days=benefit.days)
+    elif benefit is not None and benefit.discount is not None:   # a use of the referral code, as a gift is (R5)
+        db.session.flush()
+        db.session.add(PromoCodeUse(promo_code_id=code.id, user_id=referred.id, used_at=utcnow()))
     return row
 
 
 def referral_discount(referrer: User) -> PromoCode | None:
-    """The discount code `referrer`'s referral code gives, if it gives one (R1, R4): usable or not, which the caller
-    asks, since one past its limits refuses the registration rather than admitting for free (R5)."""
+    """The discount code `referrer`'s referral code gives, if it gives one (R1, R4). The discount's own limits are the
+    caller's to ask, since one past them refuses the registration rather than admitting for free (R5). The referral
+    code's own (its switch, last day and uses) are asked here: past them it gives no discount, as it would give no
+    gift, and the caller refuses. Under referrer_for's lock on the referrer, so its uses can't be overtaken."""
     code = referral_gift_code(referrer)
     benefit = referral_benefit(code, referrer.home_domain()) if code is not None else None
     return benefit.discount if benefit is not None else None
+
+
+def referral_discount_refused(referrer: User) -> bool:
+    """Whether `referrer`'s referral code gives a discount but is past its own limits (security review 2026-11-16)."""
+    code = referral_gift_code(referrer)
+    return code is not None and referral_discount(referrer) is not None and not usable(code)
 
 
 def referral_link(user: User) -> str:

@@ -907,6 +907,31 @@ class TestJoiningWithAReferralBenefit:
         join_with(env, question=referrer.referral_code, tier=env.knight.id, csrf_token=csrf(env))
         assert joiner() is None and not provider.called
 
+    @pytest.mark.parametrize('limit', ['inactive', 'expired', 'used_up'])
+    def test_the_referral_codes_own_limits_hold_for_its_discount(self, env, referrer, provider, rendering, limit):
+        """Security review 2026-11-16: the referral code's own switch, last day and uses, as for its gift (R5)."""
+        discount = a_discount(env)
+        row = row_of(referrer)
+        row.benefit, row.discount_code_id = 'discount', discount.id
+        if limit == 'inactive':
+            row.active = False
+        elif limit == 'expired':
+            row.expires_at = utcnow() - timedelta(minutes=1)
+        else:
+            row.max_uses = 1
+            db.session.add(PromoCodeUse(promo_code_id=row.id, user_id=referrer.id))
+        db.session.commit()
+        join_with(env, question=referrer.referral_code, tier=env.knight.id, csrf_token=csrf(env))
+        assert joiner() is None and not provider.called
+
+    def test_a_discount_signup_is_a_use_of_the_referral_code(self, env, referrer, provider):
+        discount = a_discount(env)
+        row = row_of(referrer)
+        row.benefit, row.discount_code_id, row.max_uses = 'discount', discount.id, 1
+        db.session.commit()
+        join_with(env, question=referrer.referral_code, tier=env.knight.id)
+        assert PromoCodeUse.query.filter_by(promo_code_id=row.id, user_id=joiner().id).count() == 1
+
     def test_nothing_admits_as_before(self, env, referrer, provider):
         row = row_of(referrer)
         row.benefit = 'none'
