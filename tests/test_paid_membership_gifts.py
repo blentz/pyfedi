@@ -69,6 +69,14 @@ class TestFindingACode:
             db.session.commit()
         assert find_gift_code('GIFT-MONTH') is None
 
+    @pytest.mark.parametrize('values', [{'offer_id': None}, {'days': None}, {'days': 0}], ids=['no_tier', 'no_days', 'zero_days'])
+    def test_a_gift_code_with_no_tier_or_length_is_not_found(self, env, values):
+        row = a_code(env)
+        for name, value in values.items():
+            setattr(row, name, value)
+        db.session.commit()
+        assert find_gift_code('GIFT-MONTH') is None
+
     def test_an_unknown_or_empty_code_is_not_found(self, env):
         a_code(env)
         assert find_gift_code('nope') is None and find_gift_code('') is None and find_gift_code(None) is None

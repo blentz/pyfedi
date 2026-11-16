@@ -63,8 +63,6 @@ def offers_available() -> bool:
 def tiers_on(domain) -> list[Offer]:
     """What a gift on `domain` can be a free period of (plan 2026-11-16 R2): the subscriptions on offer there in its
     membership group; on a domain without membership, every subscription on offer there. Cheapest first."""
-    if domain is None:
-        return []
     subscriptions = [offer for offer in offers_on(domain.id, domain.is_onion) if offer.kind == 'subscription']
     own = next((offer for offer in subscriptions if offer.id == domain.registration_offer_id), None)
     if own is not None:

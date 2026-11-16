@@ -1023,6 +1023,16 @@ class TestReferralBenefitAdmin:
         page = BeautifulSoup(env.client.get('/admin/payments/codes', base_url=env.base).get_data(as_text=True), 'html.parser')
         assert page.find('select', attrs={'name': 'benefit'}).find('option', selected=True)['value'] == 'auto'
 
+    def test_the_list_says_a_default_gift_and_the_edit_page_shows_a_last_day(self, env, referrer, treasurer):
+        row = row_of(referrer)
+        row.expires_at = utcnow() + timedelta(days=9)
+        db.session.commit()
+        cell = BeautifulSoup(env.client.get('/admin/payments/codes', base_url=env.base).get_data(as_text=True),
+                             'html.parser').find('tr', id=f'code-{row.id}').get_text()
+        assert 'Furcas for 30 days' in cell and 'the default' in cell
+        page = env.client.get(f'/admin/payments/codes/{row.id}', base_url=env.base).get_data(as_text=True)
+        assert row.expires_at.strftime('%Y-%m-%d') in page
+
     def test_the_list_says_what_each_referral_code_gives(self, env, referrer, treasurer):
         discount = a_discount(env)
         row = row_of(referrer)
