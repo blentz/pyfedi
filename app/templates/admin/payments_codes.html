@@ -15,7 +15,7 @@
         <p><a href="{{ url_for('admin.admin_payments') }}">{{ _('Back to payments') }}</a></p>
 
         <h3 class="mt-4">{{ _("Members' referral codes") }}</h3>
-        <p class="small field_hint">{{ _('Joining with a member\'s referral code gives one thing: this, unless the code has its own. Change one member\'s from the list below; its choices are what its owner\'s domain offers.') }}</p>
+        <p class="small field_hint">{{ _('A member\'s new referral code gives this: a gift or a discount, never nothing. Change one member\'s from the list below; its choices are what its owner\'s domain offers.') }}</p>
         <form method="post" action="{{ url_for('admin.admin_payments_codes_default') }}">
             {{ default_form.hidden_tag() }}
             {{ render_field(default_form.benefit) }}
@@ -50,7 +50,7 @@
                 <tr id="code-{{ code.id }}">
                     <td><code>{{ code.code }}</code></td>
                     <td>{% if code.owner_id %}{{ owners[code.owner_id].user_name if code.owner_id in owners else '' }}{% else %}{{ _('Gift code') }}{% endif %}</td>
-                    <td>{% if code.id in gives %}{{ gives[code.id][0] }}{% if gives[code.id][1] %} ({{ _('the default') }}){% endif %}{% elif code.kind == 'percent' %}{{ _('%(percent)d%% off a first payment', percent=code.percent) }}{% elif code.kind == 'amount' %}{{ _('%(amount)s off a first payment', amount=money(code.amount_minor, currency or 'usd')) }}{% elif code.offer_id and code.days %}{{ _('%(tier)s for %(days)d days', tier=tiers.get(code.offer_id, '?'), days=code.days) }}{% else %}{{ _('The default') if code.owner_id else _('Nothing') }}{% endif %}{% if code.kind != 'gift' %} ({{ tiers.get(code.offer_id, '?') if code.offer_id else _('any') }}){% endif %}</td>
+                    <td>{% if code.id in gives %}{{ gives[code.id] }}{% elif code.kind == 'percent' %}{{ _('%(percent)d%% off a first payment', percent=code.percent) }}{% elif code.kind == 'amount' %}{{ _('%(amount)s off a first payment', amount=money(code.amount_minor, currency or 'usd')) }}{% elif code.offer_id and code.days %}{{ _('%(tier)s for %(days)d days', tier=tiers.get(code.offer_id, '?'), days=code.days) }}{% else %}{{ _('The default') if code.owner_id else _('Nothing') }}{% endif %}{% if code.kind != 'gift' %} ({{ tiers.get(code.offer_id, '?') if code.offer_id else _('any') }}){% endif %}</td>
                     <td>{{ uses.get(code.id, 0) }}{% if code.max_uses %} / {{ code.max_uses }}{% endif %}</td>
                     <td>{{ code.expires_at.strftime('%Y-%m-%d') if code.expires_at else '' }}</td>
                     <td>{{ _('Yes') if code.active else _('No') }}</td>

@@ -18,7 +18,7 @@ from app.payments.core import apply_event, cancel_subscription
 from app.payments.events import Paid, SubscriptionEnded, SubscriptionStarted
 from app.payments.registration import registration_offer, remove_unpaid_registrations
 from app.storefront import clear_domain_cache
-from tests.factories import grant_permission, make_user
+from tests.factories import grant_permission, make_user, pay_link
 
 PAID = 'https://paid.example'
 PUBLIC = 'https://public.example'
@@ -120,7 +120,7 @@ class TestRegistering:
         with patch('app.auth.util.send_email_verification') as mail:
             response = register(env)
 
-        assert (response.status_code, response.headers['Location']) == (302, CHECKOUT)
+        assert (response.status_code, pay_link(response)) == (200, CHECKOUT)
         user = joiner()
         assert user.registration_pending_since is not None and user.verified is False
         assert user.site_domain_id == env.paid.id
@@ -155,7 +155,7 @@ class TestRegistering:
         env.site.application_question = 'Why?'
         db.session.commit()
 
-        assert register(env).headers['Location'] == CHECKOUT
+        assert pay_link(register(env)) == CHECKOUT
         assert joiner().registration_pending_since is not None
 
     def test_a_provider_failure_is_explained(self, env):
@@ -209,7 +209,7 @@ class TestAPendingAccount:
         response = env.client.post('/auth/login', base_url=PAID, data={
             'user_name': 'joiner', 'password': 'a-good-password', 'low_bandwidth_mode': '', 'submit': 'Log in'})
 
-        assert response.headers['Location'] == CHECKOUT
+        assert pay_link(response) == CHECKOUT
         with env.client.session_transaction(base_url=PAID) as session:
             assert '_user_id' not in session
 

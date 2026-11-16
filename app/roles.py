@@ -17,6 +17,7 @@ from sqlalchemy import func
 
 from app import cache, db
 from app.api.alpha.views import user_view
+from app.complimentary import grant_complimentary
 from app.models import ModLog, Role, RoleGrant, RolePermission, RolePermissionDomain, Settings, SiteDomain, User, utcnow
 from app.permission_cache import permissions_changed
 from app.permissions import BY_NAME, INSTANCE_ONLY_PERMISSIONS, STAFF_PERMISSIONS, STAFF_SCOPABLE_PERMISSIONS, \
@@ -230,6 +231,8 @@ def grant_role(actor: User, user: User, role: Role, expires_at: datetime | None 
         raise RoleError(f'{user.user_name} already holds {role.name}.')
     grant = RoleGrant(user_id=user.id, role_id=role.id, granted_by=actor.id, expires_at=expires_at)
     db.session.add(grant)
+    if role.built_in:   # every admin holds complimentary membership (plan 2026-11-16 X3)
+        grant_complimentary(user)
     db.session.commit()
     permissions_changed(user.id)
     _admins_changed(role)

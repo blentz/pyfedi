@@ -20,6 +20,7 @@ from app.payments.core import active_subscriptions_of, apply_event, cancel_subsc
 from app.payments.discounts import HELD_CODE, find_discount_code, reserve
 from app.payments.forms import RedeemCodeForm
 from app.payments.gifts import checking_codes, find_gift_code, start_gift
+from app.payments.summary import Lapsed, held_code_row, lapse_of, summarise
 from app.payments.offers import LINK, is_tier, membership_groups, offers_here
 from app.payments.registration import joinable_tier_ids
 from app.storefront import current_storefront, paid_registration
@@ -160,7 +161,8 @@ def checkout(offer_id):
     if offer is None:
         abort(404)
     if current_user.is_anonymous and offer.kind == 'donation':
-        return _start_checkout(offer, None)
+        url, refusal = _provider_url(offer, None)
+        return refusal or _summary_page(offer, None, None, url)
     if complimentary_of(current_user) is not None:
         return _complimentary()
     return _member_checkout(offer)
@@ -174,31 +176,40 @@ def _complimentary():
 
 @login_required
 def _member_checkout(offer):
-    """With a discount code held (D1): reserved for this offer, or the checkout stops, saying so."""
-    discount = None
+    """With a discount code held (D1): reserved for this offer and taken off; one that can no longer be used is told,
+    with why and its date, and the full price applies (plan 2026-11-16 X5). Then the summary, whose Pay goes on (X4)."""
+    discount = lapsed = None
     if session.get(HELD_CODE):
         found = find_discount_code(session[HELD_CODE])
-        if found is None or reserve(current_user, found, offer) is None:
-            flash(_('Your code cannot be used for this. Clear it to pay the full price.'), 'error')
-            return _back()
-        discount = found
-    answer = _start_checkout(offer, current_user, discount)
-    # A redirect to the provider: the code is on its way. A provider that is down answers (page, 503): kept for a retry
-    if discount is not None and not isinstance(answer, tuple):
-        session.pop(HELD_CODE, None)
-    return answer
+        if found is not None and reserve(current_user, found, offer) is not None:
+            discount = found
+        else:
+            lapsed = lapse_of(held_code_row(session[HELD_CODE]), current_user, offer) \
+                or Lapsed(session[HELD_CODE], 'not_for_this', None)
+    url, refusal = _provider_url(offer, current_user, discount)
+    if refusal is not None:   # a provider that is down: the code is kept for a retry
+        return refusal
+    session.pop(HELD_CODE, None)   # taken off this checkout, or lapsed: held no longer
+    return _summary_page(offer, current_user, discount, url, lapsed)
 
 
-def _start_checkout(offer, user, discount=None):
+def _provider_url(offer, user, discount=None):
+    """(the provider's checkout address, None), or (None, the page saying the provider is unavailable)."""
     try:
-        url = adapter_for(offer.provider_kind).checkout(offer, user,
-                                                        url_for('payments.result', result='success', _external=True),
-                                                        url_for('payments.result', result='failure', _external=True),
-                                                        discount=discount)
+        return adapter_for(offer.provider_kind).checkout(offer, user,
+                                                         url_for('payments.result', result='success', _external=True),
+                                                         url_for('payments.result', result='failure', _external=True),
+                                                         discount=discount), None
     except ProviderError:
-        return render_template('generic_message.html', title=_('Donation plans'),
-                               message=_('The payment provider is unavailable at the moment. Please try again later.')), 503
-    return redirect(url)
+        return None, (render_template('generic_message.html', title=_('Donation plans'),
+                                      message=_('The payment provider is unavailable at the moment. Please try again '
+                                                'later.')), 503)
+
+
+def _summary_page(offer, user, discount, url, lapsed=None):
+    return render_template('payments/summary.html', title=_('Before you pay'),
+                           summary=summarise(offer, user, discount, url, lapsed), pay_url=url,
+                           back_url=safe_redirect_target(request.form.get('next'), url_for('payments.donations')))
 
 
 @bp.route('/donations/subscriptions/<int:subscription_id>/cancel', methods=['POST'])

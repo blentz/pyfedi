@@ -13,7 +13,7 @@ from app.payments.credentials import seal
 from app.payments.offers import offers_changed
 from app.payments.shortcodes import checkout_shortcodes
 from app.utils import markdown_to_html
-from tests.factories import make_user
+from tests.factories import make_user, pay_link
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ class TestTheButton:
         monkeypatch.setattr('app.payments.adapters.stripe_adapter.StripeAdapter.checkout',
                             lambda self, offer, user, success, failure, discount=None: 'https://checkout.example/s')
         answer = env.client.post(f'/donations/checkout/{env.tier.id}', data={'csrf_token': token})
-        assert answer.status_code == 302 and answer.headers['Location'] == 'https://checkout.example/s'
+        assert answer.status_code == 200 and pay_link(answer) == 'https://checkout.example/s'
 
     def test_a_label_after_the_number_is_the_buttons_words(self, env):
         login(env.client, env.member)

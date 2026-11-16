@@ -19,6 +19,7 @@ from datetime import datetime
 
 from unittest.mock import patch
 
+from bs4 import BeautifulSoup
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from flask import current_app
@@ -1487,3 +1488,10 @@ def make_visibility_world():
     return SimpleNamespace(author=author, follower=follower, pending=pending, stranger=stranger,
                            community=community, post=post, reply=reply,
                            public_post=public_post, public_child=public_child)
+
+
+def pay_link(response) -> str | None:
+    """Where a checkout's summary page sends the payer: its Pay button's address (plan 2026-11-16 X4). None if the
+    response is no summary."""
+    link = BeautifulSoup(response.get_data(as_text=True), 'html.parser').find('a', string='Pay')
+    return link['href'] if link is not None else None

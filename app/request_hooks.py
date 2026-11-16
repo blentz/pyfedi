@@ -9,7 +9,7 @@ from flask_wtf.csrf import generate_csrf
 from app import db
 from app.cms import cms_nav_links, plans_page_url
 from app.login_gate import refuse_lapsed, refuse_logged_out
-from app.payments.offers import donations_menu_shown, money, subscription_settings_shown
+from app.payments.offers import donations_menu_shown, money, money_major, subscription_settings_shown
 from app.payments.shortcodes import checkout_shortcodes
 from app.permissions import holds_any_grant, may_act_on_user, may_ban
 from app.referral import referrals_available
@@ -159,6 +159,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['cms_nav_links'] = cms_nav_links
     app.jinja_env.globals['donations_menu_shown'] = donations_menu_shown
     app.jinja_env.globals['money'] = money
+    app.jinja_env.globals['money_major'] = money_major
     app.jinja_env.globals['ap_datetime'] = ap_datetime
     app.jinja_env.globals['can_upvote'] = can_upvote
     app.jinja_env.globals['can_downvote'] = can_downvote

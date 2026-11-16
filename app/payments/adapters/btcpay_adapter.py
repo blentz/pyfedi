@@ -13,7 +13,7 @@ import hmac
 import json
 from decimal import Decimal, InvalidOperation
 
-from babel.numbers import get_currency_precision
+from babel.numbers import format_currency, get_currency_precision
 
 from app import db
 from app.models import BtcpayInvoice, Offer, utcnow
@@ -43,6 +43,22 @@ def to_minor(amount: str, currency: str) -> int:
         return int((Decimal(amount) * 10 ** get_currency_precision(currency.upper())).to_integral_exact())
     except (InvalidOperation, TypeError) as error:
         raise ValueError('not an amount') from error
+
+
+def _money(amount_minor: int, currency: str) -> str:
+    return format_currency(Decimal(amount_minor) / 10 ** get_currency_precision(currency.upper()), currency.upper(),
+                           locale='en')
+
+
+def _item_description(offer: Offer, discount, price: int, sats: int, rate) -> str:
+    """'Furcas: $6.66 - code spring $1.33 = $5.33; 0.00008220 BTC at $64,835.70 per BTC, the rate of 2026-11-16'."""
+    if discount is not None and offer.amount_minor is not None:
+        cost = (f'{_money(offer.amount_minor, offer.currency)} - code {discount.code} '
+                f'{_money(offer.amount_minor - price, offer.currency)} = {_money(price, offer.currency)}')
+    else:
+        cost = _money(price, offer.currency)
+    per_btc = format_currency(rate.rate, offer.currency.upper(), locale='en')
+    return f'{offer.title}: {cost}; {btc_text(sats)} BTC at {per_btc} per BTC, the rate of {rate.day:%Y-%m-%d}'
 
 
 def _paid_in_full(invoice: dict, sats: int) -> bool:
@@ -98,6 +114,8 @@ class BtcpayAdapter:
         # In bitcoin at the day's fixed rate (plan 2026-11-15 B2, B3), and recorded with what was asked
         rate = checkout_rate(utcnow(), offer.currency)
         sats = sats_for(price, offer.currency, rate.rate)
+        # What the invoice says it is for, with its price worked out (plan 2026-11-16 X6)
+        metadata['itemDesc'] = _item_description(offer, discount, price, sats, rate)
         invoice = self._request('POST', config, '/invoices', json={
             'amount': btc_text(sats), 'currency': 'BTC', 'metadata': metadata,
             'checkout': {'redirectURL': success_url, 'redirectAutomatically': True, 'expirationMinutes': INVOICE_MINUTES}})

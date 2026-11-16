@@ -333,10 +333,10 @@ def _codes_page(default_form=None, code_form=None):
                                                              chosen.get('discount_id')),
                                           days=chosen.get('days'))
     default_form.benefit.choices = _benefit_choices(None, own=False)
-    # What each member's referral code gives on its owner's domain, its own or the default (R1, R3)
-    gives = {code.id: (_describe(referral_benefit(code, owners[code.owner_id].home_domain())),
-                       code.benefit is None)
+    # What each member's referral code gives on its owner's domain: its own, one without taking the default (X1)
+    gives = {code.id: _describe(referral_benefit(code, owners[code.owner_id].home_domain()))
              for code in codes if code.owner_id in owners}
+    db.session.commit()
     code_form = code_form or GiftCodeForm()
     code_form.offer_id.choices = _tier_choices(none=True)
     return render_template('admin/payments_codes.html', title=_('Codes'), codes=codes, uses=uses, owners=owners, gives=gives,
@@ -370,7 +370,9 @@ def admin_payments_complimentary(user_id):
         abort(404)
     form = ComplimentaryForm()
     if form.validate_on_submit() and (form.grant.data or form.end.data):   # a button pressed, or nothing to do
-        if form.end.data:
+        if form.end.data and user.is_admin():   # every admin keeps it (plan 2026-11-16 X3)
+            flash(_("An admin's complimentary membership stays while they are an admin."), 'error')
+        elif form.end.data:
             if end_complimentary(user):
                 refresh_access(user)
                 flash(_('Complimentary membership ended.'))
@@ -420,19 +422,19 @@ def _benefit_choices(domain, own: bool) -> list[tuple[str, str]]:
     tier_ids = {offer.id for offer in tiers}
     discounts = [code for code in PromoCode.query.filter(PromoCode.kind.in_(DISCOUNT_KINDS), PromoCode.owner_id.is_(None))
                  .order_by(PromoCode.code) if code.offer_id is None or code.offer_id in tier_ids]
-    first = [('default', _('The site default'))] if own else [(AUTO, _('One billing period of the cheapest tier'))]
-    return first + [('none', _('Nothing'))] + \
+    first = [] if own else [(AUTO, _('One billing period of the cheapest tier'))]   # never nothing (X1)
+    return first + \
         [(f'gift:{offer.id}', _('A free period of %(tier)s', tier=offer.title)) for offer in tiers] + \
         [(f'discount:{code.id}', _('Discount code %(code)s', code=code.code)) for code in discounts]
 
 
-def _choice_of(kind, offer_id, discount_id) -> str:
+def _choice_of(kind, offer_id, discount_id) -> str | None:
     return f'gift:{offer_id}' if kind == 'gift' else f'discount:{discount_id}' if kind == 'discount' else kind
 
 
 def _describe(benefit: Benefit | None) -> str:
     if benefit is None:
-        return _('Nothing')
+        return _('Nothing it can give: joining with it is refused')
     if benefit.discount is not None:
         return _('Discount code %(code)s', code=benefit.discount.code)
     return _('%(tier)s for %(days)d days', tier=benefit.offer.title, days=benefit.days)
@@ -520,16 +522,17 @@ def admin_payments_code_edit(code_id):
 def _edit_referral_code(code: PromoCode):
     """A member's referral code: its one benefit, from what its owner's domain offers (R1, R2), and its own limits."""
     owner = db.session.get(User, code.owner_id)
+    referral_benefit(code, owner.home_domain())   # one with none of its own, or a gone choice, takes the default (X1)
+    db.session.commit()
     form = ReferralCodeForm(obj=code)
     form.benefit.choices = _benefit_choices(owner.home_domain(), own=True)
     if request.method == 'GET':
-        form.benefit.data = 'default' if code.benefit is None else _choice_of(code.benefit, code.offer_id,
-                                                                               code.discount_code_id)
+        form.benefit.data = _choice_of(code.benefit, code.offer_id, code.discount_code_id)
         if code.expires_at:
             form.expires_at.data = code.expires_at.date()
     if form.validate_on_submit():
         kind, _sep, number = form.benefit.data.partition(':')
-        code.benefit = None if kind == 'default' else kind
+        code.benefit = kind
         code.offer_id = int(number) if kind == 'gift' else None
         code.days = form.days.data if kind == 'gift' else None
         code.discount_code_id = int(number) if kind == 'discount' else None

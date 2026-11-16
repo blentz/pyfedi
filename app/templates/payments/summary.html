@@ -1,0 +1,60 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+
+{# Before paying (plan 2026-11-16-referral-gifts-admins-checkout.md X4, X5): what this costs and covers. -#}
+{% block app_content %}
+<div class="row">
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <h1 class="mb-4">{{ _('Before you pay') }}</h1>
+        {% set offer = summary.offer -%}
+        {% if summary.lapsed -%}
+            {% set lapsed = summary.lapsed -%}
+            <div class="alert alert-warning" role="alert">
+                {% if lapsed.reason == 'expired' -%}
+                    {{ _('Code %(code)s expired on %(date)s, so it takes nothing off. The full price applies.', code=lapsed.code, date=lapsed.when.strftime('%Y-%m-%d')) }}
+                {%- elif lapsed.reason == 'used_up' -%}
+                    {{ _('Code %(code)s was used up on %(date)s, so it takes nothing off. The full price applies.', code=lapsed.code, date=lapsed.when.strftime('%Y-%m-%d')) }}
+                {%- elif lapsed.reason == 'used_by_you' -%}
+                    {{ _('You used code %(code)s on %(date)s, and it can be used once. The full price applies.', code=lapsed.code, date=lapsed.when.strftime('%Y-%m-%d')) }}
+                {%- elif lapsed.reason == 'inactive' -%}
+                    {{ _('Code %(code)s has been switched off, so it takes nothing off. The full price applies.', code=lapsed.code) }}
+                {%- else -%}
+                    {{ _('Code %(code)s is not for %(offer)s, so it takes nothing off. The full price applies.', code=lapsed.code, offer=offer.title) }}
+                {%- endif %}
+            </div>
+        {% endif -%}
+        <table class="table">
+            <tbody>
+                <tr><th scope="row">{{ _('For') }}</th><td>{{ offer.title }}</td></tr>
+                <tr><th scope="row">{{ _('Covers') }}</th><td>
+                    {%- if summary.ends -%}
+                        {{ _('%(start)s to %(end)s. It does not renew by itself.', start=summary.starts.strftime('%Y-%m-%d'), end=summary.ends.strftime('%Y-%m-%d')) }}
+                    {%- elif summary.starts -%}
+                        {{ _('Renews every year, first charged on %(date)s.', date=summary.starts.strftime('%Y-%m-%d')) if offer.interval == 'year' else _('Renews every month, first charged on %(date)s.', date=summary.starts.strftime('%Y-%m-%d')) }}
+                    {%- else -%}
+                        {{ _('A single payment.') }}
+                    {%- endif -%}
+                </td></tr>
+                {% if summary.price_minor is not none -%}
+                <tr><th scope="row">{{ _('Price') }}</th><td>{{ money(summary.price_minor, offer.currency) }}</td></tr>
+                {% if summary.discount -%}
+                <tr><th scope="row">{{ _('Code %(code)s', code=summary.discount.code) }}</th><td>&minus;{{ money(summary.off_minor, offer.currency) }}{% if summary.discount.kind == 'percent' %} ({{ summary.discount.percent }}%){% endif %}{{ _(', first payment only') if offer.kind == 'subscription' and not summary.ends }}</td></tr>
+                {% endif -%}
+                <tr><th scope="row">{{ _('Total') }}</th><td><strong>{{ money(summary.total_minor, offer.currency) }}</strong></td></tr>
+                {% endif -%}
+                {% if summary.btc -%}
+                <tr><th scope="row">{{ _('In bitcoin') }}</th><td><strong>{{ summary.btc }} BTC</strong>
+                    {%- if summary.rate %}<br><span class="text-muted small">{{ _('At %(rate)s per bitcoin, the price fixed at midnight UTC for %(day)s.', rate=money_major(summary.rate, offer.currency), day=summary.rate_day.strftime('%Y-%m-%d')) }}</span>{% endif %}</td></tr>
+                {% endif -%}
+            </tbody>
+        </table>
+        <p>
+            <a class="btn btn-primary" href="{{ pay_url }}" rel="noopener noreferrer">{{ _('Pay') }}</a>
+            {% if back_url %}<a class="btn btn-outline-secondary" href="{{ back_url }}">{{ _('Cancel') }}</a>{% endif %}
+        </p>
+    </main>
+</div>
+{% endblock %}

@@ -15,6 +15,7 @@ from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
 from app.payments.discounts import reserve, usable
 from app.payments.offers import offers_here
+from app.payments.summary import Lapsed, lapse_of, summarise
 from app.payments.tasks import cancel_at_provider
 from app.storefront import current_storefront, paid_registration
 from app.utils import get_task_session, patch_db_session, render_template
@@ -56,12 +57,20 @@ def registration_checkout(user: User):
     try:
         if offer is None:
             raise ProviderError('nothing to pay for')
-        # The code typed at /register, reserved for this checkout; one gone since is simply not taken off (D1)
+        # The code given at /register, reserved for this checkout; one that can no longer be used is told, with why
+        # and its date, and the full price applies (D1; plan 2026-11-16 X5)
         code = db.session.get(PromoCode, user.pending_promo_code_id) if user.pending_promo_code_id else None
         discount = code if code is not None and usable(code) and reserve(user, code, offer) is not None else None
-        return redirect(adapter_for(offer.provider_kind).checkout(
+        lapsed = lapse_of(code, user, offer) or Lapsed(code.code, 'not_for_this', None) \
+            if code is not None and discount is None else None
+        url = adapter_for(offer.provider_kind).checkout(
             offer, user, url_for('payments.result', result='success', _external=True),
-            url_for('payments.result', result='failure', _external=True), discount=discount))
+            url_for('payments.result', result='failure', _external=True), discount=discount)
+        if lapsed is not None:
+            user.pending_promo_code_id = None   # held no longer
+            db.session.commit()
+        return render_template('payments/summary.html', title=_('Before you pay'),
+                               summary=summarise(offer, user, discount, url, lapsed), pay_url=url, back_url=None)
     except ProviderError:
         return render_template('generic_message.html', title=_('Create new account'),
                                message=_('The payment provider is unavailable at the moment. Your account is saved: log in '

@@ -91,3 +91,10 @@ def money(amount_minor: int, currency: str) -> str:
     code = currency.upper()
     return format_currency(amount_minor / 10 ** get_currency_precision(code), code,
                            locale=str(get_locale() or current_app.config.get('BABEL_DEFAULT_LOCALE') or 'en'))
+
+
+
+def money_major(amount, currency: str) -> str:
+    """An amount in whole units of `currency` (a rate per bitcoin, say), as money() shows one in its minor unit."""
+    return format_currency(amount, currency.upper(),
+                           locale=str(get_locale() or current_app.config.get('BABEL_DEFAULT_LOCALE') or 'en'))

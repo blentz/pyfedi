@@ -127,11 +127,10 @@ def record_referral(referrer: User, referred: User) -> Referral:
     if code is None or not paid_registration(referred.home_domain()):
         return row
     benefit = referral_benefit(code, referrer.home_domain())
-    if benefit is None:
-        return row   # it gives nothing: admitted as before (G4)
-    # A gift or a discount it can no longer give refuses the account rather than letting it in for free (R5; audit
+    # Nothing to give (X2), or a gift or a discount it can no longer give, refuses the account rather than letting it
+    # in for free, which complimentary membership would then make free for good (R5, X2; audit
     # 2026-11-16): the caller rolls back, as for a gift code typed at registration
-    if not usable(code):
+    if benefit is None or not usable(code):
         raise GiftUnavailable()
     db.session.flush()   # the gift's subscription, or the use, names the new account
     if benefit.offer is not None:

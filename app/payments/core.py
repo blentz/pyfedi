@@ -167,9 +167,16 @@ def _prepaid_until(kind: str, user: User, offer: Offer | None) -> datetime | Non
     over: renewing early, or moving to another plan, costs nobody what they've paid for (M4, M7)."""
     if not adapter_for(kind).prepaid or offer is None:
         return None
+    return prepaid_start(user, offer) + timedelta(days=PERIOD_DAYS[offer.interval])
+
+
+def prepaid_start(user: User | None, offer: Offer) -> datetime:
+    """When a period of `offer` paid for now starts: now, or when the time left in its group runs out (M4, M7)."""
+    if user is None:
+        return utcnow()
     left = [row.current_period_end for row in active_subscriptions_of(user)
             if row.current_period_end is not None and _group_of(_row(Offer, row.offer_id)) == offer.offer_group]
-    return max([utcnow(), *left]) + timedelta(days=PERIOD_DAYS[offer.interval])
+    return max([utcnow(), *left])
 
 
 def remind_expiring_prepaid() -> int:

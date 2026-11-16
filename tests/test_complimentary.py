@@ -23,7 +23,9 @@ from app.payments.offers import offers_changed, offers_here
 from app.payments.status import subscription_statuses
 from app.storefront import clear_domain_cache
 from app.utils import finalize_user_setup, markdown_to_html
-from tests.factories import grant_permission, make_user
+from app.models import Role
+from app.roles import grant_role as role_grant
+from tests.factories import admin_role, grant_permission, make_admin, make_user, pay_link
 
 
 @pytest.fixture
@@ -254,7 +256,7 @@ class TestNoPayment:
         login(env.client, env.member)
         monkeypatch.setattr('app.payments.adapters.stripe_adapter.StripeAdapter.checkout',
                             lambda *args, **kwargs: 'https://checkout.example/s')
-        assert post(env, f'/donations/checkout/{env.tier.id}').headers['Location'] == 'https://checkout.example/s'
+        assert pay_link(post(env, f'/donations/checkout/{env.tier.id}')) == 'https://checkout.example/s'   # its summary (X4)
 
 
 class TestAdmin:
@@ -349,6 +351,33 @@ class TestAdmin:
         assert 'Complimentary · no end date' in body
 
 
+class TestAdminsHoldIt:
+    """Every admin holds complimentary membership, kept so (plan 2026-11-16 X3)."""
+
+    def test_being_made_an_admin_grants_it(self, env):
+        actor = make_admin(make_user(env.baseline.instance_local, 'boss', local=True))
+        role_grant(actor, env.member, admin_role())
+        assert complimentary_of(env.member) is not None
+
+    def test_another_role_does_not(self, env):
+        actor = make_admin(make_user(env.baseline.instance_local, 'boss', local=True))
+        role = Role(name='Helpers')
+        db.session.add(role)
+        db.session.commit()
+        role_grant(actor, env.member, role)
+        assert complimentary_of(env.member) is None
+
+    def test_an_admins_cannot_be_ended(self, env):
+        treasurer = make_user(env.baseline.instance_local, 'treasurer', local=True)
+        db.session.commit()
+        grant_permission(treasurer, 'manage monetization')
+        make_admin(env.member)
+        given(env.member)
+        login(env.client, treasurer)
+        post(env, f'/admin/payments/complimentary/{env.member.id}', end='1')
+        assert complimentary_of(env.member) is not None
+
+
 class TestStatus:
     def test_it_is_complimentary_with_no_date(self, env):
         given(env.member)
@@ -408,6 +437,14 @@ class TestTheBackfill:
         with Operations.context(MigrationContext.configure(db.session.connection())):
             load().upgrade()
         assert db.session.execute(text("SELECT count(*) FROM member_subscription")).scalar() == before
+
+    def test_admins_hold_it_after_the_admins_migration(self, env, accounts):
+        """An admin who held a paid subscription missed the first backfill; X3's grants it (plan 2026-11-16)."""
+        make_admin(accounts.paying)
+        with Operations.context(MigrationContext.configure(db.session.connection())):
+            load('admins_complimentary').upgrade()
+        assert accounts.paying.id in self.held()
+        assert not {accounts.remote.id, accounts.deleted.id} & self.held()
 
     def test_the_downgrade_takes_it_away(self, env, accounts):
         with Operations.context(MigrationContext.configure(db.session.connection())):

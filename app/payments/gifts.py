@@ -17,11 +17,12 @@ from app.utils import get_setting
 
 DEFAULT_GIFT_OFFER_SETTING = 'referral_gift_offer_id'   # the tier a member's new referral code gives (Q1)
 DEFAULT_GIFT_DAYS_SETTING = 'referral_gift_days'
-# What a member's referral code gives unless it has its own (plan 2026-11-16 R3): {'kind': AUTO | 'gift' | 'discount' |
-# 'none', 'offer_id', 'days', 'discount_id'}. The two settings above are its predecessor, still read if this isn't set
+# What a new member's referral code gets as its own (plan 2026-11-16 R3, X1): {'kind': AUTO | 'gift' | 'discount',
+# 'offer_id', 'days', 'discount_id'}. The two settings above are its predecessor, still read if this isn't set
 REFERRAL_BENEFIT_SETTING = 'referral_benefit'
 AUTO = 'auto'
-BENEFIT_KINDS = (AUTO, 'gift', 'discount', 'none')
+OWN_KINDS = ('gift', 'discount')   # what a code stores: never nothing (plan 2026-11-16 X1)
+BENEFIT_KINDS = (AUTO, *OWN_KINDS)
 # Typing codes, at registration and on /donations alike: one bucket per address, so guessing is slow wherever it is tried
 GIFT_CODE_LIMIT, GIFT_CODE_SCOPE = '10 per hour', 'gift_codes'
 
@@ -75,8 +76,21 @@ def referral_gift_code(user: User) -> PromoCode | None:
         db.session.add(row)
     elif row.code != user.referral_code:
         row.code = user.referral_code
+    if row.benefit not in OWN_KINDS:   # new, or made before codes stored their own: the default, kept (X1)
+        _store(row, _resolve(default_referral_choice(), user.home_domain()))
     db.session.flush()
     return row
+
+
+def _store(row: PromoCode, benefit) -> None:
+    """Keep `benefit` as the row's own. One that can't be had (no tier there, and the default isn't a discount) leaves
+    the row without one, which refuses joining where joining is paid for (X2)."""
+    if isinstance(benefit, Benefit) and benefit.discount is not None:
+        row.benefit, row.offer_id, row.days, row.discount_code_id = 'discount', None, None, benefit.discount.id
+    elif isinstance(benefit, Benefit):
+        row.benefit, row.offer_id, row.days, row.discount_code_id = 'gift', benefit.offer.id, benefit.days, None
+    else:
+        row.benefit, row.offer_id, row.days, row.discount_code_id = None, None, None, None
 
 
 @dataclass(frozen=True)
@@ -88,15 +102,20 @@ class Benefit:
 
 
 def referral_benefit(row: PromoCode, domain) -> Benefit | None:
-    """The one benefit a referral code's row gives on its owner's `domain` (R1, R3): its own, or the site's default,
-    read now so that changing the default changes every code on it. None for nothing. A choice since gone (its tier or
-    discount code deleted) is not taken for nothing, which admits for free: a code's falls back to the default, and
-    the default's to automatic (audit 2026-11-16)."""
-    if row.benefit is not None:
+    """The gift or discount a referral code's row gives on its owner's `domain` (X1): its own. One with none of its
+    own, or whose tier or discount code is gone, takes the site's default now (and keeps it: a gone choice is never
+    taken for nothing, which would admit for free), and a default whose choice is gone is automatic. None only where
+    nothing can be given: no tier on the domain, and the default isn't a discount (X2)."""
+    if row.benefit in OWN_KINDS:
         own = _benefit_of(row.benefit, row.offer_id, row.days, row.discount_code_id, domain)
         if own is not _GONE:
             return own
-    chosen = default_referral_choice()
+    benefit = _resolve(default_referral_choice(), domain)
+    _store(row, benefit)
+    return benefit
+
+
+def _resolve(chosen: dict, domain) -> Benefit | None:
     default = _benefit_of(chosen.get('kind'), chosen.get('offer_id'), chosen.get('days'), chosen.get('discount_id'),
                           domain)
     return _benefit_of(AUTO, None, None, None, domain) if default is _GONE else default
@@ -123,7 +142,8 @@ def _benefit_of(kind, offer_id, days, discount_id, domain):
 
 
 def default_referral_choice() -> dict:
-    """The site's default (R3). Automatic until an admin chooses; a default gift set before this is still a gift."""
+    """The site's default (R3, X1): a gift or a discount, or automatic. Automatic until an admin chooses, and for a
+    setting that is neither (as 'none' was); a default gift set before R3 is still a gift."""
     chosen = get_setting(REFERRAL_BENEFIT_SETTING, None)
     if isinstance(chosen, dict) and chosen.get('kind') in BENEFIT_KINDS:
         return chosen

@@ -26,7 +26,7 @@ from app.payments.offers import offers_changed, offers_on
 from app.payments.retention import end_expired_subscriptions
 from app.storefront import clear_domain_cache
 from app.utils import set_setting
-from tests.factories import grant_permission, make_user
+from tests.factories import grant_permission, make_user, pay_link
 
 URL = 'https://pay.example'
 STORE = 'store1'
@@ -150,7 +150,9 @@ class TestCheckout:
         sent = json.loads(request.content)
         assert request.headers['Authorization'] == 'token k'
         assert sent['amount'] == '0.00010000' and sent['currency'] == 'BTC'
-        assert sent['metadata'] == {'offer_id': str(env.plan.id), 'user_id': str(env.member.id)}
+        assert {key: sent['metadata'][key] for key in ('offer_id', 'user_id')} == {'offer_id': str(env.plan.id),
+                                                                         'user_id': str(env.member.id)}
+        assert sent['metadata']['itemDesc'].startswith('Prepaid: $5.00; 0.00010000 BTC')   # what it is for (X6)
         assert sent['checkout']['redirectURL'] == 'https://x/ok'
 
     @respx.mock
@@ -503,7 +505,7 @@ class TestThePage:
 
         response = env.client.post(f'/donations/checkout/{env.gift.id}')
 
-        assert response.headers['Location'] == f'{URL}/i/inv1'
+        assert pay_link(response) == f'{URL}/i/inv1'
 
 
 class TestAdmin:

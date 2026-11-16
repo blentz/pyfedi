@@ -15,7 +15,7 @@ from app.payments.core import apply_event
 from app.payments.events import Paid
 from app.payments.offers import money
 from app.storefront import clear_domain_cache
-from tests.factories import make_user
+from tests.factories import make_user, pay_link
 
 
 @pytest.fixture
@@ -134,7 +134,7 @@ class TestStrangers:
         assert f'/donations/checkout/{env.offer.id}'.encode() in env.client.get('/donations').data
         with patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='https://stripe.test/c')) as create:
             response = env.client.post(f'/donations/checkout/{env.offer.id}')
-        assert response.status_code == 302 and response.headers['Location'] == 'https://stripe.test/c'
+        assert response.status_code == 200 and pay_link(response) == 'https://stripe.test/c'
         params = create.call_args.kwargs
         assert 'client_reference_id' not in params
         assert params['customer'] is None and params['customer_email'] is None
@@ -284,7 +284,7 @@ class TestCheckout:
         login(env.client, env.member)
         with patch('stripe.checkout.Session.create', return_value=SimpleNamespace(url='https://stripe.test/c')) as create:
             response = post(env, f'/donations/checkout/{env.offer.id}')
-        assert response.status_code == 302 and response.headers['Location'] == 'https://stripe.test/c'
+        assert response.status_code == 200 and pay_link(response) == 'https://stripe.test/c'
         assert create.call_args.kwargs['success_url'].endswith('/donations/return/success')
         assert create.call_args.kwargs['cancel_url'].endswith('/donations/return/failure')
 
