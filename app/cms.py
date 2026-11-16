@@ -56,7 +56,7 @@ def _plans_page() -> str | None:
 
 
 def plans_page_url(external: bool = False) -> str:
-    """Where the plans are bought (plan 2026-11-16 DM4): the first CMS page with a [checkout N] button in it (hell.cloud:
+    """Where the plans are bought (plan 2026-11-16 DM4): the first CMS page with a [checkout N] button in it (the first domain's
     /subscribe), else /donations."""
     path = _plans_page()
     if path is None:

@@ -17,7 +17,7 @@ from app.models import BtcDailyRate, CmsPage, MemberSubscription, Offer, Payment
     SiteDomain, utcnow
 from app.payments.core import remind_expiring_prepaid
 from app.payments.credentials import seal
-from app.payments.offers import is_tier, offers_changed
+from app.payments.offers import is_tier, offers_changed, subscription_settings_shown
 from app.storefront import clear_domain_cache
 from app.utils import markdown_to_html
 from tests.factories import make_user
@@ -151,6 +151,10 @@ class TestDonationsIsUpstreams:
 
 class TestSettingsSubscription:
     SETTINGS = '/user/settings/subscription'
+
+    def test_a_visitor_is_shown_no_tab(self, env):
+        with env.app.test_request_context():
+            assert not subscription_settings_shown()
 
     def test_a_visitor_is_asked_to_log_in(self, env):
         answer = env.client.get(self.SETTINGS, base_url=env.base)

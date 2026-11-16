@@ -252,12 +252,13 @@ class TestTheLinks:
 class TestThePlans:
     """/donations is the code's page: plans for a member, and the way to stop paying."""
 
-    def test_a_member_is_offered_the_plans_and_no_project_links(self, env, stripe_configured):
+    def test_a_member_is_offered_the_plans_and_upstreams_project_links(self, env, stripe_configured):
+        """Upstream's page, with its Support PieFed development section (owner, plan 2026-11-16 DM2)."""
         sign_in(env.client, env.member)
         response = env.client.get('/donations')
         assert response.status_code == 200
         assert b'A small amount' in response.data
-        assert b'patreon.com' not in response.data
+        assert b'https://www.patreon.com/PieFed' in response.data and b'https://liberapay.com/PieFed/' in response.data
 
     def test_a_stranger_is_sent_to_log_in(self, env, stripe_configured):
         db.session.get(Site, 1).private_instance = True

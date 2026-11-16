@@ -3,7 +3,7 @@
 Owner, 2026-11-16: "the /donations page is not the membership page. there is a /subscribe page that needs the day's BTC
 price. the /donations page should match the upstream page." Then: "We are a multi-tenant capable site. So, some domains
 may show the /donations page, some domains may show the /subscribe page. /donations is for charitable donations.
-/subscribe already exists in hell.cloud's CMS and is for the first domain's subscriptions." Rulings: membership managed in
+/subscribe already exists in [the live site]'s CMS and is for the first domain's subscriptions." Rulings: membership managed in
 user settings (DM3); /donations lists donations only; keep upstream's "Support PieFed development" section; the BTC price both
 beside each BTCPay button and as a `[btcprice N]` shortcode.
 
@@ -24,6 +24,6 @@ beside each BTCPay button and as a `[btcprice N]` shortcode.
   the plans", a held discount code with Clear, "Have a code?", and their payments. Its forms come back to it.
 - **DM4 Where members are sent.** A lapsed member, and the "Your current plan" and "Complimentary" buttons, go to
   Settings -> Subscription. "See the plans" and the prepaid reminder mail go to the plans page: the first CMS page with
-  a `[checkout N]` button in it (hell.cloud: /subscribe), else /donations.
+  a `[checkout N]` button in it (the first domain's /subscribe), else /donations.
 - **DM5 BTC price.** Each BTCPay `[checkout N]` button shows "<amount> BTC today" beside it; `[btcprice N]` writes the
   amount alone wherever it is put (nothing when the offer isn't BTCPay's or no price is fixed yet).
