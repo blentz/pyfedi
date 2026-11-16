@@ -13,6 +13,7 @@ from flask_babel import _  # todo: set the locale based on account_id so that _(
 
 from app import celery, db
 from app.branding import branding_for
+from app.mail_transport import tls_context
 from app.models import Site
 from app.storefront import default_domain, default_storefront, home_storefront, storefront_html, storefront_url
 from app.utils import get_setting, markdown_to_html, html_to_text
@@ -194,7 +195,7 @@ class SMTPEmailService:
         self.use_tls = use_tls
 
         if not self.use_tls:
-            self.smtpserver = smtplib.SMTP_SSL(self.server_name, self.server_port)
+            self.smtpserver = smtplib.SMTP_SSL(self.server_name, self.server_port, context=tls_context())
         else:
             self.smtpserver = smtplib.SMTP(self.server_name, self.server_port)
         self.connected = False
@@ -311,7 +312,7 @@ class SMTPEmailService:
         Must be called before sending messages. Connects to SMTP server using the username and password.
         """
         if self.use_tls:
-            self.smtpserver.starttls()
+            self.smtpserver.starttls(context=tls_context())
         if self.username and self.password:
             self.smtpserver.login(self.username, self.password)
         self.connected = True

@@ -20,6 +20,7 @@ Also measured and left alone: a subject or a recipient carrying a newline is
 the message is serialised, so Python's own library refuses the injection
 before it reaches the wire. The tests below pin that refusal.
 """
+import ssl
 from email.errors import HeaderParseError
 from unittest.mock import MagicMock, patch
 
@@ -68,6 +69,12 @@ def ses(monkeypatch):
                        ('MAIL_FROM', 'noreply@probeland.test'),
                        ('BOUNCE_ADDRESS', 'bounces@probeland.test')):
         monkeypatch.setitem(current_app.config, key, value)
+
+
+def assert_verifying(context):
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
 
 
 def a_service(use_tls=True):
@@ -300,19 +307,31 @@ class TestConnectingToTheServer:
     def test_tls_opens_a_plain_connection_and_upgrades_it(self, env):
         service = a_service(use_tls=True)
         plain, secure = service.constructors
-        plain.assert_called_once_with('mail.probeland.test', 587)
+        assert plain.call_args.args == ('mail.probeland.test', 587)
         assert secure.call_count == 0
         service.connect()
         service.smtpserver.starttls.assert_called_once()
         assert service.connected is True
 
+    def test_the_upgrade_checks_the_server_certificate(self, env):
+        """smtplib's default context verifies nothing: anyone on the path could pose as the server and read the
+        password the login sends next."""
+        service = a_service(use_tls=True)
+        service.connect()
+        assert_verifying(service.smtpserver.starttls.call_args.kwargs['context'])
+
     def test_without_tls_it_opens_an_ssl_connection(self, env):
         service = a_service(use_tls=False)
         plain, secure = service.constructors
-        secure.assert_called_once_with('mail.probeland.test', 587)
+        assert secure.call_args.args == ('mail.probeland.test', 587)
         assert plain.call_count == 0
         service.connect()
         assert service.smtpserver.starttls.call_count == 0
+
+    def test_the_ssl_connection_checks_the_server_certificate(self, env):
+        service = a_service(use_tls=False)
+        plain, secure = service.constructors
+        assert_verifying(secure.call_args.kwargs['context'])
 
     def test_it_logs_in_when_it_has_credentials(self, env):
         service = a_service()

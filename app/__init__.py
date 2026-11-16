@@ -2,7 +2,6 @@
 # You should have received a copy of the GPL along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 import logging
-from logging.handlers import SMTPHandler
 import os
 import warnings
 from PIL import Image
@@ -33,6 +32,7 @@ from app.constants import IMAGE_PIXEL_CAP
 from app.pinned_http import pinned_transport
 from app.cookies import StorefrontLoginManager, StorefrontSessionInterface, secure_set_cookies
 from app.error_counts import ErrorCountHandler, flush_engine
+from app.mail_transport import ErrorMailHandler
 from app.log_scrub import drop_onion_event, log_onion_safe_exception, scrub as onion_scrub
 from app.onion import is_onion_request, onion_rate_key
 from app.onion_store import OnionRoutedStorage, RefusedOnionStore, check_onion_store  # noqa: F401 -- OnionRoutedStorage registers the onion-routed scheme RATELIMIT_STORAGE_URI names
@@ -501,16 +501,13 @@ def create_app(config_class=Config):
         if app.config['MAIL_USERNAME'] or app.config['MAIL_PASSWORD']:
             auth = (app.config['MAIL_USERNAME'],
                     app.config['MAIL_PASSWORD'])
-        secure = None
-        if app.config['MAIL_USE_TLS']:
-            secure = ()
-        mail_handler = SMTPHandler(
+        mail_handler = ErrorMailHandler(
             mailhost=(app.config['MAIL_SERVER'], app.config['MAIL_PORT']),
             fromaddr=(app.config['MAIL_FROM']),
             # D873: a comma-separated list, split, or SMTPHandler sends to one malformed address
             toaddrs=[addr.strip() for addr in app.config['ERRORS_TO'].split(',') if addr.strip()],
             subject='PieFed error',
-            credentials=auth, secure=secure, timeout=5.0)
+            credentials=auth, use_tls=app.config['MAIL_USE_TLS'], timeout=5.0)
         mail_handler.setLevel(logging.ERROR)
         mail_handler.addFilter(onion_scrub)
         app.logger.addHandler(mail_handler)
