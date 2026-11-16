@@ -31,6 +31,13 @@ class TestStamping:
         apply_audit(user, 'ip_address', '198.51.100.4')
         assert user.ip_address == '198.51.100.4' and user.ip_address_at >= before
 
+    def test_the_onion_sentinel_gets_no_date(self, app, api_baseline):
+        """No stored time ties an onion account to its activity (security review 2026-11-16)."""
+        user = make_user(api_baseline.instance_local, 'onion', local=True)
+        user.ip_address_at = utcnow()
+        apply_audit(user, 'ip_address', ONION_ACCOUNT_IP)
+        assert user.ip_address == ONION_ACCOUNT_IP and user.ip_address_at is None
+
     def test_something_without_a_date_is_set_alone(self, app, api_baseline):
         instance = api_baseline.instance_remote
         apply_audit(instance, 'ip_address', '198.51.100.9')
@@ -61,7 +68,7 @@ class TestClearing:
                         ip=ONION_ACCOUNT_IP, country=None)
         assert clear_old_ip_addresses() == 0
         db.session.refresh(onion)
-        assert onion.ip_address == ONION_ACCOUNT_IP
+        assert onion.ip_address == ONION_ACCOUNT_IP and onion.ip_address_at is None   # and keeps no date
 
     def test_a_failure_rolls_back_and_is_raised(self, app, api_baseline, monkeypatch):
         monkeypatch.setattr('app.shared.tasks.maintenance.utcnow', MagicMock(side_effect=RuntimeError('down')))
@@ -105,10 +112,12 @@ def test_the_migration_dates_stored_addresses_by_when_the_account_was_last_seen(
     user.ip_address, user.last_seen = '203.0.113.7', seen
     bare = make_user(api_baseline.instance_local, 'bare', local=True)
     bare.ip_address = None
+    onion = make_user(api_baseline.instance_local, 'onion', local=True)
+    onion.ip_address, onion.last_seen = ONION_ACCOUNT_IP, seen
     db.session.commit()
     with Operations.context(MigrationContext.configure(db.session.connection())):
         load().downgrade()
         load().upgrade()
-    rows = dict(db.session.execute(text('SELECT id, ip_address_at FROM "user" WHERE id IN (:a, :b)'),
-                                   {'a': user.id, 'b': bare.id}).all())
-    assert abs((rows[user.id] - seen).total_seconds()) < 1 and rows[bare.id] is None
+    rows = dict(db.session.execute(text('SELECT id, ip_address_at FROM "user" WHERE id IN (:a, :b, :c)'),
+                                   {'a': user.id, 'b': bare.id, 'c': onion.id}).all())
+    assert abs((rows[user.id] - seen).total_seconds()) < 1 and rows[bare.id] is None and rows[onion.id] is None

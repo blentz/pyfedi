@@ -18,8 +18,9 @@ depends_on = None
 
 def upgrade():
     op.add_column('user', sa.Column('ip_address_at', sa.DateTime()))
+    # Not the onion accounts' sentinel ('169.254.88.88', app.onion.ONION_ACCOUNT_IP): no date ties one to activity
     op.execute("UPDATE \"user\" SET ip_address_at = COALESCE(last_seen, created) "
-               "WHERE ip_address IS NOT NULL AND ip_address <> ''")
+               "WHERE ip_address IS NOT NULL AND ip_address <> '' AND ip_address <> '169.254.88.88'")
 
 
 def downgrade():

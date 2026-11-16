@@ -121,11 +121,13 @@ def has_real_ip(user) -> bool:
 
 def apply_audit(obj, field: str, result) -> None:
     """Set `obj.field` to an audit result, unless the result is `KEEP`, and stamp `obj.<field>_at` where it has one: an
-    account's IP address is cleared a year after it was recorded (app/shared/tasks/maintenance.py)."""
+    account's IP address is cleared a year after it was recorded (app/shared/tasks/maintenance.py). The onion accounts'
+    sentinel is no address and gets no date: a stored time would tie the account to its activity (onion unlinkability,
+    spec 2026-10-26; security review 2026-11-16)."""
     if result is not KEEP:
         setattr(obj, field, result)
         if hasattr(obj, f'{field}_at'):
-            setattr(obj, f'{field}_at', utcnow())
+            setattr(obj, f'{field}_at', None if result == ONION_ACCOUNT_IP else utcnow())
 
 
 def stamp_activity(user, clear_unread: bool = False) -> None:

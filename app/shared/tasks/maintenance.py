@@ -45,6 +45,9 @@ def clear_old_ip_addresses() -> int:
             User.ip_address.isnot(None), User.ip_address != ONION_ACCOUNT_IP, User.banned.isnot(True)) \
             .update({User.ip_address: None, User.ip_address_country: None, User.ip_address_at: None},
                     synchronize_session=False)
+        # The onion accounts' sentinel is no address and keeps no date (onion unlinkability)
+        session.query(User).filter(User.ip_address == ONION_ACCOUNT_IP, User.ip_address_at.isnot(None)) \
+            .update({User.ip_address_at: None}, synchronize_session=False)
         session.commit()
         return cleared
     except Exception:
