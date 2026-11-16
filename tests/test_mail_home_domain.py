@@ -217,3 +217,21 @@ def test_the_background_email_of_an_onion_account_links_to_the_onion(app, accoun
     assert CANONICAL not in sent[onion_user.email]
     assert f'https://{CANONICAL}/' in sent[clear_user.email]
     assert ONION not in sent[clear_user.email]
+
+
+def test_a_digest_to_an_account_without_a_token_has_no_unsubscribe_header(app, accounts):
+    """unread_notifications.html says to use the settings instead; url_for cannot build the link."""
+    onion_user, clear_user = accounts
+    clear_user.verification_token = None
+    clear_user.email_unread = True
+    clear_user.email_unread_sent = False
+    clear_user.last_seen = utcnow() - timedelta(days=2)
+    db.session.add(Notification(user_id=clear_user.id, title='a notification', url='/x', notif_type=NOTIF_POST,
+                                created_at=utcnow() - timedelta(hours=1)))
+    db.session.commit()
+    links = {}
+    with patch('app.cli.send_email', lambda *a, **k: links.update({k['recipients'][0]: k['list_unsubscribe']})):
+        cli.register(current_app)
+        result = current_app.test_cli_runner().invoke(args=['send_missed_notifs'])
+    assert result.exception is None, result.exception
+    assert links[clear_user.email] is None

@@ -119,8 +119,10 @@ def send_newsletter(form):
         with home_storefront(reader):   # each reader's links name their own domain (spec §3.2)
             body_text = render_template('email/newsletter.txt', recipient=reader, content=form.body_text.data)
             body_html = render_template('email/newsletter.html', recipient=reader, content=form.body_html.data)
+            # an account without a token has no link, in the body or the header, as newsletter.html does
             unsubscribe = url_for('user.user_newsletter_unsubscribe', user_id=reader.id,
-                                  token=reader.verification_token, _external=True)
+                                  token=reader.verification_token, _external=True) \
+                if reader.verification_token else None
         if form.test.data:
             to = current_user.email
         else:

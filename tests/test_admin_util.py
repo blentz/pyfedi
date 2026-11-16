@@ -234,6 +234,21 @@ class TestTheNewsletter:
         assert send.call_args.kwargs['recipients'] == \
             ['reader@probeland.test']
 
+    def test_an_account_with_a_token_gets_a_one_click_unsubscribe_header(self, env, subscriber):
+        subscriber.verification_token = 'tok9'
+        db.session.commit()
+        with patch('app.admin.util.send_email') as send:
+            send_newsletter(_NewsletterForm())
+        assert send.call_args.kwargs['list_unsubscribe'].endswith(f'/user/newsletter/{subscriber.id}/tok9/unsubscribe')
+
+    def test_one_without_a_token_gets_none(self, env, subscriber):
+        """newsletter.html leaves the link out too; url_for cannot build one."""
+        subscriber.verification_token = None
+        db.session.commit()
+        with patch('app.admin.util.send_email') as send:
+            send_newsletter(_NewsletterForm())
+        assert send.call_args.kwargs['list_unsubscribe'] is None
+
     def test_it_does_not_go_to_anybody_who_did_not(self, env, subscriber):
         subscriber.newsletter = False
         db.session.commit()
