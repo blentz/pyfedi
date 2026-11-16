@@ -11,6 +11,7 @@ from app.payments.code_text import normalise
 
 DISCOUNT_KINDS = ('percent', 'amount')
 HOLD = timedelta(days=1)   # how long an unpaid checkout keeps its use
+HELD_CODE = 'discount_code'   # the session key of a discount code a member typed, for their next checkout (D1)
 NO_CODES = ('paypal', 'link')   # PayPal has no coupons for subscriptions (Q3); a link-out takes nothing here
 
 

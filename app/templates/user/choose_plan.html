@@ -4,143 +4,88 @@
     {% extends "base.html" -%}
 {% endif -%}
 
-{% from 'bootstrap5/form.html' import render_field %}
+{# Upstream's donation page (plan 2026-11-16-donations-and-membership-pages.md DM2), with this site's offers. #}
 {% block app_content %}
 <div class="row">
     <main class="col-12 col-lg-8 position-relative main_pane">
-        <h1 class="mb-4">{{ _('Your membership of %(instance_name)s', instance_name=branding.name) if paid_domain else _('Donate to %(instance_name)s', instance_name=branding.name) }}</h1>
-
-        {% if subscriptions -%}
-            <h2>{{ _('Your subscriptions') if paid_domain or subscriptions|selectattr('current_period_end')|list else _('Your regular donations') }}</h2>
-            {% if complimentary -%}
+        <h1 class="mb-4">{{ _('Donate to %(instance_name)s', instance_name=branding.name) }}</h1>
+        {% if complimentary -%}
             <p>{{ _('Your membership is complimentary: there is nothing to pay.') }}</p>
-            {% else -%}
-            <p class="text-muted">{{ _('Thank you for your support. A plan chosen below replaces any other in its group.') }}</p>
-            {% endif -%}
-            <div class="row mb-4">
-                {% for subscription in subscriptions -%}
-                    <div class="col-12 col-md-6 mb-3">
-                        <div class="card">
-                            <div class="card-header">
-                                <h3 class="card-title">{{ titles.get(subscription.offer_id) or _('Regular donation') }}</h3>
-                            </div>
-                            <div class="card-body">
-                                {% if subscription.provider_kind == 'complimentary' -%}
-                                <p>{{ _('Complimentary, with no end date.') }}</p>
-                                {% elif subscription.ends_at -%}
+        {% elif not subscriptions -%}
+            <p>{{ _("By supporting %(instance_name)s financially you will be helping to build a better internet for everyone.",
+                    instance_name=branding.name) }}</p>
+            <p>{{ _("Please choose from one of the plans below.") }}</p>
+        {% endif -%}
+        <div class="row">
+            {% for subscription in subscriptions -%}
+                <div class="col col-4-md">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">{{ _('Manage existing donation plan') }}</h3>
+                        </div>
+                        <div class="card-body">
+                            <p>{{ titles.get(subscription.offer_id) or _('Regular donation') }}</p>
+                            {% if subscription.ends_at -%}
                                 <p>{{ _('Cancelled. It runs until %(date)s.', date=subscription.ends_at.strftime('%Y-%m-%d')) }}</p>
-                                {% else -%}
+                            {% else -%}
                                 {% if subscription.current_period_end -%}
-                                <p>{{ _('Paid until %(date)s. It does not renew by itself: pay again below before then.', date=subscription.current_period_end.strftime('%Y-%m-%d')) }}</p>
+                                    <p>{{ _('Paid until %(date)s. It does not renew by itself: pay again below before then.', date=subscription.current_period_end.strftime('%Y-%m-%d')) }}</p>
                                 {% endif -%}
-                                {% if member and subscription.provider_kind != 'gift' -%}
+                                {% if member -%}
                                 <form method="post" action="{{ url_for('payments.cancel', subscription_id=subscription.id) }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="btn btn-primary">{{ _('Cancel subscription') if paid_domain or subscription.current_period_end else _('Cancel regular donation') }}</button>
+                                    <button type="submit" class="btn btn-primary">{{ _('Cancel regular donation') }}</button>
                                 </form>
-                                <p class="text-muted small">{{ _('Cancelling stops payment now; what you have paid for runs to the end of this month of it.') }}</p>
                                 {% endif -%}
-                                {% endif -%}
-                            </div>
+                            {% endif -%}
+                            {% if member and current_user.stripe_customer_id -%}
+                                <p class="text-muted mt-4">{{ _('When your credit card expires you will need to add a new one to continue your donations.') }}</p>
+                                <form method="post" action="{{ url_for('payments.billing') }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-primary">{{ _('Update credit card details') }}</button>
+                                </form>
+                            {% endif -%}
                         </div>
                     </div>
-                {% endfor -%}
-            </div>
-            {% if member and current_user.stripe_customer_id -%}
-                <p class="text-muted">{{ _('When your credit card expires you will need to add a new one to keep your subscription.') if paid_domain else _('When your credit card expires you will need to add a new one to continue your donations.') }}</p>
-                <form method="post" action="{{ url_for('payments.billing') }}" class="mb-4">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-primary">{{ _('Update credit card details') }}</button>
-                </form>
-            {% endif -%}
-        {% else -%}
-            {% if not paid_domain -%}
-            <p>{{ _('By supporting %(instance_name)s financially you will be helping to build a better internet for everyone.', instance_name=branding.name) }}</p>
-            {% endif -%}
-        {% endif -%}
-
-        {% if links -%}
-            <div class="row mb-3">
-                {% for link in links -%}
-                    <div class="col-12 col-md-6 mb-3">
-                        <div class="card">
-                            <div class="card-header">
-                                <h3 class="card-title">{{ link.title }}</h3>
-                            </div>
-                            <div class="card-body">
-                                <a class="btn btn-primary" href="{{ link.url }}" rel="noopener noreferrer nofollow">{{ _('Go to this page') }}</a>
-                            </div>
+                </div>
+            {% endfor -%}
+            {% for offer in plans -%}
+                <div class="col col-4-md">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">{{ offer.title }}</h3>
                         </div>
-                    </div>
-                {% endfor -%}
-            </div>
-        {% endif -%}
-
-        {% for group, offers in groups.items() -%}
-            <div class="row mb-3">
-                {% for offer in offers -%}
-                    <div class="col-12 col-md-6 mb-3">
-                        <div class="card">
-                            <div class="card-header">
-                                <h3 class="card-title">{{ offer.title }}</h3>
-                            </div>
-                            <div class="card-body">
+                        <div class="card-body">
+                            {% if offer.kind == 'link' -%}
+                                <a class="btn btn-primary" href="{{ offer.url }}" rel="noopener noreferrer nofollow">{{ _('Go to this page') }}</a>
+                            {% else -%}
                                 {% if offer.amount_minor is not none -%}
-                                    <p>{{ money(offer.amount_minor, offer.currency) }}{% if offer.interval %} / {{ offer.interval }}{% endif %}
-                                    {%- if btc_prices.get(offer.id) %}<br><span class="text-muted">{{ _('%(amount)s BTC today', amount=btc_prices[offer.id]) }}</span>{% endif %}</p>
+                                    <p>{{ money(offer.amount_minor, offer.currency) }}{% if offer.interval %} / {{ offer.interval }}{% endif %}</p>
                                 {% endif -%}
-                                {% if offer.id in joinable -%}
-                                    <a class="btn btn-primary" href="{{ url_for('auth.register', offer=offer.id) }}">{{ _('Join') }}</a>
-                                {% elif current_user.is_anonymous and offer.kind == 'subscription' -%}
-                                    <a class="btn btn-primary" href="{{ url_for('auth.login', next=url_for('payments.donations')) }}">{{ _('Log in to subscribe') }}</a>
+                                {% if current_user.is_anonymous and offer.kind == 'subscription' -%}
+                                    <a class="btn btn-primary" href="{{ url_for('auth.login', next=url_for('payments.donations')) }}">{{ _('Log in to donate regularly') }}</a>
                                 {% else -%}
                                     <form method="post" action="{{ url_for('payments.checkout', offer_id=offer.id) }}">
                                         {% if current_user.is_authenticated %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endif %}
-                                        <button type="submit" class="btn btn-primary">{{ _('Pay for one %(period)s', period=offer.interval) if offer.id in prepaid and offer.kind == 'subscription' else _('Subscribe') if paid_domain else _('Donate regularly') if offer.kind == 'subscription' else _('Donate once') }}</button>
+                                        <button type="submit" class="btn btn-primary">{{ _('Pay for one %(period)s', period=offer.interval) if offer.id in prepaid and offer.kind == 'subscription' else _('Donate regularly') if offer.kind == 'subscription' else _('Donate once') }}</button>
                                     </form>
                                 {% endif -%}
-                            </div>
+                            {% endif -%}
                         </div>
                     </div>
-                {% endfor -%}
-            </div>
-        {% endfor -%}
-
-        {% if held_code -%}
-            <div class="alert alert-info">
-                {{ _('Code %(code)s: %(off)s off your next payment.', code=held_code.code,
-                     off=(held_code.percent|string + '%') if held_code.kind == 'percent' else money(held_code.amount_minor, currency or 'usd')) }}
-                <form method="post" action="{{ url_for('payments.clear_code') }}" class="d-inline">
-                    {{ clear_form.hidden_tag() }}
-                    <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Clear it') }}</button>
-                </form>
-            </div>
-        {% endif -%}
-        {% if redeem_form -%}
-            <h2 class="mt-4">{{ _('Have a code?') }}</h2>
-            <form method="post" action="{{ url_for('payments.redeem') }}" class="mb-4">
-                {{ redeem_form.hidden_tag() }}
-                {{ render_field(redeem_form.code) }}
-                {{ render_field(redeem_form.redeem) }}
-            </form>
+                </div>
+            {% endfor -%}
+        </div>
+        {% if currency_name -%}
+        <p class="mt-4">{{ _('Prices are in %(currency)s.', currency=currency_name) }}</p>
         {% endif -%}
 
-        {% if payments -%}
-            <h2 class="mt-4">{{ _('Your payments') }}</h2>
-            <table class="table">
-                <thead><tr><th>{{ _('Date') }}</th><th>{{ _('For') }}</th><th>{{ _('Amount') }}</th><th>{{ _('Status') }}</th></tr></thead>
-                <tbody>
-                    {% for payment in payments -%}
-                        <tr>
-                            <td>{{ localize_datetime(payment.created_at, locale) }}</td>
-                            <td>{{ titles.get(payment.offer_id) or _('Donation') }}</td>
-                            <td>{{ money(payment.amount_minor, payment.currency) }}</td>
-                            <td>{{ {'paid': _('Paid'), 'refunded': _('Refunded')}.get(payment.status, _('Under review')) }}</td>
-                        </tr>
-                    {% endfor -%}
-                </tbody>
-            </table>
-        {% endif -%}
+        <h3>{{ _('Support PieFed development') }}</h3>
+        <p>{{ _('PieFed is free and open-source software while operating without any advertising, monetization, or reliance on venture capital. Your donations are vital in supporting the PieFed development effort, allowing us to expand and enhance PieFed with new features.') }}</p>
+
+        <p><a type="button" class="btn btn-primary" href="https://www.patreon.com/PieFed">{{ _('Donate using Patreon') }}</a>
+        or
+        <a type="button" class="btn btn-primary" href="https://liberapay.com/PieFed/">{{ _('Donate using Liberapay') }}</a></p>
     </main>
 </div>
 {% endblock %}

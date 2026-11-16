@@ -1,0 +1,82 @@
+{# [membership] in a CMS page (app/payments/shortcodes.py; plan 2026-11-16-donations-and-membership-pages.md DM3): the
+signed-in member's membership, what they can do about it, and their payments. Its forms come back to this page. -#}
+{% from 'bootstrap5/form.html' import render_field -%}
+<div class="membership">
+{% if current_user.is_anonymous -%}
+    <p><a class="btn btn-primary" href="{{ url_for('auth.login', next=here) }}">{{ _('Log in to see your membership') }}</a></p>
+{%- else -%}
+    <h2>{{ _('Your membership') }}</h2>
+    {% if not subscriptions -%}
+        <p>{{ _('You have no subscription at the moment.') }}</p>
+    {% endif -%}
+    {% for subscription in subscriptions -%}
+        <div class="card mb-3">
+            <div class="card-header"><h3 class="card-title">{{ titles.get(subscription.offer_id) or _('Subscription') }}</h3></div>
+            <div class="card-body">
+                {% if subscription.provider_kind == 'complimentary' -%}
+                    <p>{{ _('Complimentary, with no end date.') }}</p>
+                {% elif subscription.ends_at -%}
+                    <p>{{ _('Cancelled. It runs until %(date)s.', date=subscription.ends_at.strftime('%Y-%m-%d')) }}</p>
+                {% else -%}
+                    {% if subscription.current_period_end -%}
+                        <p>{{ _('Paid until %(date)s. It does not renew by itself: pay again before then.', date=subscription.current_period_end.strftime('%Y-%m-%d')) }}</p>
+                    {% elif subscription.renews_at -%}
+                        <p>{{ _('Renews on %(date)s.', date=subscription.renews_at.strftime('%Y-%m-%d')) }}</p>
+                    {% endif -%}
+                    {% if member and subscription.provider_kind != 'gift' -%}
+                        <form method="post" action="{{ url_for('payments.cancel', subscription_id=subscription.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="next" value="{{ here }}">
+                            <button type="submit" class="btn btn-primary">{{ _('Cancel subscription') }}</button>
+                        </form>
+                        <p class="text-muted small">{{ _('Cancelling stops payment now; what you have paid for runs to the end of this month of it.') }}</p>
+                    {% endif -%}
+                {% endif -%}
+            </div>
+        </div>
+    {% endfor -%}
+    {% if member and current_user.stripe_customer_id -%}
+        <form method="post" action="{{ url_for('payments.billing') }}" class="mb-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ here }}">
+            <button type="submit" class="btn btn-outline-secondary">{{ _('Update credit card details') }}</button>
+        </form>
+    {% endif -%}
+    {% if held_code -%}
+        <div class="alert alert-info">
+            {{ _('Code %(code)s: %(off)s off your next payment.', code=held_code.code,
+                 off=(held_code.percent|string + '%') if held_code.kind == 'percent' else money(held_code.amount_minor, currency or 'usd')) }}
+            <form method="post" action="{{ url_for('payments.clear_code') }}" class="d-inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="next" value="{{ here }}">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Clear it') }}</button>
+            </form>
+        </div>
+    {% endif -%}
+    {% if redeem_form -%}
+        <h3 class="mt-3">{{ _('Have a code?') }}</h3>
+        <form method="post" action="{{ url_for('payments.redeem') }}" class="mb-4">
+            {{ redeem_form.hidden_tag() }}
+            <input type="hidden" name="next" value="{{ here }}">
+            {{ render_field(redeem_form.code) }}
+            {{ render_field(redeem_form.redeem) }}
+        </form>
+    {% endif -%}
+    {% if payments -%}
+        <h3 class="mt-3">{{ _('Your payments') }}</h3>
+        <table class="table">
+            <thead><tr><th>{{ _('Date') }}</th><th>{{ _('For') }}</th><th>{{ _('Amount') }}</th><th>{{ _('Status') }}</th></tr></thead>
+            <tbody>
+                {% for payment in payments -%}
+                    <tr>
+                        <td>{{ localize_datetime(payment.created_at, locale) }}</td>
+                        <td>{{ titles.get(payment.offer_id) or _('Donation') }}</td>
+                        <td>{{ money(payment.amount_minor, payment.currency) }}</td>
+                        <td>{{ {'paid': _('Paid'), 'refunded': _('Refunded')}.get(payment.status, _('Under review')) }}</td>
+                    </tr>
+                {% endfor -%}
+            </tbody>
+        </table>
+    {% endif -%}
+{%- endif %}
+</div>

@@ -189,13 +189,6 @@ class TestCheckout:
         assert json.loads(route.calls[0].request.content)['amount'] == '0.00006660'
         assert db.session.get(BtcpayInvoice, 'inv1').expected_minor == 333
 
-    @respx.mock
-    def test_the_plans_page_shows_todays_bitcoin_price(self, env):
-        fixed(utcnow().date(), '50000')
-        with env.client.session_transaction() as session:
-            session['_user_id'], session['_fresh'] = str(env.member.id), True
-        assert '0.00013320 BTC' in env.client.get('/donations').get_data(as_text=True)
-
 
 def settled_invoice(amount, currency='BTC', **extra):
     return {'id': 'inv1', 'status': 'Settled', 'amount': amount, 'currency': currency,

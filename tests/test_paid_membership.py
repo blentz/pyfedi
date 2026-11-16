@@ -400,10 +400,10 @@ class TestJoinButtons:
         login(env.client, member(env))
         assert self.page(env, f'[checkout {env.duke.id}]').find('form', action=f'/donations/checkout/{env.duke.id}')
 
-    def test_the_plans_page_says_join_too(self, env):
+    def test_the_donations_page_offers_no_tiers(self, env):
+        """Tiers are joined from the membership page's [checkout N] buttons (2026-11-16 DM1, DM2)."""
         page = BeautifulSoup(env.client.get('/donations', base_url=env.base).get_data(as_text=True), 'html.parser')
-        hrefs = {link['href'] for link in page.find_all('a', string='Join')}
-        assert hrefs == {f'/auth/register?offer={env.knight.id}', f'/auth/register?offer={env.duke.id}'}
+        assert not page.find_all('a', string='Join') and 'Furcas' not in page.get_text()
 
 
 def gift_of(user):
@@ -587,9 +587,11 @@ class TestRedeeming:
         response = env.client.post('/donations/redeem', data={'code': 'x'}, base_url=env.base)
         assert response.status_code == 302 and '/auth/login' in response.headers['Location']
 
-    def test_the_plans_page_offers_it_to_a_member(self, env):
+    def test_the_membership_page_offers_it_to_a_member(self, env):
+        db.session.add(CmsPage(url='/subscribe', title='Subscribe', body='[membership]', body_html='<p>[membership]</p>'))
+        db.session.commit()
         login(env.client, member(env, 'reader'))
-        assert 'name="code"' in env.client.get('/donations', base_url=env.base).get_data(as_text=True)
+        assert 'name="code"' in env.client.get('/subscribe', base_url=env.base).get_data(as_text=True)
 
 
 class TestCodesAreRateLimited:

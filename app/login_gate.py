@@ -10,6 +10,7 @@ from flask import abort, current_app, flash, jsonify, redirect, request, url_for
 from flask_babel import _
 from flask_login import current_user
 
+from app.cms import membership_page_url
 from app.storefront import current_storefront
 from app.utils import authorise_api_user, is_activitypub_request, login_redirect, login_required_here
 
@@ -76,7 +77,7 @@ def refuse_lapsed() -> object | None:
     if request.headers.get('HX-Request'):
         return '', 403
     flash(_('Your subscription has ended. Renew it to carry on using this site.'), 'warning')
-    return redirect(url_for('payments.donations'))
+    return redirect(membership_page_url())   # their membership page (plan 2026-11-16 DM4)
 
 
 def _federation_endpoint() -> bool:

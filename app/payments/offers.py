@@ -6,7 +6,7 @@ from flask_babel import get_locale
 from flask_login import current_user
 
 from app import cache, db
-from app.models import Offer, OfferDomain
+from app.models import Offer, OfferDomain, SiteDomain
 from app.onion import is_onion_request
 from app.payments.adapters import adapter_for
 from app.storefront import current_storefront
@@ -28,6 +28,18 @@ def offers_on(domain_id: int | None, onion: bool) -> list[Offer]:
             usable[offer.provider_kind] = adapter is not None and adapter.available() and (not onion or adapter.on_onion())
     return [offer for offer in offers
             if usable[offer.provider_kind] and (offer.id not in limited or domain_id in limited[offer.id])]
+
+
+def membership_groups() -> frozenset[str]:
+    """The offer groups some domain's membership is paid for with (plan 2026-11-16 DM1)."""
+    return frozenset(db.session.execute(db.select(Offer.offer_group).join(
+        SiteDomain, SiteDomain.registration_offer_id == Offer.id)).scalars())
+
+
+def is_tier(offer: Offer | None, groups: frozenset[str] | None = None) -> bool:
+    """A membership tier: a subscription in a membership group. Anything else on offer is a donation (DM1)."""
+    return offer is not None and offer.kind == 'subscription' and \
+        offer.offer_group in (membership_groups() if groups is None else groups)
 
 
 def offers_here() -> list[Offer]:

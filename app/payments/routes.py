@@ -1,9 +1,10 @@
-"""Provider webhooks, and the member's page for paying and for stopping paying.
+"""Provider webhooks, the donation page, and what a member's forms post to: paying, stopping paying, codes.
 
 A browser coming back from a provider grants nothing: only a verified webhook does (spec, Security).
 """
 from flask import abort, flash, g, redirect, request, session, url_for
-from flask_babel import _
+from babel.numbers import get_currency_name
+from flask_babel import _, get_locale
 from flask_login import current_user
 from flask_wtf import FlaskForm
 
@@ -14,19 +15,18 @@ from app.onion import clearnet_only, is_onion_request
 from app.payments import bp
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
-from app.payments.btc_price import todays_btc_price
 from app.payments.core import active_subscriptions_of, apply_event, cancel_subscription
-from app.payments.discounts import find_discount_code, reserve
+from app.payments.discounts import HELD_CODE, find_discount_code, reserve
 from app.payments.forms import RedeemCodeForm
 from app.payments.gifts import checking_codes, find_gift_code, start_gift
-from app.payments.offers import LINK, offers_here
+from app.payments.offers import LINK, is_tier, membership_groups, offers_here
 from app.payments.registration import joinable_tier_ids
 from app.storefront import current_storefront, paid_registration
-from app.utils import get_setting, login_required, login_required_if_private_instance, render_template
+from app.utils import get_setting, login_required, login_required_if_private_instance, render_template, \
+    safe_redirect_target
 
 HISTORY_ROWS = 100
 NOT_CANCELLED = ('gift', COMPLIMENTARY)   # by the member: neither is a payment (B6, K6)
-HELD_CODE = 'discount_code'   # a discount code a member typed, for their next checkout (plan phase 3 D1)
 
 
 @bp.route('/payments/webhook/<kind>', methods=['POST'])
@@ -54,44 +54,42 @@ def stripe_webhook():
 @login_required_if_private_instance
 @limiter.limit('100 per 10 minutes')   # which makes it session first on the onion: checkout is a POST, and can't be sent round
 def donations():
-    """The offers, and the way to stop paying. Not /donate: that is a CMS page an admin may delete, and a donor must
-    still be able to cancel. The seeded /donate page links here on every site, so with nothing to offer this says so on
-    the page itself: a logged-out visitor has no session cookie, so a flash would not survive a redirect."""
-    offers = offers_here()
+    """Upstream's donation page (plan 2026-11-16 DM2): the donations on offer here and a donor's regular donations, to
+    give or to stop. Membership is not here: tiers, codes and their status are on the membership page ([membership]).
+    Not /donate: that is a CMS page an admin may delete, and a donor must still be able to cancel. The seeded /donate
+    page links here on every site, so with nothing to offer this says so on the page itself: a logged-out visitor has
+    no session cookie, so a flash would not survive a redirect."""
+    groups = membership_groups()
+    offers = [offer for offer in offers_here() if not is_tier(offer, groups)]
     onion = is_onion_request()
-    member = current_user.is_authenticated and not onion   # the card and the history stay off the onion
-    # A prepaid period has nothing to cancel or manage, so it can be shown there. The rest couldn't be acted on.
+    member = current_user.is_authenticated and not onion   # the card stays off the onion
+    # A prepaid period has nothing to manage at a provider, so it can be shown there. The rest couldn't be acted on.
     subscriptions = [row for row in active_subscriptions_of(current_user)
-                     if not onion or row.current_period_end or row.provider_kind == COMPLIMENTARY] \
-        if current_user.is_authenticated else []
+                     if row.provider_kind not in NOT_CANCELLED and not is_tier(_offer(row.offer_id), groups)
+                     and (not onion or row.current_period_end)] if current_user.is_authenticated else []
     if not offers and not subscriptions:
         return render_template('generic_message.html', title=_('Donation plans'),
                                message=_('Donation plans are not available on this site.')), 404
     prepaid = {offer.id for offer in offers if offer.provider_kind != LINK and adapter_for(offer.provider_kind).prepaid}
     held = {subscription.offer_id for subscription in subscriptions} - prepaid   # one prepaid is renewed by paying again
-    links = [offer for offer in offers if offer.kind == LINK]
-    groups = {}
-    for offer in offers:
-        if offer.kind != LINK and offer.id not in held:   # choosing one held would start a second and cancel the first
-            groups.setdefault(offer.offer_group, []).append(offer)
-    payments = Payment.query.filter_by(user_id=current_user.id).order_by(Payment.created_at.desc()).limit(HISTORY_ROWS).all() \
-        if member else []
-    titles = {offer.id: offer.title for offer in Offer.query.all()}
-    paid_domain = paid_registration(current_storefront())   # a fee to belong here is no donation, whatever else is on offer
     complimentary = complimentary_of(current_user) is not None
-    if complimentary:   # nothing to pay, so nothing on offer (K5)
-        groups, links = {}, []
-    return render_template('user/choose_plan.html', title=_('Your membership') if paid_domain else _('Choose a donation plan'),
-                           groups=groups, links=links, subscriptions=subscriptions, payments=payments, titles=titles,
-                           member=member, paid_domain=paid_domain, prepaid=prepaid,
-                           joinable=joinable_tier_ids(g.site) if current_user.is_anonymous else frozenset(),
-                           redeem_form=RedeemCodeForm() if current_user.is_authenticated and not complimentary else None,
-                           held_code=find_discount_code(session.get(HELD_CODE))
-                           if current_user.is_authenticated and not complimentary else None,
-                           complimentary=complimentary,
-                           btc_prices={offer.id: todays_btc_price(offer.amount_minor, offer.currency)
-                                       for offer in offers if offer.provider_kind == 'btcpay'},
-                           clear_form=FlaskForm(), currency=get_setting('payment_currency'))
+    # Choosing one held would start a second and cancel the first; complimentary membership pays nothing (K5)
+    plans = [] if complimentary else [offer for offer in offers if offer.id not in held]
+    currency = get_setting('payment_currency') or next((offer.currency for offer in offers if offer.currency), None)
+    return render_template('user/choose_plan.html', title=_('Choose a donation plan'), plans=plans,
+                           subscriptions=subscriptions, titles={offer.id: offer.title for offer in Offer.query.all()},
+                           member=member, prepaid=prepaid, complimentary=complimentary,
+                           currency_name=get_currency_name(currency.upper(), count=2, locale=str(get_locale() or 'en'))
+                           if currency else None)
+
+
+def _offer(offer_id: int | None) -> Offer | None:
+    return db.session.get(Offer, offer_id) if offer_id else None
+
+
+def _back():
+    """Back to the page a member's form was on (the membership page, DM3), or /donations."""
+    return redirect(safe_redirect_target(request.form.get('next'), url_for('payments.donations')))
 
 
 @bp.route('/donations/redeem', methods=['POST'])
@@ -116,7 +114,7 @@ def redeem():
         else:
             db.session.rollback()   # the code's row lock
             flash(_('That code cannot be used.'), 'error')
-    return redirect(url_for('payments.donations'))
+    return _back()
 
 
 @bp.route('/donations/code/clear', methods=['POST'])
@@ -124,7 +122,7 @@ def redeem():
 def clear_code():
     """Forget a held discount code. The site's CSRF protection turns away a POST without its token before this runs."""
     session.pop(HELD_CODE, None)
-    return redirect(url_for('payments.donations'))
+    return _back()
 
 
 @bp.route('/donations/checkout/<int:offer_id>', methods=['POST'])
@@ -146,7 +144,7 @@ def checkout(offer_id):
 def _complimentary():
     """Somebody holding complimentary membership is not asked to pay, and their payment is not taken (K5)."""
     flash(_('Your membership is complimentary: there is nothing to pay.'))
-    return redirect(url_for('payments.donations'))
+    return _back()
 
 
 @login_required
@@ -157,7 +155,7 @@ def _member_checkout(offer):
         found = find_discount_code(session[HELD_CODE])
         if found is None or reserve(current_user, found, offer) is None:
             flash(_('Your code cannot be used for this. Clear it to pay the full price.'), 'error')
-            return redirect(url_for('payments.donations'))
+            return _back()
         discount = found
     answer = _start_checkout(offer, current_user, discount)
     # A redirect to the provider: the code is on its way. A provider that is down answers (page, 503): kept for a retry
@@ -191,10 +189,10 @@ def cancel(subscription_id):
         cancel_subscription(subscription)
     except ProviderError:
         flash(_('The payment provider is unavailable at the moment. Please try again later.'), 'error')
-        return redirect(url_for('payments.donations'))
+        return _back()
     flash(_('Your subscription will run until %(date)s.', date=subscription.ends_at.strftime('%Y-%m-%d')) if subscription.ends_at
           else _('Your regular donation has been cancelled.'))
-    return redirect(url_for('payments.donations'))
+    return _back()
 
 
 @bp.route('/donations/billing', methods=['POST'])
@@ -203,13 +201,13 @@ def cancel(subscription_id):
 def billing():
     if not current_user.stripe_customer_id:   # nothing for the portal to manage yet
         flash(_('You do not have a donation to manage yet.'))
-        return redirect(url_for('payments.donations'))
+        return _back()
     try:
         return redirect(adapter_for('stripe').billing_portal_url(current_user.stripe_customer_id,
                                                                  url_for('payments.donations', _external=True)))
     except ProviderError:
         flash(_('The billing portal is unavailable at the moment. Please try again later.'), 'error')
-        return redirect(url_for('payments.donations'))
+        return _back()
 
 
 @bp.route('/donations/return/<result>')

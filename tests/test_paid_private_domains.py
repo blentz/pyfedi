@@ -13,7 +13,7 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import MemberSubscription, Offer, Payment, Site, SiteDomain, User, utcnow
+from app.models import CmsPage, MemberSubscription, Offer, Payment, Site, SiteDomain, User, utcnow
 from app.payments.core import apply_event, cancel_subscription
 from app.payments.events import Paid, SubscriptionEnded, SubscriptionStarted
 from app.payments.registration import registration_offer, remove_unpaid_registrations
@@ -517,27 +517,29 @@ class TestCancelling:
         row = MemberSubscription.query.filter_by(provider_reference='sub_1').one()
         row.ends_at = utcnow() + timedelta(days=20)
         db.session.commit()
+        db.session.add(CmsPage(url='/subscribe', title='Subscribe', body='[membership]', body_html='<p>[membership]</p>'))
+        db.session.commit()
         login(env.client, member)
 
-        body = env.client.get('/donations', base_url=PAID).get_data(as_text=True)
+        body = env.client.get('/subscribe', base_url=PAID).get_data(as_text=True)   # membership's page (2026-11-16 DM3)
 
-        assert row.ends_at.strftime('%Y-%m-%d') in body and 'Cancel regular donation' not in body
+        assert row.ends_at.strftime('%Y-%m-%d') in body and 'Cancel subscription' not in body
 
-    def test_a_fee_to_belong_here_is_not_called_a_donation(self, env):
+    def test_a_fee_to_belong_here_is_not_offered_as_a_donation(self, env):
+        """/donations is for donations; a membership tier is offered on the membership page (2026-11-16 DM1, DM2)."""
         login(env.client, a_member(env))
 
         body = env.client.get('/donations', base_url=PAID).get_data(as_text=True)
 
-        assert 'Subscribe' in body and 'Your membership of' in body
-        assert 'Donate regularly' not in body and 'By supporting' not in body
+        assert f'/donations/checkout/{env.offer.id}' not in body and 'Donate regularly' not in body
 
-    def test_elsewhere_it_still_is(self, env):
+    def test_nor_elsewhere(self, env):
         elsewhere = make_user(env.baseline.instance_local, 'elsewhere', local=True)
         elsewhere.site_domain_id = env.public.id
         db.session.commit()
         login(env.client, elsewhere, base=PUBLIC)
 
-        assert 'Donate regularly' in env.client.get('/donations', base_url=PUBLIC).get_data(as_text=True)
+        assert f'/donations/checkout/{env.offer.id}' not in env.client.get('/donations', base_url=PUBLIC).get_data(as_text=True)
 
     def test_the_period_ending_lapses_them(self, env, cancelled):
         member = a_member(env)

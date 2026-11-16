@@ -473,8 +473,7 @@ class TestThePage:
         body = env.client.get('/donations').get_data(as_text=True)
 
         assert row.current_period_end.strftime('%Y-%m-%d') in body
-        assert 'Pay for one month' in body and 'Cancel regular donation' not in body
-        assert 'Your subscriptions' in body and 'Your regular donations' not in body
+        assert 'Pay for one month' in body and 'Cancel regular donation' in body   # a prepaid one can be cancelled (B6)
 
     def test_on_the_onion_a_period_shows_and_a_card_doesnt(self, env):
         connect(onion='http://pay.onion')

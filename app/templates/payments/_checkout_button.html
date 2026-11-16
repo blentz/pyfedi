@@ -2,18 +2,21 @@
 {% if offer is none -%}
 <span class="text-muted">{{ _('Not available') }}</span>
 {%- elif complimentary -%}
-<a class="btn btn-outline-secondary" href="{{ url_for('payments.donations') }}">{{ _('Complimentary') }}</a>
+<a class="btn btn-outline-secondary" href="{{ membership_page_url() }}">{{ _('Complimentary') }}</a>
 {%- elif offer.kind == 'link' -%}
 <a class="btn btn-primary" href="{{ offer.url }}" rel="noopener noreferrer nofollow">{{ label or _('Go to this page') }}</a>
 {%- elif held -%}
-<a class="btn btn-outline-secondary" href="{{ url_for('payments.donations') }}">{{ _('Your current plan') }}</a>
-{%- elif joinable -%}
+<a class="btn btn-outline-secondary" href="{{ membership_page_url() }}">{{ _('Your current plan') }}</a>
+{%- else -%}
+{%- if joinable -%}
 <a class="btn btn-primary" href="{{ url_for('auth.register', offer=offer.id) }}">{{ _('Join') }}</a>
 {%- elif current_user.is_anonymous and offer.kind == 'subscription' -%}
 <a class="btn btn-primary" href="{{ url_for('auth.login', next=request.path) }}">{{ _('Log in to subscribe') }}</a>
 {%- else -%}
 <form method="post" action="{{ url_for('payments.checkout', offer_id=offer.id) }}" class="d-inline">
-    {%- if current_user.is_authenticated %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endif -%}
+    {%- if current_user.is_authenticated %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="next" value="{{ request.path }}">{% endif -%}
     <button type="submit" class="btn btn-primary">{{ label or (_('Pay for one %(period)s', period=offer.interval) if prepaid and offer.kind == 'subscription' else _('Subscribe') if offer.kind == 'subscription' else _('Donate once')) }}</button>
 </form>
+{%- endif -%}
+{%- if btc_price %} <span class="text-muted small">{{ _('%(amount)s BTC today', amount=btc_price) }}</span>{% endif -%}
 {%- endif %}
