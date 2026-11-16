@@ -417,3 +417,47 @@ class TestCodesMadeBeforeAPowerWasAdded:
         db.session.commit()
         assert set_offer_roles(env.admin, env.knight, [env.helper]) == 1
         assert db.session.get(PromoCode, row.id).active is False
+
+
+class TestPowersHeldTwice:
+    @pytest.fixture
+    def treasurer(self, env):
+        user = member(env, 'treasurer')
+        grant_permission(user, 'manage monetization')
+        return user
+
+    def second_domain(self):
+        shop = SiteDomain(domain='shop.tiers.example', scheme='https', federates=False)
+        db.session.add(shop)
+        db.session.commit()
+        clear_domain_cache()
+        return shop
+
+    def powered(self, name, *domains):
+        role = Role(name=name)
+        role.permissions.append(RolePermission(permission='administer all users', all_domains=True))
+        db.session.add(role)
+        db.session.commit()
+        return limit_role(role, *domains) if domains else role
+
+    def test_its_domains_add_up(self, env, treasurer):
+        shop = self.second_domain()
+        for role in (self.powered('Here', env.home), self.powered('There', shop)):
+            grant_role(env.admin, treasurer, role)
+        limit_role(env.helper, env.home, shop)
+        assert may_attach(treasurer, env.helper)
+
+    def test_every_domain_from_either_is_every_domain(self, env, treasurer):
+        grant_role(env.admin, treasurer, self.powered('Here', env.home))
+        grant_role(env.admin, treasurer, self.powered('Everywhere'))
+        assert may_attach(treasurer, env.helper)
+
+
+def test_access_that_lapsed_while_its_domain_charged_ends_them_at_once_once_it_is_free(env):
+    set_offer_roles(env.admin, env.knight, [env.supporter])
+    user = member(env)
+    start(user, env.knight)
+    user.access_lapsed_at = utcnow() - timedelta(hours=1)   # from when the domain charged
+    db.session.commit()
+    end()
+    assert not holds(user, env.supporter)

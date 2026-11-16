@@ -31,7 +31,7 @@ from app.payments.adapters.paypal_adapter import REQUIRED_EVENTS as PAYPAL_EVENT
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
 from app.payments.code_text import normalise
 from app.payments.core import refresh_access
-from app.roles import RoleError, describe_scopes, may_attach, may_manage_offer, permission_scopes, set_offer_roles
+from app.roles import describe_scopes, may_attach, may_manage_offer, permission_scopes, set_offer_roles
 from app.payments.discounts import DISCOUNT_KINDS
 from app.payments.gifts import AUTO, REFERRAL_BENEFIT_SETTING, Benefit, default_referral_choice, \
     referral_benefit
@@ -953,15 +953,12 @@ def admin_payments_offer_roles(offer_id):
     if request.method == 'POST' and FlaskForm().validate_on_submit():
         chosen = {int(value) for value in request.form.getlist('role') if value.isdigit()}
         keep = (chosen & changeable) | (carried - changeable)
-        try:
-            turned_off = set_offer_roles(current_user, offer, [role for role in roles if role.id in keep])
-            flash(_('Roles saved.'))
-            if turned_off:
-                flash(_('%(count)d code(s) for it were turned off: whoever made them may not hand out its roles.',
-                        count=turned_off), 'warning')
-        except RoleError as refused:
-            db.session.rollback()
-            flash(str(refused), 'error')
+        # Admin is not listed and a fixed role is kept as it is, so set_offer_roles has nothing here to refuse (T5)
+        turned_off = set_offer_roles(current_user, offer, [role for role in roles if role.id in keep])
+        flash(_('Roles saved.'))
+        if turned_off:
+            flash(_('%(count)d code(s) for it were turned off: whoever made them may not hand out its roles.',
+                    count=turned_off), 'warning')
         return redirect(url_for('admin.admin_payments_offer_roles', offer_id=offer.id))
     return render_template('admin/payments_offer_roles.html', title=_('Roles it gives'), offer=offer, form=FlaskForm(),
                            rows=[dict(role=role, carried=role.id in carried, changeable=role.id in changeable,
