@@ -1,6 +1,5 @@
 import html
 import smtplib
-import uuid
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate
@@ -13,7 +12,7 @@ from flask_babel import _  # todo: set the locale based on account_id so that _(
 
 from app import celery, db
 from app.branding import branding_for
-from app.mail_transport import tls_context
+from app.mail_transport import message_id, tls_context
 from app.models import Site
 from app.storefront import default_domain, default_storefront, home_storefront, storefront_html, storefront_url
 from app.utils import get_setting, markdown_to_html, html_to_text
@@ -243,7 +242,7 @@ class SMTPEmailService:
         self.msg["To"] = None
         self.msg["CC"] = None
         self.msg["BCC"] = None
-        self.msg["Message-ID"] = f"<{uuid.uuid4()}@{self.server_name}>"
+        self.msg["Message-ID"] = message_id(self.msg['From'], self.server_name)
         self.msg['Date'] = formatdate(localtime=True)
 
     def clear_message(self):

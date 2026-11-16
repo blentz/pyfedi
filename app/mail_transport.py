@@ -12,8 +12,15 @@ import smtplib
 import ssl
 import time
 from email.message import EmailMessage
-from email.utils import localtime
+from email.utils import localtime, make_msgid, parseaddr
 from logging.handlers import SMTPHandler
+
+
+def message_id(sender: str, fallback_domain: str) -> str:
+    """A fresh Message-ID on the sender's own domain, `fallback_domain` when the sender has none."""
+    address = parseaddr(sender or '')[1]
+    domain = address.rpartition('@')[2] if '@' in address else fallback_domain
+    return make_msgid(domain=domain)
 
 
 def tls_context() -> ssl.SSLContext:
@@ -63,6 +70,7 @@ class ErrorMailHandler(SMTPHandler):
         msg['To'] = ','.join(self.toaddrs)
         msg['Subject'] = self.getSubject(record)
         msg['Date'] = localtime()
+        msg['Message-ID'] = message_id(self.fromaddr, self.mailhost)
         body = self.format(record)
         if self.held_back:
             body += (f'\n\n{self.held_back} more error(s) since the last report were not mailed (at most one report '

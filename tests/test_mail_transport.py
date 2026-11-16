@@ -79,6 +79,7 @@ class TestWhatIsSent:
         assert msg['To'] == 'ops@probeland.test'
         assert msg['Subject'] == 'PieFed error'
         assert msg['Date']
+        assert msg['Message-ID'].endswith('@probeland.test>')
         assert 'the database went away' in msg.get_content()
         server.quit.assert_called_once()
 

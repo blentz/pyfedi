@@ -394,8 +394,26 @@ class TestComposingTheMessage:
         assert service.msg.is_multipart()
         assert service.msg['Subject'] == 'a subject'
         assert service.msg['From'] == 'a@b.test'
-        assert service.msg['Message-ID'].endswith('@mail.probeland.test>')
+        assert service.msg['Message-ID'].endswith('@b.test>')
         assert service.msg['Date']
+
+    def test_the_message_id_names_the_sender_s_domain_not_the_mail_server_s(self, env):
+        """A Message-ID on the relay's domain (smtp.titan.email) instead of the From domain is a spam signal."""
+        service = a_service()
+        service.set_message('the text', 'a subject', 'Probeland <noreply@probeland.test>')
+        assert service.msg['Message-ID'].endswith('@probeland.test>')
+
+    def test_message_ids_differ(self, env):
+        service = a_service()
+        service.set_message('the text', 'a subject', 'a@b.test')
+        first = service.msg['Message-ID']
+        service.set_message('the text', 'a subject', 'a@b.test')
+        assert service.msg['Message-ID'] != first
+
+    def test_a_sender_with_no_domain_falls_back_to_the_mail_server_s(self, env):
+        service = a_service()
+        service.set_message('the text', 'a subject')   # From is the login, 'postmaster'
+        assert service.msg['Message-ID'].endswith('@mail.probeland.test>')
 
     def test_a_message_with_only_text(self, env):
         service = a_service()
