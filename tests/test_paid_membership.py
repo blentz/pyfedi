@@ -18,7 +18,7 @@ from app.auth.util import sync_user_with_ldap
 from app.storefront import clear_domain_cache, default_domain, open_registrations, paid_registration, \
     public_registration_open, registration_mode_on
 from app.payments.adapters.base import ProviderError
-from app.payments.registration import registration_checkout
+from app.payments.registration import registration_checkout, remove_unpaid_registrations
 from app.referral import GENERATORS_SETTING, generate_code
 from app.utils import get_setting, set_setting
 from tests.factories import grant_permission, make_user
@@ -845,7 +845,8 @@ class TestReferralCodesOwn:
         assert referral_benefit(row, env.home) is None
 
     @pytest.mark.parametrize('broken', ['gone_offer', 'gone_discount', 'not_a_discount'])
-    def test_a_choice_that_is_gone_gives_nothing(self, env, referrer, broken):
+    def test_a_choice_that_is_gone_falls_back_to_the_default(self, env, referrer, broken):
+        """Not to nothing, which admits for free (audit 2026-11-16)."""
         row = row_of(referrer)
         if broken == 'gone_offer':
             row.benefit, row.offer_id = 'gift', None
@@ -856,8 +857,18 @@ class TestReferralCodesOwn:
             db.session.add(gift_code)
             db.session.flush()
             row.benefit, row.discount_code_id = 'discount', gift_code.id
+        set_setting(REFERRAL_BENEFIT_SETTING, {'kind': 'gift', 'offer_id': env.duke.id, 'days': 7})
         db.session.commit()
-        assert referral_benefit(row, env.home) is None
+        benefit = referral_benefit(row, env.home)
+        assert (benefit.offer.id, benefit.days) == (env.duke.id, 7)
+
+    @pytest.mark.parametrize('default', [{'kind': 'gift', 'offer_id': 999999}, {'kind': 'discount', 'discount_id': 999999},
+                                         {'kind': 'nonsense'}, 'not a dict'],
+                             ids=['gone_tier', 'gone_discount', 'unknown_kind', 'not_a_dict'])
+    def test_a_default_that_is_gone_or_garbled_is_automatic(self, env, referrer, default):
+        set_setting(REFERRAL_BENEFIT_SETTING, default)
+        benefit = referral_benefit(row_of(referrer), env.home)
+        assert (benefit.offer.id, benefit.days) == (env.knight.id, 30)
 
     def test_a_new_code_copies_nothing_from_the_default(self, env, referrer):
         row = row_of(referrer)
@@ -931,6 +942,52 @@ class TestJoiningWithAReferralBenefit:
         db.session.commit()
         join_with(env, question=referrer.referral_code, tier=env.knight.id)
         assert PromoCodeUse.query.filter_by(promo_code_id=row.id, user_id=joiner().id).count() == 1
+
+    @pytest.mark.parametrize('limit', ['inactive', 'expired', 'used_up'])
+    def test_a_gift_it_can_no_longer_give_refuses_the_account(self, env, referrer, provider, limit):
+        """Not admitted for free, which would then be free for good (audit 2026-11-16; R5)."""
+        row = row_of(referrer)
+        if limit == 'inactive':
+            row.active = False
+        elif limit == 'expired':
+            row.expires_at = utcnow() - timedelta(minutes=1)
+        else:
+            row.max_uses = 1
+            db.session.add(PromoCodeUse(promo_code_id=row.id, user_id=referrer.id))
+        db.session.commit()
+        answer = join_with(env, question=referrer.referral_code, tier=env.knight.id)
+        assert answer.status_code == 302 and joiner() is None and not provider.called
+        assert Referral.query.count() == 0
+
+    def test_a_gift_taken_by_somebody_else_first_refuses_the_account(self, env, referrer, provider):
+        """The referral code's row is re-checked under its lock as the account is made (start_gift); losing the race
+        makes no account, as a gift code does."""
+        with patch('app.referral.start_gift', return_value=None):
+            join_with(env, question=referrer.referral_code, tier=env.knight.id)
+        assert joiner() is None and Referral.query.count() == 0
+
+    def test_an_abandoned_discount_signup_is_cleared_with_its_uses(self, env, referrer, provider):
+        discount = a_discount(env)
+        row = row_of(referrer)
+        row.benefit, row.discount_code_id = 'discount', discount.id
+        db.session.commit()
+        join_with(env, question=referrer.referral_code, tier=env.knight.id)
+        user = joiner()
+        user.registration_pending_since = utcnow() - timedelta(days=3)
+        db.session.commit()
+        assert remove_unpaid_registrations() == 1
+        db.session.expire_all()
+        assert joiner() is None and Referral.query.count() == 0
+        assert PromoCodeUse.query.filter(PromoCodeUse.promo_code_id.in_([row.id, discount.id])).count() == 0
+
+    def test_on_a_domain_that_does_not_charge_it_gives_nothing(self, env, referrer, provider):
+        env.home.registration = 'anyone'
+        db.session.commit()
+        clear_domain_cache()
+        join_with(env, question=referrer.referral_code)
+        user = joiner()
+        assert user is not None and gift_of(user) is None
+        assert Referral.query.filter_by(referred_id=user.id).count() == 1
 
     def test_nothing_admits_as_before(self, env, referrer, provider):
         row = row_of(referrer)

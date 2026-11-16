@@ -21,3 +21,8 @@ unit of the smallest tier (100% discount for one billing period)"; a discount's 
 - **R5 Limits.** A discount used through a referral code is a use of that discount: its max uses, expiry and active
   switch hold, one account uses it once, and it is reserved at checkout (D4). A gift counts against the referral code's
   own limits, as before.
+- **R6 Never free by accident** (audit, 2026-11-16). On a paid domain, a referral code whose gift or discount it can no
+  longer give (switched off, past its last day, used up, or its last use taken first) refuses the account, as a gift
+  code typed at registration does: admitting it without the benefit would make it free for good (complimentary
+  membership). A code whose chosen tier or discount code has been deleted falls back to the site default, and a
+  default whose choice is gone falls back to automatic. Only an explicit "nothing" admits with nothing.

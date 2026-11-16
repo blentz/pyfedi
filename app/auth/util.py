@@ -457,7 +457,11 @@ def create_new_user(form, ip, country, verification_token, referrer=None, pendin
 
     db.session.add(user)
     if referrer is not None:
-        record_referral(referrer, user)   # one commit with the account, while referrer_for's row lock is held
+        try:
+            record_referral(referrer, user)   # one commit with the account, while referrer_for's row lock is held
+        except GiftUnavailable:
+            db.session.rollback()
+            raise
         session.pop('referral_code', None)
     if gift is not None:   # one commit with the account too, under the code's lock (security review 2026-11-15)
         db.session.flush()

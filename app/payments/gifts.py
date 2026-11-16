@@ -89,25 +89,35 @@ class Benefit:
 
 def referral_benefit(row: PromoCode, domain) -> Benefit | None:
     """The one benefit a referral code's row gives on its owner's `domain` (R1, R3): its own, or the site's default,
-    read now so that changing the default changes every code on it. None for nothing, or a choice since gone."""
-    if row.benefit is None:
-        chosen = default_referral_choice()
-        kind, offer_id, days, discount_id = (chosen.get('kind'), chosen.get('offer_id'), chosen.get('days'),
-                                             chosen.get('discount_id'))
-    else:
-        kind, offer_id, days, discount_id = row.benefit, row.offer_id, row.days, row.discount_code_id
+    read now so that changing the default changes every code on it. None for nothing. A choice since gone (its tier or
+    discount code deleted) is not taken for nothing, which admits for free: a code's falls back to the default, and
+    the default's to automatic (audit 2026-11-16)."""
+    if row.benefit is not None:
+        own = _benefit_of(row.benefit, row.offer_id, row.days, row.discount_code_id, domain)
+        if own is not _GONE:
+            return own
+    chosen = default_referral_choice()
+    default = _benefit_of(chosen.get('kind'), chosen.get('offer_id'), chosen.get('days'), chosen.get('discount_id'),
+                          domain)
+    return _benefit_of(AUTO, None, None, None, domain) if default is _GONE else default
+
+
+_GONE = object()   # a choice whose tier or discount code is no more
+
+
+def _benefit_of(kind, offer_id, days, discount_id, domain):
     if kind == AUTO:   # one billing period of the cheapest tier there
         tiers = tiers_on(domain)
-        return Benefit(offer=tiers[0], days=PERIOD_DAYS[tiers[0].interval]) if tiers else None
+        return Benefit(offer=tiers[0], days=PERIOD_DAYS.get(tiers[0].interval, PERIOD_DAYS['month'])) if tiers else None
     if kind == 'gift':
         offer = db.session.get(Offer, offer_id) if offer_id else None
         if offer is None or offer.kind != 'subscription':
-            return None
+            return _GONE
         return Benefit(offer=offer, days=days or PERIOD_DAYS.get(offer.interval, PERIOD_DAYS['month']))
     if kind == 'discount':
         discount = db.session.get(PromoCode, discount_id) if discount_id else None
         if discount is None or discount.kind not in DISCOUNT_KINDS or discount.owner_id is not None:
-            return None
+            return _GONE
         return Benefit(discount=discount)
     return None
 

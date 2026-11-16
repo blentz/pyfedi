@@ -15,7 +15,7 @@ from sqlalchemy import func
 
 from app import db
 from app.models import PromoCode, PromoCodeUse, Referral, User, utcnow
-from app.payments.gifts import referral_benefit, referral_gift_code, start_gift, usable
+from app.payments.gifts import GiftUnavailable, referral_benefit, referral_gift_code, start_gift, usable
 from app.storefront import REFERRAL_MODE, DomainInfo, domain_base_url, open_registrations, paid_registration  # noqa: F401 (re-exported)
 from app.utils import get_setting
 
@@ -124,14 +124,20 @@ def record_referral(referrer: User, referred: User) -> Referral:
     row = Referral(referrer_id=referrer.id, referred=referred, code=referrer.referral_code, created_at=utcnow())
     db.session.add(row)
     code = referral_gift_code(referrer)
-    if code is None or not usable(code) or not paid_registration(referred.home_domain()):
+    if code is None or not paid_registration(referred.home_domain()):
         return row
     benefit = referral_benefit(code, referrer.home_domain())
-    if benefit is not None and benefit.offer is not None:
-        db.session.flush()   # the gift's subscription names the new account
-        start_gift(referred, code, commit=False, offer=benefit.offer, days=benefit.days)
-    elif benefit is not None and benefit.discount is not None:   # a use of the referral code, as a gift is (R5)
-        db.session.flush()
+    if benefit is None:
+        return row   # it gives nothing: admitted as before (G4)
+    # A gift or a discount it can no longer give refuses the account rather than letting it in for free (R5; audit
+    # 2026-11-16): the caller rolls back, as for a gift code typed at registration
+    if not usable(code):
+        raise GiftUnavailable()
+    db.session.flush()   # the gift's subscription, or the use, names the new account
+    if benefit.offer is not None:
+        if start_gift(referred, code, commit=False, offer=benefit.offer, days=benefit.days) is None:
+            raise GiftUnavailable()
+    else:   # a use of the referral code, as a gift is (R5)
         db.session.add(PromoCodeUse(promo_code_id=code.id, user_id=referred.id, used_at=utcnow()))
     return row
 
