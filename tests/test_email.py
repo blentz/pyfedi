@@ -96,7 +96,7 @@ class TestWhereAMessageIsHandedOff:
         with patch('app.email.send_async_email') as task:
             send_email('a subject', 'a@b.test', ['c@d.test'], 'text', '<p>x</p>')
         task.assert_called_once_with('a subject', 'a@b.test', ['c@d.test'],
-                                     'text', '<p>x</p>', None)
+                                     'text', '<p>x</p>', None, None)
 
     def test_otherwise_it_is_queued(self, env, monkeypatch):
         monkeypatch.setitem(current_app.config, 'DEBUG', False)
@@ -105,7 +105,14 @@ class TestWhereAMessageIsHandedOff:
                        '<p>x</p>', reply_to='e@f.test')
         task.delay.assert_called_once_with('a subject', 'a@b.test',
                                            ['c@d.test'], 'text', '<p>x</p>',
-                                           'e@f.test')
+                                           'e@f.test', None)
+
+    def test_an_unsubscribe_link_goes_with_it(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'DEBUG', False)
+        with patch('app.email.send_async_email') as task:
+            send_email('a subject', 'a@b.test', ['c@d.test'], 'text', '<p>x</p>',
+                       list_unsubscribe='https://probeland.test/unsub/1/tok')
+        assert task.delay.call_args.args[-1] == 'https://probeland.test/unsub/1/tok'
 
 
 class TestSendingThroughAnSmtpServer:
@@ -115,8 +122,22 @@ class TestSendingThroughAnSmtpServer:
                              kwargs.pop('sender', 'Probeland <a@b.test>'),
                              kwargs.pop('recipients', ['c@d.test']),
                              'text', '<p>x</p>',
-                             kwargs.pop('reply_to', None))
+                             kwargs.pop('reply_to', None),
+                             kwargs.pop('list_unsubscribe', None))
         return service
+
+    def test_an_unsubscribe_link_when_one_is_given(self, env, smtp):
+        service = self.sent(list_unsubscribe='https://probeland.test/unsub/1/tok')
+        service.return_value.set_list_unsubscribe.assert_called_once_with('https://probeland.test/unsub/1/tok')
+
+    def test_and_none_without_one(self, env, smtp):
+        assert self.sent().return_value.set_list_unsubscribe.call_count == 0
+
+    def test_a_task_queued_before_the_link_existed_still_runs(self, env, smtp):
+        """Celery may hold messages queued with six arguments across a deploy."""
+        with patch('app.email.SMTPEmailService') as service:
+            send_async_email('a subject', 'a@b.test', ['c@d.test'], 'text', '<p>x</p>', None)
+        service.return_value.send_all.assert_called_once()
 
     def test_the_server_it_is_told_to_use(self, env, smtp):
         service = self.sent()
@@ -443,6 +464,14 @@ class TestComposingTheMessage:
         service.set_message('the text', 'a subject', 'a@b.test')
         service.set_reply_to('e@f.test')
         assert service.msg['Reply-To'] == 'e@f.test'
+
+    def test_one_click_unsubscribe_headers(self, env):
+        """RFC 2369 and RFC 8058: mail clients show an unsubscribe button and POST to the link."""
+        service = a_service()
+        service.set_message('the text', 'a subject', 'a@b.test', '<p>x</p>')
+        service.set_list_unsubscribe('https://probeland.test/unsub/1/tok')
+        assert service.msg['List-Unsubscribe'] == '<https://probeland.test/unsub/1/tok>'
+        assert service.msg['List-Unsubscribe-Post'] == 'List-Unsubscribe=One-Click'
 
     def test_the_body_can_be_emptied(self, env):
         service = a_service()

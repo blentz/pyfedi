@@ -101,7 +101,7 @@ def send_topic_suggestion(communities_for_topic, user, recipients, subject, topi
 
 
 @celery.task
-def send_async_email(subject, sender, recipients, text_body, html_body, reply_to):
+def send_async_email(subject, sender, recipients, text_body, html_body, reply_to, list_unsubscribe=None):
     if 'ngrok.app' in sender:  # for local development
         sender = 'PieFed <noreply@piefed.social>'
         return_path = 'bounces@piefed.social'
@@ -121,6 +121,8 @@ def send_async_email(subject, sender, recipients, text_body, html_body, reply_to
             if reply_to:
                 email_sender.set_reply_to(reply_to)
             email_sender.set_return_path(return_path or None)
+            if list_unsubscribe:
+                email_sender.set_list_unsubscribe(list_unsubscribe)
             email_sender.set_recipients(recipients)
             email_sender.connect()
             email_sender.send_all(close_connection=True)
@@ -172,11 +174,13 @@ def send_async_email(subject, sender, recipients, text_body, html_body, reply_to
                 return e.response['Error']['Message']
 
 
-def send_email(subject, sender, recipients: List[str], text_body, html_body, reply_to=None):
+def send_email(subject, sender, recipients: List[str], text_body, html_body, reply_to=None, list_unsubscribe=None):
+    """`list_unsubscribe`: for mail an account opted into, the URL that opts it out, sent as List-Unsubscribe with
+    one-click POST (RFC 8058) over SMTP. SES's send_email takes no custom headers, so the SES path leaves it out."""
     if current_app.debug:
-        send_async_email(subject, sender, recipients, text_body, html_body, reply_to)
+        send_async_email(subject, sender, recipients, text_body, html_body, reply_to, list_unsubscribe)
     else:
-        send_async_email.delay(subject, sender, recipients, text_body, html_body, reply_to)
+        send_async_email.delay(subject, sender, recipients, text_body, html_body, reply_to, list_unsubscribe)
 
 
 class SMTPEmailService:
@@ -259,6 +263,11 @@ class SMTPEmailService:
     
     def set_reply_to(self, reply_to):
         self.msg.add_header("Reply-To", reply_to)
+
+    def set_list_unsubscribe(self, url):
+        """RFC 2369's List-Unsubscribe and RFC 8058's one-click POST, which Gmail and Yahoo expect on opted-in mail."""
+        self.msg['List-Unsubscribe'] = f'<{url}>'
+        self.msg['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
 
     def set_return_path(self, address):
         """The envelope sender, where bounces go. None leaves smtplib to take it from the From header."""
