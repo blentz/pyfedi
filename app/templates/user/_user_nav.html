@@ -11,7 +11,7 @@
         {% if subscription_settings_shown() -%}
         <option value="{{ url_for('payments.subscription') }}" {{ 'selected'  if request.path == '/user/settings/subscription' }}>{{ _('Subscription') }}</option>
         {% endif -%}
-        {% if referrals_available(current_user) -%}
+        {% if referral_page_available(current_user) -%}
         <option value="{{ url_for('user.user_referrals') }}" {{ 'selected'  if request.path == '/user/settings/referrals' }}>{{ _('Referral code') }}</option>
         {% endif -%}
         {% if not on_onion -%}
@@ -45,7 +45,7 @@
             {{ _('Subscription') }}
         </a>
         {% endif -%}
-        {% if referrals_available(current_user) -%}
+        {% if referral_page_available(current_user) -%}
         <a href="{{ url_for('user.user_referrals') }}" class="btn {{ 'btn-primary' if request.path == '/user/settings/referrals' else 'btn-outline-secondary' }}">
             {{ _('Referral code') }}
         </a>

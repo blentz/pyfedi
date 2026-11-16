@@ -175,3 +175,18 @@ def referral_qr_png(link: str) -> bytes:
 def referrals_available(user) -> bool:
     """Whether `user` gets the referral-code settings page: referral mode is on and they may generate codes."""
     return getattr(user, 'is_authenticated', False) and referral_mode_on(g.site) and may_generate(user)
+
+
+def assigned_codes(user) -> list[PromoCode]:
+    """The gift and discount codes an admin made for `user` to hand out (owner 2026-11-16), oldest first. Not
+    referrals: ordinary codes, listed on the referral page."""
+    if not getattr(user, 'is_authenticated', False) or user.ap_id is not None or user.deleted:
+        return []
+    return PromoCode.query.filter_by(assigned_to=user.id).order_by(PromoCode.created_at, PromoCode.id).all()
+
+
+def referral_page_available(user) -> bool:
+    """Whether `user` gets the referral settings page: for their own referral code, or for codes made for them."""
+    return referrals_available(user) or (getattr(user, 'is_authenticated', False) and user.ap_id is None
+                                         and not user.deleted and db.session.query(
+                                             PromoCode.query.filter_by(assigned_to=user.id).exists()).scalar())

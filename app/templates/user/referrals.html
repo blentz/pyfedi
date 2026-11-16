@@ -18,6 +18,7 @@
         <h1>{{ _('Referral code') }}</h1>
         {% include "user/_user_nav.html" %}
 
+        {% if own -%}
         {% if not charges -%}
         <p>{{ _('New accounts can only be created with a referral code. Share your link or QR code with people you want to invite; their account is approved straight away.') }}</p>
         {% elif gives -%}
@@ -56,6 +57,37 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-primary">{{ _('Generate referral code') }}</button>
             </form>
+        {% endif -%}
+        {% endif -%}
+
+        {% if assigned -%}
+        <h2 class="mt-4" id="assigned">{{ _('Codes to hand out') }}</h2>
+        <p>{{ _('An admin made these codes for you to give to people. They are not referrals.') }}</p>
+        {% for item in assigned -%}
+        {% set row = item.row -%}
+        <section class="card mb-3" id="assigned-{{ row.id }}">
+            <div class="card-body">
+                <h3 class="h5"><code>{{ row.code }}</code></h3>
+                {% if item.gives -%}
+                <p>{{ _('It gives %(gives)s.', gives=item.gives) }}</p>
+                {% endif -%}
+                {% if not item.usable -%}
+                <p class="text-warning">{{ _('This code cannot be used at the moment.') }}</p>
+                {% endif -%}
+                <p>{{ _('Used: %(uses)d', uses=item.uses) }}{% if row.max_uses %} / {{ row.max_uses }}{% endif %}{% if row.expires_at %}. {{ _('Last day: %(date)s', date=row.expires_at.strftime('%Y-%m-%d')) }}{% endif %}</p>
+                {% if item.link -%}
+                <div class="mb-3">
+                    <label class="form-label" for="assigned-link-{{ row.id }}">{{ _('Link to join with it') }}</label>
+                    <input type="text" class="form-control" id="assigned-link-{{ row.id }}" value="{{ item.link }}" readonly>
+                </div>
+                <div class="mb-3 referral_qr">{{ item.qr_svg | safe }}</div>
+                <p><a href="{{ url_for('user.user_assigned_code_qr_png', code_id=row.id) }}" class="btn btn-outline-secondary">{{ _('Download QR code (PNG)') }}</a></p>
+                {% else -%}
+                <p class="small text-muted">{{ _('Joining is free at the moment, so there is no link to join with. A member enters the code under Settings, Subscription.') }}</p>
+                {% endif -%}
+            </div>
+        </section>
+        {% endfor -%}
         {% endif -%}
     </main>
 </div>

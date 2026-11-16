@@ -12,7 +12,7 @@ from app.login_gate import refuse_lapsed, refuse_logged_out
 from app.payments.offers import donations_menu_shown, money, money_major, subscription_settings_shown
 from app.payments.shortcodes import checkout_shortcodes
 from app.permissions import holds_any_grant, may_act_on_user, may_ban
-from app.referral import referrals_available
+from app.referral import referral_page_available, referrals_available
 from app.branding import DERIVED_FIELDS, Branding, current_branding
 from app.project_links import footer_invitation, project_links
 from app.sidebar import sidebar_boxes
@@ -156,6 +156,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['can_moderate'] = can_moderate
     app.jinja_env.globals['role_access'] = role_access
     app.jinja_env.globals['referrals_available'] = referrals_available
+    app.jinja_env.globals['referral_page_available'] = referral_page_available
     app.jinja_env.globals['cms_nav_links'] = cms_nav_links
     app.jinja_env.globals['donations_menu_shown'] = donations_menu_shown
     app.jinja_env.globals['money'] = money
