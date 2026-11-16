@@ -1141,3 +1141,53 @@ class TestReferralBenefitAdmin:
         cell = BeautifulSoup(env.client.get('/admin/payments/codes', base_url=env.base).get_data(as_text=True),
                              'html.parser').find('tr', id=f'code-{row.id}').get_text()
         assert 'spring-twenty' in cell
+
+
+class TestTheReferralPageSaysWhatTheCodeGives:
+    """Not "approved straight away" where joining is paid for: the code's gift or discount (owner, 2026-11-16)."""
+
+    def page(self, env, user):
+        with env.client.session_transaction(base_url=env.base) as session:
+            session['_user_id'], session['_fresh'] = str(user.id), True
+        return env.client.get('/user/settings/referrals', base_url=env.base).get_data(as_text=True)
+
+    def test_a_gift(self, env, referrer):
+        body = self.page(env, referrer)
+        assert 'joining with your code gives them 30 days of Furcas, free.' in body
+        assert 'approved straight away' not in body
+
+    @pytest.mark.parametrize('for_tier', [True, False], ids=['one_tier', 'any_plan'])
+    def test_a_percent_discount(self, env, referrer, for_tier):
+        discount = a_discount(env, offer_id=env.duke.id if for_tier else None)
+        row = row_of(referrer)
+        row.benefit, row.discount_code_id = 'discount', discount.id
+        db.session.commit()
+        expected = '20% off their first payment for Astaroth' if for_tier else '20% off their first payment for any plan'
+        assert f'joining with your code gives them {expected}.' in self.page(env, referrer)
+
+    def test_an_amount_off(self, env, referrer):
+        set_setting('payment_currency', 'usd')
+        discount = PromoCode(code='five-off', kind='amount', amount_minor=500)
+        db.session.add(discount)
+        db.session.commit()
+        row = row_of(referrer)
+        row.benefit, row.discount_code_id = 'discount', discount.id
+        db.session.commit()
+        assert '$5.00 off their first payment for any plan' in self.page(env, referrer)
+
+    def test_before_a_code_is_made_it_says_what_one_would_give(self, env, referrer):
+        PromoCode.query.filter_by(owner_id=referrer.id).delete()
+        referrer.referral_code = None
+        db.session.commit()
+        assert '30 days of Furcas, free' in self.page(env, referrer)
+
+    def test_nothing_to_give_says_it_cannot_be_used(self, env, referrer):
+        with patch('app.user.referrals.referral_benefit', return_value=None):
+            body = self.page(env, referrer)
+        assert 'Your code cannot be used to join at the moment' in body
+
+    def test_where_joining_is_free_it_is_approved_straight_away(self, env, referrer):
+        env.home.registration = 'anyone'
+        db.session.commit()
+        clear_domain_cache()
+        assert 'their account is approved straight away' in self.page(env, referrer)

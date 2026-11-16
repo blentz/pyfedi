@@ -115,6 +115,11 @@ def referral_benefit(row: PromoCode, domain) -> Benefit | None:
     return benefit
 
 
+def default_referral_benefit(domain) -> Benefit | None:
+    """What a new referral code on `domain` would get: the default, without making the code."""
+    return _resolve(default_referral_choice(), domain)
+
+
 def _resolve(chosen: dict, domain) -> Benefit | None:
     default = _benefit_of(chosen.get('kind'), chosen.get('offer_id'), chosen.get('days'), chosen.get('discount_id'),
                           domain)

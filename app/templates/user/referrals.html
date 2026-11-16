@@ -18,7 +18,13 @@
         <h1>{{ _('Referral code') }}</h1>
         {% include "user/_user_nav.html" %}
 
+        {% if not charges -%}
         <p>{{ _('New accounts can only be created with a referral code. Share your link or QR code with people you want to invite; their account is approved straight away.') }}</p>
+        {% elif gives -%}
+        <p>{{ _('Joining this site needs a subscription or a code. Share your link or QR code with people you want to invite: joining with your code gives them %(gives)s.', gives=gives) }}</p>
+        {% else -%}
+        <p class="text-warning">{{ _('Your code cannot be used to join at the moment, because it has nothing to give. Ask an admin to set what referral codes give.') }}</p>
+        {% endif -%}
         {% if link -%}
             <div class="mb-3">
                 <label class="form-label" for="referral_code">{{ _('Your code') }}</label>
