@@ -339,6 +339,12 @@ def test_the_mailer_uses_the_member_mail_transport(restores_the_shared_logger, u
     assert handler.use_tls is use_tls
 
 
+def test_the_mailer_mails_at_most_once_per_configured_interval(restores_the_shared_logger):
+    built = create_app(_config(MAIL_SERVER='smtp.example', ERRORS_TO='e@example.com', ERROR_MAIL_INTERVAL=60.0))
+
+    assert _mail_handlers(built)[0].interval == 60.0
+
+
 def test_the_mailer_reports_only_errors(restores_the_shared_logger):
     """`:347`. At any lower level a busy instance would mail its operator on
     every warning.

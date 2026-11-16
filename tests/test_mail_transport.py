@@ -96,3 +96,44 @@ class TestWhatIsSent:
             record = a_record()
             a_handler().emit(record)
         handle.assert_called_once_with(record)
+
+
+class TestHowOftenItMails:
+    """The account that mails error reports also sends password resets; a storm of errors must not spend it."""
+
+    def test_one_report_per_interval_and_the_next_counts_the_rest(self):
+        handler = a_handler(interval=300)
+        with patch('smtplib.SMTP') as plain, patch('app.mail_transport.time.monotonic') as clock:
+            clock.return_value = 1000.0
+            handler.emit(a_record('first'))
+            clock.return_value = 1100.0
+            handler.emit(a_record('second'))
+            handler.emit(a_record('third'))
+            clock.return_value = 1300.0
+            handler.emit(a_record('fourth'))
+        sent = [call.args[0].get_content() for call in plain.return_value.send_message.call_args_list]
+        assert len(sent) == 2
+        assert 'first' in sent[0] and 'not mailed' not in sent[0]
+        assert 'fourth' in sent[1]
+        assert '2 more error(s) since the last report were not mailed' in sent[1]
+
+    def test_the_count_starts_again_after_a_report(self):
+        handler = a_handler(interval=300)
+        with patch('smtplib.SMTP') as plain, patch('app.mail_transport.time.monotonic') as clock:
+            for at, msg in ((0.0, 'a'), (10.0, 'b'), (400.0, 'c'), (800.0, 'd')):
+                clock.return_value = at
+                handler.emit(a_record(msg))
+        sent = [call.args[0].get_content() for call in plain.return_value.send_message.call_args_list]
+        assert len(sent) == 3
+        assert '1 more error(s)' in sent[1]
+        assert 'not mailed' not in sent[2]
+
+    def test_a_report_that_fails_to_send_still_spends_the_interval(self):
+        """A mail server that refuses is not retried on every following error."""
+        handler = a_handler(interval=300)
+        with patch('smtplib.SMTP', side_effect=OSError('unreachable')) as plain, \
+                patch.object(ErrorMailHandler, 'handleError'), \
+                patch('app.mail_transport.time.monotonic', return_value=5.0):
+            handler.emit(a_record())
+            handler.emit(a_record())
+        assert plain.call_count == 1

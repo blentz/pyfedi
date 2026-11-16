@@ -10,6 +10,7 @@ server and collect MAIL_PASSWORD.
 import logging
 import smtplib
 import ssl
+import time
 from email.message import EmailMessage
 from email.utils import localtime
 from logging.handlers import SMTPHandler
@@ -25,11 +26,28 @@ class ErrorMailHandler(SMTPHandler):
 
     logging's SMTPHandler upgrades with an unverified context, upgrades only when it also logs in, and has no implicit
     TLS mode, so with MAIL_USE_TLS unset it sent the password in clear while member mail used SMTP_SSL.
+
+    At most one report per `interval` seconds per process: the account that sends them also sends password resets
+    and verifications, and an error storm mailing every record could spend its sending allowance. The records not
+    mailed are still in the journal; the next report says how many there were.
     """
 
-    def __init__(self, mailhost, fromaddr, toaddrs, subject, credentials=None, use_tls=True, timeout=5.0):
+    def __init__(self, mailhost, fromaddr, toaddrs, subject, credentials=None, use_tls=True, timeout=5.0,
+                 interval=300.0):
         super().__init__(mailhost, fromaddr, toaddrs, subject, credentials=credentials, secure=None, timeout=timeout)
         self.use_tls = use_tls
+        self.interval = interval
+        self.last_sent = None   # time.monotonic() of the last report mailed
+        self.held_back = 0      # records not mailed since then
+
+    def due(self) -> bool:
+        """Whether this record may be mailed now. logging.Handler.handle holds self.lock around emit."""
+        now = time.monotonic()
+        if self.last_sent is not None and now - self.last_sent < self.interval:
+            self.held_back += 1
+            return False
+        self.last_sent = now
+        return True
 
     def connection(self):
         port = self.mailport or (smtplib.SMTP_PORT if self.use_tls else smtplib.SMTP_SSL_PORT)
@@ -45,16 +63,24 @@ class ErrorMailHandler(SMTPHandler):
         msg['To'] = ','.join(self.toaddrs)
         msg['Subject'] = self.getSubject(record)
         msg['Date'] = localtime()
-        msg.set_content(self.format(record))
+        body = self.format(record)
+        if self.held_back:
+            body += (f'\n\n{self.held_back} more error(s) since the last report were not mailed (at most one report '
+                     f'per {self.interval:g}s); see the journal.')
+        msg.set_content(body)
         return msg
 
     def emit(self, record):
+        if not self.due():
+            return
         try:
+            msg = self.message(record)
+            self.held_back = 0
             server = self.connection()
             try:
                 if self.username:
                     server.login(self.username, self.password)
-                server.send_message(self.message(record))
+                server.send_message(msg)
             finally:
                 server.quit()
         except Exception:

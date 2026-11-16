@@ -507,7 +507,8 @@ def create_app(config_class=Config):
             # D873: a comma-separated list, split, or SMTPHandler sends to one malformed address
             toaddrs=[addr.strip() for addr in app.config['ERRORS_TO'].split(',') if addr.strip()],
             subject='PieFed error',
-            credentials=auth, use_tls=app.config['MAIL_USE_TLS'], timeout=5.0)
+            credentials=auth, use_tls=app.config['MAIL_USE_TLS'], timeout=5.0,
+            interval=app.config['ERROR_MAIL_INTERVAL'])
         mail_handler.setLevel(logging.ERROR)
         mail_handler.addFilter(onion_scrub)
         app.logger.addHandler(mail_handler)

@@ -72,6 +72,7 @@ class Config(object):
     MAIL_TIMEOUT = float(os.environ.get('MAIL_TIMEOUT') or 30)   # seconds a silent mail server may hold a Celery worker
     MAIL_FROM = os.environ.get('MAIL_FROM') or 'noreply@' + os.environ.get('SERVER_NAME')
     ERRORS_TO = os.environ.get('ERRORS_TO') or ''
+    ERROR_MAIL_INTERVAL = float(os.environ.get('ERROR_MAIL_INTERVAL') or 300)   # seconds between error reports, per process
     # count WARNING-and-worse log records per day (app/error_counts.py); the tests turn it off
     ERROR_COUNTS = os.environ.get('ERROR_COUNTS', 'True') in ('True', 'true', '1')
     LANGUAGES = ['ca', 'ceb', 'de', 'en', 'es', 'eu', 'fi', 'fil', 'fr', 'hi', 'it', 'ja', 'ko', 'pl', 'ru', 'uk', 'zh']
