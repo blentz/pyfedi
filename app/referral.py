@@ -179,9 +179,7 @@ def referrals_available(user) -> bool:
 
 def assigned_codes(user) -> list[PromoCode]:
     """The gift and discount codes an admin made for `user` to hand out (owner 2026-11-16), oldest first. Not
-    referrals: ordinary codes, listed on the referral page."""
-    if not getattr(user, 'is_authenticated', False) or user.ap_id is not None or user.deleted:
-        return []
+    referrals: ordinary codes, listed on the referral page. Its callers are signed in."""
     return PromoCode.query.filter_by(assigned_to=user.id).order_by(PromoCode.created_at, PromoCode.id).all()
 
 
