@@ -133,12 +133,11 @@ def _benefit_of(kind, offer_id, days, discount_id, domain):
         if offer is None or offer.kind != 'subscription':
             return _GONE
         return Benefit(offer=offer, days=days or PERIOD_DAYS.get(offer.interval, PERIOD_DAYS['month']))
-    if kind == 'discount':
-        discount = db.session.get(PromoCode, discount_id) if discount_id else None
-        if discount is None or discount.kind not in DISCOUNT_KINDS or discount.owner_id is not None:
-            return _GONE
-        return Benefit(discount=discount)
-    return None
+    # 'discount': the kinds there are were asked by the caller (OWN_KINDS, default_referral_choice)
+    discount = db.session.get(PromoCode, discount_id) if discount_id else None
+    if discount is None or discount.kind not in DISCOUNT_KINDS or discount.owner_id is not None:
+        return _GONE
+    return Benefit(discount=discount)
 
 
 def default_referral_choice() -> dict:

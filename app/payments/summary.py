@@ -47,15 +47,13 @@ class Summary:
 
 def held_code_row(text: str | None) -> PromoCode | None:
     """The discount code `text` names, whether or not it can be used now: to say why it can't."""
-    code = normalise(text)
-    if code is None:
-        return None
-    return PromoCode.query.filter(PromoCode.code == code, PromoCode.kind.in_(DISCOUNT_KINDS),
+    return PromoCode.query.filter(PromoCode.code == normalise(text), PromoCode.kind.in_(DISCOUNT_KINDS),
                                   PromoCode.owner_id.is_(None)).first()
 
 
-def lapse_of(code: PromoCode | None, user: User | None, offer: Offer) -> Lapsed | None:
-    """Why `code` takes nothing off `offer` for `user` now, with its date; None if it would."""
+def lapse_of(code: PromoCode | None, user: User, offer: Offer) -> Lapsed | None:
+    """Why `code` takes nothing off `offer` for `user` now, with its date; None if it would. Only an account holds a
+    code: a guest gives once, with none."""
     if code is None:
         return None
     now = utcnow()
@@ -63,16 +61,14 @@ def lapse_of(code: PromoCode | None, user: User | None, offer: Offer) -> Lapsed 
         return Lapsed(code.code, 'inactive', None)
     if code.expires_at is not None and code.expires_at <= now:
         return Lapsed(code.code, 'expired', code.expires_at)
-    if user is not None:
-        paid = PromoCodeUse.query.filter(PromoCodeUse.promo_code_id == code.id, PromoCodeUse.user_id == user.id,
-                                         PromoCodeUse.payment_id.isnot(None)).first()
-        if paid is not None:
-            return Lapsed(code.code, 'used_by_you', paid.used_at)
+    paid = PromoCodeUse.query.filter(PromoCodeUse.promo_code_id == code.id, PromoCodeUse.user_id == user.id,
+                                     PromoCodeUse.payment_id.isnot(None)).first()
+    if paid is not None:
+        return Lapsed(code.code, 'used_by_you', paid.used_at)
     if code.max_uses is not None:
         counted = PromoCodeUse.query.filter(PromoCodeUse.promo_code_id == code.id,
+                                            PromoCodeUse.user_id != user.id,   # their own hold is theirs to use
                                             (PromoCodeUse.payment_id.isnot(None)) | (PromoCodeUse.used_at > now - HOLD))
-        if user is not None:
-            counted = counted.filter(PromoCodeUse.user_id != user.id)   # their own hold is theirs to use
         if counted.count() >= code.max_uses:
             last = db.session.query(func.max(PromoCodeUse.used_at)).filter(PromoCodeUse.promo_code_id == code.id).scalar()
             return Lapsed(code.code, 'used_up', last)

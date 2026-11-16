@@ -18,7 +18,7 @@ from app import db
 from app.models import BtcDailyRate, MemberSubscription, Offer, Payment, PaymentProvider, PromoCode, PromoCodeUse, Site, utcnow
 from app.payments.credentials import seal
 from app.payments.offers import offers_changed
-from app.payments.summary import lapse_of
+from app.payments.summary import lapse_of, summarise
 from tests.factories import make_user
 
 URL = 'https://pay.example'
@@ -166,6 +166,12 @@ class TestTheSummary:
             assert session.get('discount_code') == 'spring-twenty'
 
 
+def test_a_bitcoin_summary_with_no_invoice_recorded_shows_no_bitcoin(env):
+    with env.app.test_request_context():
+        found = summarise(env.prepaid, env.member, None, f'{URL}/i/unknown')
+    assert (found.btc, found.rate, found.ends is not None) == (None, None, True)
+
+
 class TestALapsedCode:
     def code(self, **values):
         row = PromoCode(code='spring-twenty', kind='percent', percent=20, **values)
@@ -228,6 +234,9 @@ class TestALapsedCode:
         checkout(env, env.prepaid, held='spring-twenty')
         with env.client.session_transaction() as session:
             assert 'discount_code' not in session
+
+    def test_uses_left_but_not_for_this_offer(self, env):
+        assert lapse_of(self.code(max_uses=5, offer_id=env.renewing.id), env.member, env.prepaid).reason == 'not_for_this'
 
     def test_a_usable_one_is_no_lapse(self, env):
         assert lapse_of(self.code(), env.member, env.prepaid) is None and lapse_of(None, env.member, env.prepaid) is None
