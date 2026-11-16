@@ -120,9 +120,12 @@ def has_real_ip(user) -> bool:
 
 
 def apply_audit(obj, field: str, result) -> None:
-    """Set `obj.field` to an audit result, unless the result is `KEEP`."""
+    """Set `obj.field` to an audit result, unless the result is `KEEP`, and stamp `obj.<field>_at` where it has one: an
+    account's IP address is cleared a year after it was recorded (app/shared/tasks/maintenance.py)."""
     if result is not KEEP:
         setattr(obj, field, result)
+        if hasattr(obj, f'{field}_at'):
+            setattr(obj, f'{field}_at', utcnow())
 
 
 def stamp_activity(user, clear_unread: bool = False) -> None:

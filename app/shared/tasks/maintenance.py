@@ -24,9 +24,34 @@ from app.utils import _capped_request, get_task_session, download_defeds, instan
     banned_instances, blocked_or_banned_instances, get_emoji_replacements, store_files_in_s3, ensure_directory_exists
 from app.utils import communities_banned_from, joined_communities, moderating_communities
 from app.models import flush_cdn_cache
+from app.onion import ONION_ACCOUNT_IP
 from app.activitypub.util import extract_domain_and_actor
 from app.community.util import search_for_community
 from app.discovery.podcast import unban_podcast_twins_of_expired_bans
+
+
+IP_RETENTION_DAYS = 365   # the privacy policy's promise (2026-11-16)
+
+
+@celery.task
+def clear_old_ip_addresses() -> int:
+    """Clear an account's IP address, and the country it gave, a year after it was recorded. A banned account keeps
+    its own while the ban lasts, to stop ban evasion (privacy policy section 7), and an onion account's shared
+    sentinel is no address. How many were cleared."""
+    session = get_task_session()
+    try:
+        cleared = session.query(User).filter(
+            User.ip_address_at < utcnow() - timedelta(days=IP_RETENTION_DAYS),
+            User.ip_address.isnot(None), User.ip_address != ONION_ACCOUNT_IP, User.banned.isnot(True)) \
+            .update({User.ip_address: None, User.ip_address_country: None, User.ip_address_at: None},
+                    synchronize_session=False)
+        session.commit()
+        return cleared
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 @celery.task

@@ -2442,6 +2442,7 @@ class User(UserMixin, db.Model):
     unread_notifications = db.Column(db.Integer, default=0, server_default='0', nullable=False)  # NOT NULL: read as `+= 1` everywhere (D274)
     ip_address = db.Column(db.String(50))
     ip_address_country = db.Column(db.String(50))
+    ip_address_at = db.Column(db.DateTime)   # when ip_address was recorded; cleared a year on (privacy policy, 2026-11-16)
     instance_id = db.Column(db.Integer, db.ForeignKey('instance.id'), index=True)
     reports = db.Column(db.Integer, default=0)  # how many times this user has been reported.
     default_sort = db.Column(db.String(25), default='hot')

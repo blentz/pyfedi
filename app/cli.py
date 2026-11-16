@@ -75,7 +75,8 @@ from app.shared.tasks.maintenance import (
     update_hashtag_counts, delete_old_soft_deleted_content, update_community_stats, cleanup_old_voting_data,
     unban_expired_users, sync_defederation_subscriptions, check_instance_health, monitor_healthy_instances,
     recalculate_user_attitudes, calculate_community_activity_stats, cleanup_old_activitypub_logs,
-    archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser, clean_up_tmp
+    archive_old_posts, archive_old_users, cleanup_old_read_posts, refresh_instance_chooser, clean_up_tmp,
+    clear_old_ip_addresses
 )
 from app.utils import move_file_to_s3
 from app.hidden_routes import hidden_notifications
@@ -902,6 +903,7 @@ def register(app):
                 update_community_stats()
                 cleanup_old_voting_data()
                 pseudonymise_settled()
+                clear_old_ip_addresses()
                 remove_unpaid_registrations()
                 end_expired_subscriptions()
                 unban_expired_users()
@@ -930,6 +932,7 @@ def register(app):
                 update_community_stats.delay()
                 cleanup_old_voting_data.delay()
                 pseudonymise_settled.delay()
+                clear_old_ip_addresses.delay()
                 remove_unpaid_registrations.delay()
                 end_expired_subscriptions.delay()
                 unban_expired_users.delay()
@@ -979,6 +982,7 @@ def register(app):
         print(f'9 {datetime.now()}')
         cleanup_old_voting_data()
         pseudonymise_settled()
+        clear_old_ip_addresses()
         remove_unpaid_registrations()
         end_expired_subscriptions()
         print(f'10 {datetime.now()}')
