@@ -2031,6 +2031,11 @@ def user_settings_block_instance():
 
 @bp.route('/user/newsletter/<int:user_id>/<token>/unsubscribe', methods=['GET', 'POST'])
 def user_newsletter_unsubscribe(user_id, token):
+    # A GET only asks: mail scanners follow every link in a message, and a GET that unsubscribed opted members out
+    # unasked. The page's button, or a mail client's one-click POST to List-Unsubscribe (RFC 8058), unsubscribes.
+    if request.method == 'GET':
+        return render_template('user/email_unsubscribe_confirm.html',
+                               question=_('Stop receiving the newsletter by email?'))
     user = User.query.filter(User.id == user_id, User.verification_token == token).first()
     if user:
         user.newsletter = False
@@ -2040,6 +2045,9 @@ def user_newsletter_unsubscribe(user_id, token):
 
 @bp.route('/user/email_notifs/<int:user_id>/<token>/unsubscribe', methods=['GET', 'POST'])
 def user_email_notifs_unsubscribe(user_id, token):
+    if request.method == 'GET':   # only asks; see user_newsletter_unsubscribe
+        return render_template('user/email_unsubscribe_confirm.html',
+                               question=_('Stop receiving emails about unread notifications?'))
     user = User.query.filter(User.id == user_id, User.verification_token == token).first()
     if user:
         user.email_unread = False
