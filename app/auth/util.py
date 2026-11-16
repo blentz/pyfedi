@@ -31,11 +31,11 @@ from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow
     verify_password_hash
 from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.log_scrub import log_ldap_sync_failure
-from app.referral import REFERRAL_MODE, record_referral, referral_mode_on, referrer_for
+from app.referral import REFERRAL_MODE, record_referral, referral_discount, referral_mode_on, referrer_for
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, onion_proof_refused, prepare_onion_proof
 from app.payments.offers import money
-from app.payments.discounts import discounted, find_discount_code
+from app.payments.discounts import discounted, find_discount_code, usable as discount_usable
 from app.payments.gifts import GiftUnavailable, checking_codes, find_gift_code, start_gift
 from app.payments.registration import registration_checkout, registration_offer, registration_tiers
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, captcha_enabled, \
@@ -266,7 +266,20 @@ def register_on_paid_domain(form):
                     form.question.errors = list(form.question.errors) + [_('That code cannot be used for this tier.')]
                     return render_registration_form(form, paid_offer=offer, tiers=tiers)
                 if referral:
-                    return process_registration_form(form)   # the referral path: free, or refused if the code is wrong
+                    # A referral code that gives a discount admits a paying account with it held (plan 2026-11-16 R4,
+                    # R5); any other goes the referral path: free, with its gift, or refused if the code is wrong
+                    referrer = referrer_for(form.question.data, current_storefront())
+                    discount = referral_discount(referrer) if referrer is not None else None
+                    if discount is not None:
+                        chosen = registration_offer(form.tier.data) if form.tier.data else offer
+                        if chosen.id == (form.tier.data or offer.id) and discount_usable(discount) \
+                                and discounted(discount, chosen) is not None:
+                            return process_registration_form(form, paid=True, tier=chosen, discount=discount,
+                                                             referrer=referrer)
+                        db.session.rollback()   # referrer_for's row lock
+                        form.question.errors = list(form.question.errors) + [_('That code cannot be used for this tier.')]
+                        return render_registration_form(form, paid_offer=offer, tiers=tiers)
+                    return process_registration_form(form)
                 form.question.errors = list(form.question.errors) + [_('Invalid code')]
                 return render_registration_form(form, paid_offer=offer, tiers=tiers)
             chosen = registration_offer(form.tier.data) if form.tier.data else offer
@@ -277,7 +290,7 @@ def register_on_paid_domain(form):
     return render_registration_form(form, paid_offer=offer, tiers=tiers)
 
 
-def process_registration_form(form, paid=False, tier=None, gift=None, discount=None):
+def process_registration_form(form, paid=False, tier=None, gift=None, discount=None, referrer=None):
     # One reserved-name list, shared with the OAuth signup path -- see
     # app/utils.py's RESERVED_USER_NAMES and D1139.
     disallowed_usernames = RESERVED_USER_NAMES
@@ -303,7 +316,7 @@ def process_registration_form(form, paid=False, tier=None, gift=None, discount=N
         if user_ip_banned() or user_cookie_banned():   # an account that could never log in shouldn't be charged for
             return render_template("generic_message.html", title=_("Application declined"),
                                    message=_("Sorry, we are not accepting registrations from you."))
-        return register_new_user(form, ip, country, paid=True, tier=tier, discount=discount)
+        return register_new_user(form, ip, country, referrer=referrer, paid=True, tier=tier, discount=discount)
 
     if gift is not None:   # a gift code admits on its own, its free period started with the account (G4)
         return register_new_user(form, ip, country, gift=gift)

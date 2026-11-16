@@ -15,8 +15,9 @@ from sqlalchemy import func
 
 from app import db
 from app.admin import bp
-from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, ComplimentaryForm, DefaultGiftForm, GiftCodeForm, LinkOfferForm, \
-    MembershipForm, OfferForm, PaymentSettingsForm, PaypalCredentialsForm, PaypalOfferForm, StripeCredentialsForm
+from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, ComplimentaryForm, DefaultBenefitForm, GiftCodeForm, \
+    LinkOfferForm, MembershipForm, OfferForm, PaymentSettingsForm, PaypalCredentialsForm, PaypalOfferForm, ReferralCodeForm, \
+    StripeCredentialsForm
 from app.complimentary import KIND as COMPLIMENTARY, end_complimentary, grant_complimentary
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, PromoCode, PromoCodeUse, \
     SiteDomain, User, utcnow
@@ -29,8 +30,10 @@ from app.payments.adapters.paypal_adapter import REQUIRED_EVENTS as PAYPAL_EVENT
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
 from app.payments.code_text import normalise
 from app.payments.core import refresh_access
-from app.payments.gifts import DEFAULT_GIFT_DAYS_SETTING, DEFAULT_GIFT_OFFER_SETTING
-from app.payments.offers import LINK, offers_changed, offers_on
+from app.payments.discounts import DISCOUNT_KINDS
+from app.payments.gifts import AUTO, REFERRAL_BENEFIT_SETTING, Benefit, default_referral_choice, \
+    referral_benefit
+from app.payments.offers import LINK, offers_changed, offers_on, tiers_on
 from app.storefront import clear_domain_cache, domain_rows
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
 
@@ -325,12 +328,18 @@ def _codes_page(default_form=None, code_form=None):
     owners = {user.id: user for user in User.query.filter(User.id.in_({code.owner_id for code in codes if code.owner_id}))}
     tiers = {offer.id: offer.title for offer in Offer.query.all()}
     if default_form is None:
-        default_form = DefaultGiftForm(default_offer_id=get_setting(DEFAULT_GIFT_OFFER_SETTING, 0) or 0,
-                                       default_days=get_setting(DEFAULT_GIFT_DAYS_SETTING, None) or 30)
-    default_form.default_offer_id.choices = _tier_choices(none=True)
+        chosen = default_referral_choice()
+        default_form = DefaultBenefitForm(benefit=_choice_of(chosen['kind'], chosen.get('offer_id'),
+                                                             chosen.get('discount_id')),
+                                          days=chosen.get('days'))
+    default_form.benefit.choices = _benefit_choices(None, own=False)
+    # What each member's referral code gives on its owner's domain, its own or the default (R1, R3)
+    gives = {code.id: (_describe(referral_benefit(code, owners[code.owner_id].home_domain())),
+                       code.benefit is None)
+             for code in codes if code.owner_id in owners}
     code_form = code_form or GiftCodeForm()
     code_form.offer_id.choices = _tier_choices(none=True)
-    return render_template('admin/payments_codes.html', title=_('Codes'), codes=codes, uses=uses, owners=owners,
+    return render_template('admin/payments_codes.html', title=_('Codes'), codes=codes, uses=uses, owners=owners, gives=gives,
                            tiers=tiers, default_form=default_form, code_form=code_form, currency=get_setting(CURRENCY_SETTING),
                            roles_with=roles_with('manage monetization'))
 
@@ -388,14 +397,45 @@ def admin_payments_codes():
 @login_required
 @permission_required('manage monetization')
 def admin_payments_codes_default():
-    form = DefaultGiftForm()
-    form.default_offer_id.choices = _tier_choices(none=True)
+    form = DefaultBenefitForm()
+    form.benefit.choices = _benefit_choices(None, own=False)
     if not form.validate_on_submit():
         return _codes_page(default_form=form)
-    set_setting(DEFAULT_GIFT_OFFER_SETTING, form.default_offer_id.data or None)
-    set_setting(DEFAULT_GIFT_DAYS_SETTING, form.default_days.data if form.default_offer_id.data else None)
-    flash(_('Default gift saved.'))
+    kind, _sep, number = form.benefit.data.partition(':')
+    chosen = {'kind': kind}
+    if kind == 'gift':
+        chosen.update(offer_id=int(number), days=form.days.data or None)
+    elif kind == 'discount':
+        chosen['discount_id'] = int(number)
+    set_setting(REFERRAL_BENEFIT_SETTING, chosen)
+    flash(_('Default saved.'))
     return redirect(url_for('admin.admin_payments_codes'))
+
+
+def _benefit_choices(domain, own: bool) -> list[tuple[str, str]]:
+    """What a referral code may give (plan 2026-11-16 R2): a free period of a tier on `domain`, or a discount code that
+    applies there (to one of its tiers or to any offer). The default (domain None) chooses from every tier on offer.
+    A code may also be left on the default; the default may be automatic: the cheapest tier, one billing period."""
+    tiers = tiers_on(domain) if domain is not None else _gift_tiers()
+    tier_ids = {offer.id for offer in tiers}
+    discounts = [code for code in PromoCode.query.filter(PromoCode.kind.in_(DISCOUNT_KINDS), PromoCode.owner_id.is_(None))
+                 .order_by(PromoCode.code) if code.offer_id is None or code.offer_id in tier_ids]
+    first = [('default', _('The site default'))] if own else [(AUTO, _('One billing period of the cheapest tier'))]
+    return first + [('none', _('Nothing'))] + \
+        [(f'gift:{offer.id}', _('A free period of %(tier)s', tier=offer.title)) for offer in tiers] + \
+        [(f'discount:{code.id}', _('Discount code %(code)s', code=code.code)) for code in discounts]
+
+
+def _choice_of(kind, offer_id, discount_id) -> str:
+    return f'gift:{offer_id}' if kind == 'gift' else f'discount:{discount_id}' if kind == 'discount' else kind
+
+
+def _describe(benefit: Benefit | None) -> str:
+    if benefit is None:
+        return _('Nothing')
+    if benefit.discount is not None:
+        return _('Discount code %(code)s', code=benefit.discount.code)
+    return _('%(tier)s for %(days)d days', tier=benefit.offer.title, days=benefit.days)
 
 
 def _code_refusal(form: GiftCodeForm, kind: str) -> str | None:
@@ -456,6 +496,8 @@ def admin_payments_codes_add():
 def admin_payments_code_edit(code_id):
     """A code's gift, limits and whether it can be used; a member's referral code gets a gift of its own (PM7)."""
     code = db.session.get(PromoCode, code_id) or abort(404)
+    if code.owner_id is not None:
+        return _edit_referral_code(code)
     form = GiftCodeForm(obj=code)
     del form.code
     del form.kind   # a code's kind stays what it was made as
@@ -472,6 +514,33 @@ def admin_payments_code_edit(code_id):
         return redirect(url_for('admin.admin_payments_codes'))
     owner = db.session.get(User, code.owner_id) if code.owner_id else None
     return render_template('admin/payments_code.html', title=_('Code'), code=code, owner=owner, form=form,
+                           roles_with=roles_with('manage monetization'))
+
+
+def _edit_referral_code(code: PromoCode):
+    """A member's referral code: its one benefit, from what its owner's domain offers (R1, R2), and its own limits."""
+    owner = db.session.get(User, code.owner_id)
+    form = ReferralCodeForm(obj=code)
+    form.benefit.choices = _benefit_choices(owner.home_domain(), own=True)
+    if request.method == 'GET':
+        form.benefit.data = 'default' if code.benefit is None else _choice_of(code.benefit, code.offer_id,
+                                                                               code.discount_code_id)
+        if code.expires_at:
+            form.expires_at.data = code.expires_at.date()
+    if form.validate_on_submit():
+        kind, _sep, number = form.benefit.data.partition(':')
+        code.benefit = None if kind == 'default' else kind
+        code.offer_id = int(number) if kind == 'gift' else None
+        code.days = form.days.data if kind == 'gift' else None
+        code.discount_code_id = int(number) if kind == 'discount' else None
+        code.max_uses = form.max_uses.data or None
+        code.expires_at = datetime.combine(form.expires_at.data, datetime.max.time()).replace(microsecond=0) \
+            if form.expires_at.data else None
+        code.active = form.active.data
+        db.session.commit()
+        flash(_('Code saved.'))
+        return redirect(url_for('admin.admin_payments_codes'))
+    return render_template('admin/payments_referral_code.html', title=_('Code'), code=code, owner=owner, form=form,
                            roles_with=roles_with('manage monetization'))
 
 

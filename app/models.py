@@ -6845,6 +6845,10 @@ class PromoCode(db.Model):
     expires_at = db.Column(db.DateTime)
     active = db.Column(db.Boolean, nullable=False, default=True, server_default=db.true())
     owner_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), unique=True)   # a referral code's
+    # A referral code's one benefit (plan 2026-11-16 R1): NULL the site's default; 'gift' (offer_id, days), 'discount'
+    # (discount_code_id) or 'none' of its own
+    benefit = db.Column(db.String(10))
+    discount_code_id = db.Column(db.Integer, db.ForeignKey('promo_code.id', ondelete='SET NULL'))
     created_by = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'))
     created_at = db.Column(db.DateTime, default=utcnow)
 

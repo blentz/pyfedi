@@ -1,6 +1,7 @@
 """Admin -> Payments -> Codes (paid membership plan phase 2, G6): the default gift, gift codes, members' referral codes."""
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from bs4 import BeautifulSoup
@@ -9,7 +10,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.models import Offer, PromoCode, PromoCodeUse, Site
-from app.payments.gifts import DEFAULT_GIFT_DAYS_SETTING, DEFAULT_GIFT_OFFER_SETTING
+from app.payments.gifts import REFERRAL_BENEFIT_SETTING
 from app.referral import GENERATORS_SETTING, generate_code
 from app.utils import get_setting, set_setting
 from tests.factories import grant_permission, make_user
@@ -88,19 +89,12 @@ class TestThePage:
         assert 'referrer' in env.client.get('/admin/payments/codes').get_data(as_text=True)
 
 
-class TestTheDefaultGift:
-    def test_it_is_saved(self, env, admin):
-        assert post(env, '/admin/payments/codes/default', default_offer_id=env.knight.id, default_days=30).status_code == 302
-        assert (get_setting(DEFAULT_GIFT_OFFER_SETTING), get_setting(DEFAULT_GIFT_DAYS_SETTING)) == (env.knight.id, 30)
-
-    def test_none_clears_it(self, env, admin):
-        set_setting(DEFAULT_GIFT_OFFER_SETTING, env.knight.id)
-        post(env, '/admin/payments/codes/default', default_offer_id=0, default_days=30)
-        assert not get_setting(DEFAULT_GIFT_OFFER_SETTING)
+class TestTheDefaultBenefit:
+    """Saving it is tested in tests/test_referral_benefits.py (plan 2026-11-16 R3); a one-off is no tier to give."""
 
     def test_a_one_off_is_no_gift(self, env, admin):
-        post(env, '/admin/payments/codes/default', default_offer_id=env.tip.id, default_days=30)
-        assert not get_setting(DEFAULT_GIFT_OFFER_SETTING)
+        post(env, '/admin/payments/codes/default', benefit=f'gift:{env.tip.id}')
+        assert not get_setting(REFERRAL_BENEFIT_SETTING)
 
 
 class TestMakingACode:
@@ -155,7 +149,9 @@ class TestChangingACode:
         generate_code(member)
         db.session.commit()
         row = PromoCode.query.filter_by(owner_id=member.id).one()
-        post(env, f'/admin/payments/codes/{row.id}', offer_id=env.knight.id, days=365, active='y')
+        # Its choices are what the owner's domain has on offer: a tier whose provider is usable (plan 2026-11-16 R2)
+        with patch('app.payments.adapters.btcpay_adapter.BtcpayAdapter.available', return_value=True):
+            post(env, f'/admin/payments/codes/{row.id}', benefit=f'gift:{env.knight.id}', days=365, active='y')
         assert db.session.get(PromoCode, row.id).days == 365
 
     def test_an_unknown_code_is_404(self, env, admin):

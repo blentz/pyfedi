@@ -14,8 +14,8 @@ from flask import current_app, g, url_for
 from sqlalchemy import func
 
 from app import db
-from app.models import Referral, User, utcnow
-from app.payments.gifts import referral_gift_code, start_gift, usable
+from app.models import PromoCode, Referral, User, utcnow
+from app.payments.gifts import referral_benefit, referral_gift_code, start_gift, usable
 from app.storefront import REFERRAL_MODE, DomainInfo, domain_base_url, open_registrations, paid_registration  # noqa: F401 (re-exported)
 from app.utils import get_setting
 
@@ -119,14 +119,26 @@ def referrer_for(text: str | None, storefront: DomainInfo) -> User | None:
 
 def record_referral(referrer: User, referred: User) -> Referral:
     """Add the who-referred-whom row for `referred`, made with `referrer`'s current code, and where `referred`'s domain
-    charges, the gift that code carries (paid membership PM3, G2, G4). The caller commits."""
+    charges, the gift that code gives (paid membership PM3, G2, G4; plan 2026-11-16 R1, R4). A code that gives a
+    discount gave it at registration, held for the first payment. The caller commits."""
     row = Referral(referrer_id=referrer.id, referred=referred, code=referrer.referral_code, created_at=utcnow())
     db.session.add(row)
-    gift = referral_gift_code(referrer)
-    if gift is not None and usable(gift) and paid_registration(referred.home_domain()):
+    code = referral_gift_code(referrer)
+    if code is None or not usable(code) or not paid_registration(referred.home_domain()):
+        return row
+    benefit = referral_benefit(code, referrer.home_domain())
+    if benefit is not None and benefit.offer is not None:
         db.session.flush()   # the gift's subscription names the new account
-        start_gift(referred, gift, commit=False)
+        start_gift(referred, code, commit=False, offer=benefit.offer, days=benefit.days)
     return row
+
+
+def referral_discount(referrer: User) -> PromoCode | None:
+    """The discount code `referrer`'s referral code gives, if it gives one (R1, R4): usable or not, which the caller
+    asks, since one past its limits refuses the registration rather than admitting for free (R5)."""
+    code = referral_gift_code(referrer)
+    benefit = referral_benefit(code, referrer.home_domain()) if code is not None else None
+    return benefit.discount if benefit is not None else None
 
 
 def referral_link(user: User) -> str:

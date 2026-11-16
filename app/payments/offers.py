@@ -60,6 +60,18 @@ def offers_available() -> bool:
     return _any_offer_on(current_storefront().id, is_onion_request())
 
 
+def tiers_on(domain) -> list[Offer]:
+    """What a gift on `domain` can be a free period of (plan 2026-11-16 R2): the subscriptions on offer there in its
+    membership group; on a domain without membership, every subscription on offer there. Cheapest first."""
+    if domain is None:
+        return []
+    subscriptions = [offer for offer in offers_on(domain.id, domain.is_onion) if offer.kind == 'subscription']
+    own = next((offer for offer in subscriptions if offer.id == domain.registration_offer_id), None)
+    if own is not None:
+        subscriptions = [offer for offer in subscriptions if offer.offer_group == own.offer_group]
+    return sorted(subscriptions, key=lambda offer: (offer.amount_minor is None, offer.amount_minor or 0, offer.id))
+
+
 def subscription_settings_shown() -> bool:
     """Whether Settings has a Subscription tab for the signed-in member (plan 2026-11-16 DM3): somewhere has membership
     tiers, or they have held a subscription or paid for something."""

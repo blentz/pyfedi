@@ -1,0 +1,30 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
+{% set active_child = 'admin_payments' %}
+
+{# A member's referral code: its one benefit and its limits (plan 2026-11-16-referral-benefits.md, R1-R5). -#}
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col-md-8">
+        <h2>{{ title }}: <code>{{ code.code }}</code></h2>
+        <p class="small field_hint">{{ _("%(name)s's referral code: joining with it gives one of these, chosen from what %(domain)s offers.", name=owner.user_name, domain=owner.home_domain().domain) }}</p>
+        <form method="post">
+            {{ form.hidden_tag() }}
+            {{ render_field(form.benefit) }}
+            {{ render_field(form.days) }}
+            {{ render_field(form.max_uses) }}
+            {{ render_field(form.expires_at) }}
+            {{ render_field(form.active) }}
+            {{ render_field(form.save_code) }}
+        </form>
+        <p class="small field_hint">{{ _('A discount code keeps its own limits: its uses, last day and whether it can be used.') }}</p>
+        <p><a href="{{ url_for('admin.admin_payments_codes') }}">{{ _('Back to codes') }}</a></p>
+    </div>
+</div>
+{% endblock %}
