@@ -69,6 +69,7 @@ class Config(object):
     MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS') is not None
     MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or None
     MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or None
+    MAIL_TIMEOUT = float(os.environ.get('MAIL_TIMEOUT') or 30)   # seconds a silent mail server may hold a Celery worker
     MAIL_FROM = os.environ.get('MAIL_FROM') or 'noreply@' + os.environ.get('SERVER_NAME')
     ERRORS_TO = os.environ.get('ERRORS_TO') or ''
     # count WARNING-and-worse log records per day (app/error_counts.py); the tests turn it off

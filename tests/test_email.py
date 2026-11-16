@@ -122,7 +122,13 @@ class TestSendingThroughAnSmtpServer:
         service = self.sent()
         assert service.call_args.args[0] == 'postmaster'
         assert service.call_args.args[2] == ('mail.probeland.test', 587)
-        assert service.call_args.kwargs == {'use_tls': True}
+        assert service.call_args.kwargs == {'use_tls': True, 'timeout': 30}
+
+    def test_the_timeout_it_is_told_to_use(self, env, smtp, monkeypatch):
+        """Without one a mail server that accepts the connection and then says nothing holds a Celery worker for
+        good."""
+        monkeypatch.setitem(current_app.config, 'MAIL_TIMEOUT', 7)
+        assert self.sent().call_args.kwargs['timeout'] == 7
 
     def test_the_message_is_composed_and_sent(self, env, smtp):
         service = self.sent()
@@ -327,6 +333,12 @@ class TestConnectingToTheServer:
         assert plain.call_count == 0
         service.connect()
         assert service.smtpserver.starttls.call_count == 0
+
+    @pytest.mark.parametrize('use_tls', [True, False])
+    def test_the_connection_has_a_timeout(self, env, use_tls):
+        service = a_service(use_tls=use_tls)
+        opened = service.constructors[0 if use_tls else 1]
+        assert opened.call_args.kwargs['timeout'] == 30
 
     def test_the_ssl_connection_checks_the_server_certificate(self, env):
         service = a_service(use_tls=False)

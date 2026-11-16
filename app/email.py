@@ -116,7 +116,8 @@ def send_async_email(subject, sender, recipients, text_body, html_body, reply_to
             email_sender = SMTPEmailService(current_app.config['MAIL_USERNAME'],
                                             current_app.config['MAIL_PASSWORD'],
                                             (current_app.config['MAIL_SERVER'], current_app.config['MAIL_PORT']),
-                                            use_tls=current_app.config['MAIL_USE_TLS'])
+                                            use_tls=current_app.config['MAIL_USE_TLS'],
+                                            timeout=current_app.config['MAIL_TIMEOUT'])
             email_sender.set_message(text_body, subject, sender, html_body)  # sender = 'John Doe <j.doe@server.com>'
             if reply_to:
                 email_sender.set_reply_to(reply_to)
@@ -185,9 +186,10 @@ class SMTPEmailService:
     :param in_password: Password for mail server login (required)
     :param in_server: SMTP server to connect to
     :param use_tls: Select whether to connect over SSL (False) or TLS (True). Keep in mind that SMTP servers use different ports for SSL and TLS.
+    :param timeout: Seconds to wait on the server before giving up, so a silent server cannot hold a worker for good
     """
 
-    def __init__(self, in_username, in_password, in_server, use_tls):
+    def __init__(self, in_username, in_password, in_server, use_tls, timeout=30):
         self.username = in_username
         self.password = in_password
         self.server_name = in_server[0]
@@ -195,9 +197,10 @@ class SMTPEmailService:
         self.use_tls = use_tls
 
         if not self.use_tls:
-            self.smtpserver = smtplib.SMTP_SSL(self.server_name, self.server_port, context=tls_context())
+            self.smtpserver = smtplib.SMTP_SSL(self.server_name, self.server_port, timeout=timeout,
+                                               context=tls_context())
         else:
-            self.smtpserver = smtplib.SMTP(self.server_name, self.server_port)
+            self.smtpserver = smtplib.SMTP(self.server_name, self.server_port, timeout=timeout)
         self.connected = False
         self.recipients = []
 
