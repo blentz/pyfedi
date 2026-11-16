@@ -371,6 +371,12 @@ class TestConnectingToTheServer:
         assert 'mail.probeland.test' in described
         assert 'Connected: False' in described
 
+    def test_what_it_says_about_itself_leaves_out_the_password(self, env):
+        """A description that reaches a log or a traceback must not carry MAIL_PASSWORD."""
+        described = str(a_service())
+        assert 'postmaster' in described
+        assert 'secret' not in described
+
 
 class TestComposingTheMessage:
     def test_a_message_with_both_a_text_and_an_html_version(self, env):

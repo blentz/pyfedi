@@ -208,8 +208,8 @@ class SMTPEmailService:
         return "Type: Mail Sender \n" \
                "Connection to server {}, port {} \n" \
                "Connected: {} \n" \
-               "Username: {}, Password: {}".format(
-            self.server_name, self.server_port, self.connected, self.username, self.password)
+               "Username: {}".format(
+            self.server_name, self.server_port, self.connected, self.username)
 
     def set_message(self, plaintext, subject="", in_from=None, htmltext=None):
         """
