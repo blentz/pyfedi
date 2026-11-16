@@ -149,6 +149,15 @@ class TestSendingThroughAnSmtpServer:
         service = self.sent()
         assert service.return_value.set_reply_to.call_count == 0
 
+    def test_bounces_go_to_the_bounce_address(self, env, smtp):
+        service = self.sent()
+        service.return_value.set_return_path.assert_called_once_with('bounces@probeland.test')
+
+    def test_and_to_the_sender_when_none_is_configured(self, env, smtp, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'BOUNCE_ADDRESS', '')
+        service = self.sent()
+        service.return_value.set_return_path.assert_called_once_with(None)
+
     def test_one_recipient_given_as_a_bare_string(self, env, smtp):
         """`send_topic_suggestion` passes `g.site.contact_email`, which is
         one address, not a list of them."""
@@ -482,7 +491,7 @@ class TestSendingIt:
         service.set_recipients(['a@b.test', 'c@d.test'])
         service.connect()
         sent = []
-        service.smtpserver.send_message = lambda msg: sent.append(msg['To'])
+        service.smtpserver.send_message = lambda msg, from_addr=None: sent.append(msg['To'])
         service.send_all(close_connection=False)
         assert sent == ['a@b.test', 'c@d.test']
 
@@ -494,7 +503,7 @@ class TestSendingIt:
         service.set_recipients(['a@b.test', 'c@d.test'])
         service.connect()
         sent = []
-        service.smtpserver.send_message = lambda msg: sent.append(
+        service.smtpserver.send_message = lambda msg, from_addr=None: sent.append(
             msg.as_string())
         service.send_all(close_connection=False)
         assert 'c@d.test' not in sent[0]
@@ -515,6 +524,25 @@ class TestSendingIt:
         service.send_all(close_connection=False)
         assert service.connected is True
 
+    def test_the_envelope_sender_is_the_bounce_address_when_one_is_set(self, env):
+        """Bounces go to the envelope sender (Return-Path), not to From: without this they land in MAIL_FROM's
+        mailbox, which the bounce job would empty."""
+        service = a_service()
+        service.set_message('the text', 'a subject', 'Probeland <noreply@probeland.test>')
+        service.set_return_path('bounces@probeland.test')
+        service.set_recipients(['a@b.test'])
+        service.connect()
+        service.send_all(close_connection=False)
+        assert service.smtpserver.send_message.call_args.kwargs['from_addr'] == 'bounces@probeland.test'
+
+    def test_and_smtplib_takes_it_from_the_from_header_when_none_is(self, env):
+        service = a_service()
+        service.set_message('the text', 'a subject', 'Probeland <noreply@probeland.test>')
+        service.set_recipients(['a@b.test'])
+        service.connect()
+        service.send_all(close_connection=False)
+        assert service.smtpserver.send_message.call_args.kwargs['from_addr'] is None
+
     def test_sending_before_connecting_is_refused(self, env):
         service = a_service()
         service.set_message('the text', 'a subject', 'a@b.test')
@@ -533,7 +561,7 @@ class TestHeadersThatCarryANewline:
                             'a@b.test')
         service.set_recipients(['a@b.test'])
         service.connect()
-        service.smtpserver.send_message = lambda msg: msg.as_string()
+        service.smtpserver.send_message = lambda msg, from_addr=None: msg.as_string()
         with pytest.raises(HeaderParseError):
             service.send_all(close_connection=False)
 
@@ -542,6 +570,6 @@ class TestHeadersThatCarryANewline:
         service.set_message('the text', 'a subject', 'a@b.test')
         service.set_recipients(['a@b.test\nBcc: victim@example.test'])
         service.connect()
-        service.smtpserver.send_message = lambda msg: msg.as_string()
+        service.smtpserver.send_message = lambda msg, from_addr=None: msg.as_string()
         with pytest.raises(HeaderParseError):
             service.send_all(close_connection=False)

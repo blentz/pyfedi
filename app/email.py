@@ -121,6 +121,7 @@ def send_async_email(subject, sender, recipients, text_body, html_body, reply_to
             email_sender.set_message(text_body, subject, sender, html_body)  # sender = 'John Doe <j.doe@server.com>'
             if reply_to:
                 email_sender.set_reply_to(reply_to)
+            email_sender.set_return_path(return_path or None)
             email_sender.set_recipients(recipients)
             email_sender.connect()
             email_sender.send_all(close_connection=True)
@@ -203,6 +204,7 @@ class SMTPEmailService:
             self.smtpserver = smtplib.SMTP(self.server_name, self.server_port, timeout=timeout)
         self.connected = False
         self.recipients = []
+        self.return_path = None
 
     def __str__(self):
         return "Type: Mail Sender \n" \
@@ -258,6 +260,10 @@ class SMTPEmailService:
     
     def set_reply_to(self, reply_to):
         self.msg.add_header("Reply-To", reply_to)
+
+    def set_return_path(self, address):
+        """The envelope sender, where bounces go. None leaves smtplib to take it from the From header."""
+        self.return_path = address
 
     def set_plaintext(self, in_body_text):
         """
@@ -341,7 +347,7 @@ class SMTPEmailService:
 
         for recipient in self.recipients:
             self.msg.replace_header("To", recipient)
-            self.smtpserver.send_message(self.msg)
+            self.smtpserver.send_message(self.msg, from_addr=self.return_path)
 
         if close_connection:
             self.disconnect()
