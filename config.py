@@ -66,7 +66,9 @@ class Config(object):
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     MAIL_SERVER = os.environ.get('MAIL_SERVER') or None
     MAIL_PORT = int(os.environ.get('MAIL_PORT') or 25)
-    MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS') is not None
+    # True = STARTTLS on a plain connection; False (unset, or a false word) = implicit TLS (SMTP_SSL). Being merely
+    # present used to mean True, so MAIL_USE_TLS=False meant STARTTLS.
+    MAIL_USE_TLS = (os.environ.get('MAIL_USE_TLS') or '').strip().lower() not in ('', '0', 'false', 'no', 'off')
     MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or None
     MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or None
     MAIL_TIMEOUT = float(os.environ.get('MAIL_TIMEOUT') or 30)   # seconds a silent mail server may hold a Celery worker
