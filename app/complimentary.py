@@ -11,6 +11,7 @@ from sqlalchemy import exists
 
 from app import db
 from app.models import MemberSubscription, Offer, User, utcnow
+from app.tier_roles import sync_tier_roles
 
 KIND = 'complimentary'
 TITLE = 'Complimentary'
@@ -56,6 +57,7 @@ def grant_to_new_account(user: User) -> None:
     if db.session.query(exists().where(MemberSubscription.user_id == user.id)).scalar():
         return
     grant_complimentary(user)
+    sync_tier_roles(user)   # a new account: no cache holds its role names yet
 
 
 def end_complimentary(user: User) -> bool:

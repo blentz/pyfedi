@@ -2235,6 +2235,8 @@ class RoleGrant(db.Model):
     granted_by = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_role_grant_granted_by', ondelete='SET NULL'))
     granted_at = db.Column(db.DateTime, nullable=False, default=utcnow, server_default=text("timezone('utc', now())"))
     expires_at = db.Column(db.DateTime)
+    # Held through a subscription tier (plan 2026-11-16-tier-roles D2): app.tier_roles grants it and ends it, never an admin
+    via_tier = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
 
 
 role_grant = RoleGrant.__table__
@@ -6104,12 +6106,13 @@ class ModLog(db.Model):
         'change_grant_expiry': _l('Changed role expiry'),
         'revoke_role': _l('Revoked role'),
         'grant_expired': _l('Role expired'),
+        'edit_offer_roles': _l("Changed a subscription's roles"),
     }
 
     # Actions recorded for admins only, whatever the public_modlog setting (D942). Role changes are among them: a
     # grant of a role that is not listed publicly is not public either.
     admin_only_actions = {'masquerade', 'create_role', 'edit_role', 'delete_role', 'grant_role', 'change_grant_expiry',
-                          'revoke_role', 'grant_expired'}
+                          'revoke_role', 'grant_expired', 'edit_offer_roles'}
 
     def action_to_str(self):
         if self.action in self.action_map:
@@ -6829,6 +6832,13 @@ class BtcpayInvoice(db.Model):
     sats = db.Column(db.BigInteger, nullable=False)
     rate_day = db.Column(db.Date, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
+# The roles a subscription tier carries (plan 2026-11-16-tier-roles D1): its members hold them while they have access
+offer_role = db.Table('offer_role',
+                      db.Column('offer_id', db.Integer, db.ForeignKey('offer.id', ondelete='CASCADE'), primary_key=True),
+                      db.Column('role_id', db.Integer, db.ForeignKey('role.id', ondelete='CASCADE'), primary_key=True,
+                                index=True))
 
 
 class PromoCode(db.Model):

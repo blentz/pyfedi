@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app import db
 from app.complimentary import complimentary_of
+from app.tier_roles import sync_tier_roles
 from app.constants import DONOR_WHILE_SUBSCRIBED
 from app.email import send_prepaid_reminder, send_verification_email
 from app.models import MemberSubscription, Offer, Payment, PaymentEvent, User, utcnow
@@ -74,6 +75,7 @@ def apply_event(provider_kind: str, event_id: str, events: list) -> bool:
         for user in touched:
             refresh_donor(user)
             refresh_access(user)
+            sync_tier_roles(user)
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -214,6 +216,7 @@ def end_expired_prepaid() -> int:
     for user in {db.session.get(User, subscription.user_id) for subscription in expired}:
         refresh_donor(user)
         refresh_access(user)
+        sync_tier_roles(user)
     db.session.commit()
     return len(expired)
 
@@ -268,6 +271,7 @@ def cancel_subscription(subscription: MemberSubscription) -> None:
     db.session.flush()
     refresh_donor(user)
     refresh_access(user)
+    sync_tier_roles(user)
     db.session.commit()
 
 

@@ -20,7 +20,7 @@ from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, Complimentar
     StripeCredentialsForm
 from app.complimentary import KIND as COMPLIMENTARY, end_complimentary, grant_complimentary
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, PromoCode, PromoCodeUse, \
-    SiteDomain, User, utcnow
+    Role, SiteDomain, User, utcnow
 from app.local_names import local_named, split_local_name
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
@@ -31,11 +31,13 @@ from app.payments.adapters.paypal_adapter import REQUIRED_EVENTS as PAYPAL_EVENT
 from app.payments.credentials import CredentialsUnavailable, credentials_available, seal, unseal
 from app.payments.code_text import normalise
 from app.payments.core import refresh_access
+from app.roles import RoleError, describe_scopes, may_attach, permission_scopes, set_offer_roles
 from app.payments.discounts import DISCOUNT_KINDS
 from app.payments.gifts import AUTO, REFERRAL_BENEFIT_SETTING, Benefit, default_referral_choice, \
     referral_benefit
 from app.payments.offers import LINK, offers_changed, offers_on, tiers_on
 from app.storefront import clear_domain_cache, domain_rows
+from app.tier_roles import offer_roles, sync_tier_roles
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
 
 LEDGER_PAGE = 50
@@ -116,6 +118,7 @@ def _page(stripe_form=None, settings_form=None, btcpay_form=None, paypal_form=No
     settings_form = settings_form or PaymentSettingsForm(retention_days=get_setting(RETENTION_SETTING))
     return render_template('admin/payments.html', title=_('Payments'), roles_with=roles_with('manage monetization'),
                            key_set=credentials_available(), source=_stripe_source(), stripe_form=stripe_form,
+                           complimentary_offer=Offer.query.filter_by(provider_kind=COMPLIMENTARY).order_by(Offer.id).first(),
                            settings_form=settings_form, offers=Offer.query.filter(Offer.provider_kind != COMPLIMENTARY)
                            .order_by(Offer.offer_group, Offer.position, Offer.id).all(),
                            import_form=FlaskForm(), currency=get_setting(CURRENCY_SETTING),
@@ -377,6 +380,7 @@ def admin_payments_complimentary(user_id):
         elif form.end.data:
             if end_complimentary(user):
                 refresh_access(user)
+                sync_tier_roles(user)
                 flash(_('Complimentary membership ended.'))
         elif user.registration_pending_since is not None:
             flash(_('This account has not finished joining.'), 'error')
@@ -384,6 +388,7 @@ def admin_payments_complimentary(user_id):
             flash(_('A provider still charges this account. Cancel its subscription first.'), 'error')
         else:
             grant_complimentary(user)
+            sync_tier_roles(user)
             flash(_('Complimentary membership given.'))
         db.session.commit()
     return redirect(url_for('admin.admin_user_edit', user_id=user.id))
@@ -873,3 +878,32 @@ def admin_payments_ledger():
                            prev_url=url_for('admin.admin_payments_ledger', page=payments.prev_num, **args)
                            if payments.has_prev else None,
                            retention=get_setting(RETENTION_SETTING), roles_with=roles_with('manage monetization'))
+
+
+@bp.route('/payments/offers/<int:offer_id>/roles', methods=['GET', 'POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_offer_roles(offer_id):
+    """The roles a subscription, or complimentary membership, gives its members (plan 2026-11-16-tier-roles D7). A role
+    the admin may not attach (T5) is shown fixed, and kept as it is when the rest are saved."""
+    offer = db.session.get(Offer, offer_id)
+    if offer is None or offer.kind != 'subscription':
+        abort(404)
+    roles = Role.query.filter(Role.built_in.is_(False)).order_by(Role.name).all()
+    carried = {role.id for role in offer_roles(offer)}
+    changeable = {role.id for role in roles if may_attach(current_user, role)}
+    if request.method == 'POST' and FlaskForm().validate_on_submit():
+        chosen = {int(value) for value in request.form.getlist('role') if value.isdigit()}
+        keep = (chosen & changeable) | (carried - changeable)
+        try:
+            set_offer_roles(current_user, offer, [role for role in roles if role.id in keep])
+            flash(_('Roles saved.'))
+        except RoleError as refused:
+            db.session.rollback()
+            flash(str(refused), 'error')
+        return redirect(url_for('admin.admin_payments_offer_roles', offer_id=offer.id))
+    return render_template('admin/payments_offer_roles.html', title=_('Roles it gives'), offer=offer, form=FlaskForm(),
+                           rows=[dict(role=role, carried=role.id in carried, changeable=role.id in changeable,
+                                      scopes=describe_scopes(permission_scopes(role))) for role in roles],
+                           complimentary=offer.provider_kind == COMPLIMENTARY,
+                           roles_with=roles_with('manage monetization'))

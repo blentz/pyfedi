@@ -1,0 +1,46 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_payments' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col-md-8">
+        <h2>{{ title }}: {{ _('Complimentary membership') if complimentary else offer.title }}</h2>
+        <p class="small field_hint">
+            {% if complimentary -%}
+            {{ _('Everybody holding complimentary membership holds these roles.') }}
+            {% else -%}
+            {{ _('Members hold these roles while they have access: through a cancelled period they have paid for, and the days of grace after it ends. A gift of this subscription gives them too.') }}
+            {% endif -%}
+            {{ _('A role with permissions makes its holders privileged: domain administrators can no longer act on them.') }}
+        </p>
+        {% if rows -%}
+        <form method="post">
+            {{ form.hidden_tag() }}
+            {% for row in rows -%}
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" name="role" value="{{ row.role.id }}" id="role-{{ row.role.id }}"
+                       {{ 'checked' if row.carried }} {{ 'disabled' if not row.changeable }}>
+                <label class="form-check-label" for="role-{{ row.role.id }}">
+                    {{ row.role.name }}
+                    <span class="small text-muted">{{ row.scopes or _('No permissions: a badge only') }}</span>
+                    {% if not row.changeable -%}
+                    <br><span class="small text-muted">{{ _('Only somebody holding all of its permissions can change this one.') }}</span>
+                    {% endif -%}
+                </label>
+            </div>
+            {% endfor -%}
+            <button type="submit" class="btn btn-primary">{{ _('Save') }}</button>
+        </form>
+        {% else -%}
+        <p>{{ _('There are no roles yet. An admin makes them under Roles.') }}</p>
+        {% endif -%}
+        <p class="mt-3"><a href="{{ url_for('admin.admin_payments') }}">{{ _('Back to payments') }}</a></p>
+    </div>
+</div>
+{% endblock %}

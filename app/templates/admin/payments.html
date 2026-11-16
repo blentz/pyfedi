@@ -110,11 +110,14 @@
                             <td>{% if offer.kind == 'link' %}<a href="{{ offer.url }}" rel="noopener noreferrer nofollow">{{ offer.url }}</a>{% elif offer.amount_minor is not none %}{{ money(offer.amount_minor, offer.currency) }}{% if offer.interval %} / {{ offer.interval }}{% endif %}{% else %}{{ _('Not read from Stripe yet') }}{% endif %}</td>
                             <td>{{ _('Yes') if offer.active else _('No') }}</td>
                             <td><code>[checkout {{ offer.id }}]</code></td>
-                            <td><a href="{{ url_for('admin.admin_payments_offer_edit', offer_id=offer.id) }}">{{ _('Edit') }}</a></td>
+                            <td><a href="{{ url_for('admin.admin_payments_offer_edit', offer_id=offer.id) }}">{{ _('Edit') }}</a>{% if offer.kind == 'subscription' %} · <a href="{{ url_for('admin.admin_payments_offer_roles', offer_id=offer.id) }}">{{ _('Roles') }}</a>{% endif %}</td>
                         </tr>
                     {% endfor -%}
                 </tbody>
             </table>
+        {% endif -%}
+        {% if complimentary_offer -%}
+            <p><a href="{{ url_for('admin.admin_payments_offer_roles', offer_id=complimentary_offer.id) }}">{{ _('Roles complimentary membership gives') }}</a></p>
         {% endif -%}
 
         <h3 class="mt-4">{{ _('Membership') }}</h3>

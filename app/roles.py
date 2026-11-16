@@ -18,11 +18,13 @@ from sqlalchemy import func
 from app import cache, db
 from app.api.alpha.views import user_view
 from app.complimentary import grant_complimentary
-from app.models import ModLog, Role, RoleGrant, RolePermission, RolePermissionDomain, Settings, SiteDomain, User, utcnow
+from app.models import MemberSubscription, ModLog, Offer, Role, RoleGrant, RolePermission, RolePermissionDomain, Settings, SiteDomain, User, \
+    offer_role, unexpired_grant, utcnow
 from app.permission_cache import permissions_changed
 from app.permissions import BY_NAME, INSTANCE_ONLY_PERMISSIONS, STAFF_PERMISSIONS, STAFF_SCOPABLE_PERMISSIONS, \
     home_domain_id
 from app.storefront import domain_rows
+from app.tier_roles import offer_roles, role_names_changed, sync_tier_roles
 from app.utils import add_to_modlog, set_setting
 
 NAME_LENGTH = 50
@@ -227,12 +229,17 @@ def grant_role(actor: User, user: User, role: Role, expires_at: datetime | None 
     if user is None or not user.is_local():
         raise RoleError('Roles are granted to local accounts only.')
     expires_at = _clean_expiry(expires_at)
-    if RoleGrant.query.filter_by(user_id=user.id, role_id=role.id).first():
+    grant = RoleGrant.query.filter_by(user_id=user.id, role_id=role.id).first()
+    if grant is not None and not grant.via_tier:
         raise RoleError(f'{user.user_name} already holds {role.name}.')
-    grant = RoleGrant(user_id=user.id, role_id=role.id, granted_by=actor.id, expires_at=expires_at)
-    db.session.add(grant)
-    if role.built_in:   # every admin holds complimentary membership (plan 2026-11-16 X3)
+    if grant is not None:   # held through a subscription: from now on the admin's (plan 2026-11-16-tier-roles D2)
+        grant.via_tier, grant.granted_by, grant.granted_at, grant.expires_at = False, actor.id, utcnow(), expires_at
+    else:
+        grant = RoleGrant(user_id=user.id, role_id=role.id, granted_by=actor.id, expires_at=expires_at)
+        db.session.add(grant)
+    if role.built_in:   # every admin holds complimentary membership (plan 2026-11-16 X3), and its roles
         grant_complimentary(user)
+        sync_tier_roles(user)
     db.session.commit()
     permissions_changed(user.id)
     _admins_changed(role)
@@ -242,8 +249,16 @@ def grant_role(actor: User, user: User, role: Role, expires_at: datetime | None 
     return grant
 
 
+def _not_through_a_tier(grant: RoleGrant) -> None:
+    """A grant a subscription tier made is the tier's to end (plan 2026-11-16-tier-roles D5)."""
+    if grant.via_tier:
+        raise RoleError('This role is held through a subscription. Take it off the subscription, or end the '
+                        'subscription.')
+
+
 def change_expiry(actor: User, grant: RoleGrant, expires_at: datetime | None) -> RoleGrant:
     _must_be_admin(actor)
+    _not_through_a_tier(grant)
     grant.expires_at = _clean_expiry(expires_at)
     db.session.commit()
     permissions_changed(grant.user_id)
@@ -258,6 +273,7 @@ def change_expiry(actor: User, grant: RoleGrant, expires_at: datetime | None) ->
 def revoke_grant(actor: User, grant: RoleGrant) -> None:
     """RB2: an admin may not revoke their own Admin grant, against accidents; another admin, or user 1, may."""
     _must_be_admin(actor)
+    _not_through_a_tier(grant)
     role, user = db.session.get(Role, grant.role_id), db.session.get(User, grant.user_id)
     if role.built_in and grant.user_id == actor.id and actor.id != 1:
         raise RoleError('You cannot revoke your own Admin grant; another admin can.')
@@ -284,9 +300,86 @@ def remove_expired_grants() -> int:
         holders.add(user.id)
         built_in = built_in or role.built_in
         db.session.delete(grant)
+    db.session.flush()
+    for user_id in holders:   # an admin's grant that ran out, of a role a tier they hold gives (D2)
+        sync_tier_roles(db.session.get(User, user_id))
     db.session.commit()
     permissions_changed(*holders)
     _shown_changed()
     if built_in:
         set_setting('admin_ids', None)
     return len(expired)
+
+
+# --------------------------------------------------------------------------
+# Roles carried by subscription tiers (plan docs/superpowers/plans/2026-11-16-tier-roles.md)
+# --------------------------------------------------------------------------
+
+@role_names_changed.connect
+def _tier_roles_changed(_user) -> None:
+    _shown_changed()
+
+
+def _held_scopes(actor: User) -> dict[str, set[int] | None]:
+    """Every permission `actor` holds through an unexpired grant, with the domains it reaches (None: every domain)."""
+    held: dict[str, set[int] | None] = {}
+    roles = Role.query.join(RoleGrant, RoleGrant.role_id == Role.id) \
+        .filter(RoleGrant.user_id == actor.id, unexpired_grant(RoleGrant.__table__)).all()
+    for role in roles:
+        for permission, domains in permission_scopes(role).items():
+            if permission not in held:
+                held[permission] = None if domains is None else set(domains)
+            elif held[permission] is not None:
+                held[permission] = None if domains is None else held[permission] | domains
+    return held
+
+
+def may_attach(actor: User, role: Role) -> bool:
+    """Whether `actor` may put `role` on a tier or take it off one (T5): never Admin; an admin any other; anybody else
+    only a role whose every permission they hold, on at least the domains it reaches. Otherwise a monetization manager
+    could give a tier a power they lack and a gift code for it to themselves."""
+    if role.built_in:
+        return False
+    if actor.is_admin():
+        return True
+    held = _held_scopes(actor)
+    for permission, domains in permission_scopes(role).items():
+        if permission not in held:
+            return False
+        if held[permission] is not None and (domains is None or not domains <= held[permission]):
+            return False
+    return True
+
+
+def set_offer_roles(actor: User, offer: Offer, roles) -> None:
+    """Make `roles` the ones `offer` carries (T1, D1) and give or end them for its members now (D4). Only a
+    subscription carries roles; each role added or taken away must be one `actor` may attach (T5)."""
+    if offer.kind != 'subscription':
+        raise RoleError('Only a subscription carries roles.')
+    before = {role.id: role for role in offer_roles(offer)}
+    after = {role.id: role for role in roles}
+    for role in [*after.values(), *before.values()]:
+        if role.built_in:
+            raise RoleError('The built-in Admin role cannot be given by a subscription.')
+    for role_id in sorted(before.keys() ^ after.keys()):
+        role = after.get(role_id) or before[role_id]
+        if not may_attach(actor, role):
+            raise RoleError(f'You do not hold every permission of {role.name}, on every domain it reaches.')
+    if before.keys() == after.keys():
+        return
+    db.session.execute(offer_role.delete().where(offer_role.c.offer_id == offer.id))
+    if after:
+        db.session.execute(offer_role.insert(), [{'offer_id': offer.id, 'role_id': role_id} for role_id in after])
+    db.session.flush()
+    for user in _members_of(offer):
+        sync_tier_roles(user)
+    db.session.commit()
+    _log('edit_offer_roles', actor, role_name=offer.title,
+         reason=f'{offer.title}: ' + (', '.join(sorted(role.name for role in after.values())) or 'no roles'))
+
+
+def _members_of(offer: Offer) -> list[User]:
+    """Everybody with an active subscription to `offer`, or a grant through a tier (which it may have given)."""
+    from_offer = db.session.query(MemberSubscription.user_id).filter_by(offer_id=offer.id, status='active')
+    through_tiers = db.session.query(RoleGrant.user_id).filter(RoleGrant.via_tier.is_(True))
+    return User.query.filter(User.id.in_(from_offer.union(through_tiers))).order_by(User.id).all()

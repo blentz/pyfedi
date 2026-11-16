@@ -10,6 +10,7 @@ from app import db, limiter
 from app.models import MemberSubscription, Offer, PromoCode, PromoCodeUse, User, utcnow
 from app.payments.code_text import normalise
 from app.payments.core import PERIOD_DAYS, refresh_access, refresh_donor
+from app.tier_roles import sync_tier_roles
 from app.payments.discounts import DISCOUNT_KINDS
 from app.payments.holding import held_until
 from app.payments.offers import tiers_on
@@ -181,6 +182,7 @@ def start_gift(user: User, code: PromoCode, commit: bool = True, offer: Offer | 
     db.session.flush()
     refresh_donor(user)
     refresh_access(user)
+    sync_tier_roles(user)
     if commit:
         db.session.commit()
     return subscription
