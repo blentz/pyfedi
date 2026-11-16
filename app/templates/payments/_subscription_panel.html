@@ -1,13 +1,15 @@
-{# [membership] in a CMS page (app/payments/shortcodes.py; plan 2026-11-16-donations-and-membership-pages.md DM3): the
-signed-in member's membership, what they can do about it, and their payments. Its forms come back to this page. -#}
+{# Settings -> Subscription (app/payments/routes.py subscription; plan 2026-11-16-donations-and-membership-pages.md DM3):
+the member's membership, what they can do about it, and their payments. Its forms come back to this page. -#}
 {% from 'bootstrap5/form.html' import render_field -%}
 <div class="membership">
-{% if current_user.is_anonymous -%}
-    <p><a class="btn btn-primary" href="{{ url_for('auth.login', next=here) }}">{{ _('Log in to see your membership') }}</a></p>
-{%- else -%}
-    <h2>{{ _('Your membership') }}</h2>
     {% if not subscriptions -%}
         <p>{{ _('You have no subscription at the moment.') }}</p>
+    {% endif -%}
+    {% if lapsed -%}
+        <div class="alert alert-warning">{{ _('Your subscription has ended. Renew it to carry on using this site.') }}</div>
+    {% endif -%}
+    {% if not complimentary -%}
+        <p><a class="btn btn-primary" href="{{ plans_url }}">{{ _('See the plans') }}</a></p>
     {% endif -%}
     {% for subscription in subscriptions -%}
         <div class="card mb-3">
@@ -78,5 +80,4 @@ signed-in member's membership, what they can do about it, and their payments. It
             </tbody>
         </table>
     {% endif -%}
-{%- endif %}
 </div>

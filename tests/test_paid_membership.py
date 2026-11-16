@@ -588,10 +588,8 @@ class TestRedeeming:
         assert response.status_code == 302 and '/auth/login' in response.headers['Location']
 
     def test_the_membership_page_offers_it_to_a_member(self, env):
-        db.session.add(CmsPage(url='/subscribe', title='Subscribe', body='[membership]', body_html='<p>[membership]</p>'))
-        db.session.commit()
         login(env.client, member(env, 'reader'))
-        assert 'name="code"' in env.client.get('/subscribe', base_url=env.base).get_data(as_text=True)
+        assert 'name="code"' in env.client.get('/user/settings/subscription', base_url=env.base).get_data(as_text=True)
 
 
 class TestCodesAreRateLimited:

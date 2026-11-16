@@ -9,6 +9,7 @@ from flask_login import current_user
 from flask_wtf import FlaskForm
 
 from app import db, limiter
+from app.cms import plans_page_url
 from app.complimentary import KIND as COMPLIMENTARY, complimentary_of
 from app.models import MemberSubscription, Offer, Payment
 from app.onion import clearnet_only, is_onion_request
@@ -81,6 +82,30 @@ def donations():
                            member=member, prepaid=prepaid, complimentary=complimentary,
                            currency_name=get_currency_name(currency.upper(), count=2, locale=str(get_locale() or 'en'))
                            if currency else None)
+
+
+@bp.route('/user/settings/subscription')
+@login_required
+def subscription():
+    """Settings -> Subscription (plan 2026-11-16 DM3): the member's membership (tiers, a gift, complimentary
+    membership; regular donations are /donations'), cancelling, a held code, the code box and their payments. Where a
+    lapsed member is sent, so the login gate lets them in."""
+    onion = is_onion_request()
+    member = not onion   # cancelling, the card and the history stay off the onion
+    groups = membership_groups()
+    offers = {offer.id: offer for offer in Offer.query.all()}
+    subscriptions = [row for row in active_subscriptions_of(current_user)
+                     if (row.provider_kind in NOT_CANCELLED or is_tier(offers.get(row.offer_id), groups))
+                     and (not onion or row.current_period_end or row.provider_kind == COMPLIMENTARY)]
+    complimentary = complimentary_of(current_user) is not None
+    payments = Payment.query.filter_by(user_id=current_user.id).order_by(Payment.created_at.desc()) \
+        .limit(HISTORY_ROWS).all() if member else []
+    return render_template('user/subscription.html', title=_('Subscription'), here=request.path, member=member,
+                           subscriptions=subscriptions, titles={offer_id: offer.title for offer_id, offer in offers.items()},
+                           payments=payments, complimentary=complimentary, lapsed=current_user.access_has_lapsed(),
+                           plans_url=plans_page_url(), redeem_form=None if complimentary else RedeemCodeForm(),
+                           held_code=None if complimentary else find_discount_code(session.get(HELD_CODE)),
+                           currency=get_setting('payment_currency'))
 
 
 def _offer(offer_id: int | None) -> Offer | None:

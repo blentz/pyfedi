@@ -10,7 +10,6 @@ from flask import abort, current_app, flash, jsonify, redirect, request, url_for
 from flask_babel import _
 from flask_login import current_user
 
-from app.cms import membership_page_url
 from app.storefront import current_storefront
 from app.utils import authorise_api_user, is_activitypub_request, login_redirect, login_required_here
 
@@ -61,7 +60,7 @@ AP_DOCUMENTS = frozenset({'main.index', 'main.list_feeds'})   # pages that answe
 # What a member whose subscription has lapsed may still do: renew, take their settings, leave (M12, plan S20)
 LAPSED_OPEN = frozenset({
     'static', 'bootstrap.static', 'auth.logout', 'user.user_settings_import_export', 'user.delete_account',
-    'payments.donations', 'payments.checkout', 'payments.redeem', 'payments.clear_code', 'payments.cancel',
+    'payments.donations', 'payments.subscription', 'payments.checkout', 'payments.redeem', 'payments.clear_code', 'payments.cancel',
     'payments.billing', 'payments.result',
     'payments.result_before_this_release', 'payments.payment_webhook', 'payments.stripe_webhook',
 })
@@ -77,7 +76,7 @@ def refuse_lapsed() -> object | None:
     if request.headers.get('HX-Request'):
         return '', 403
     flash(_('Your subscription has ended. Renew it to carry on using this site.'), 'warning')
-    return redirect(membership_page_url())   # their membership page (plan 2026-11-16 DM4)
+    return redirect(url_for('payments.subscription'))   # Settings -> Subscription (plan 2026-11-16 DM3, DM4)
 
 
 def _federation_endpoint() -> bool:

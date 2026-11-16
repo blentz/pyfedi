@@ -6,7 +6,7 @@ from flask_babel import get_locale
 from flask_login import current_user
 
 from app import cache, db
-from app.models import Offer, OfferDomain, SiteDomain
+from app.models import MemberSubscription, Offer, OfferDomain, Payment, SiteDomain
 from app.onion import is_onion_request
 from app.payments.adapters import adapter_for
 from app.storefront import current_storefront
@@ -58,6 +58,17 @@ def offers_changed() -> None:
 def offers_available() -> bool:
     """Every signed-in page's menu asks this, so it is cached and cleared by whatever changes the answer."""
     return _any_offer_on(current_storefront().id, is_onion_request())
+
+
+def subscription_settings_shown() -> bool:
+    """Whether Settings has a Subscription tab for the signed-in member (plan 2026-11-16 DM3): somewhere has membership
+    tiers, or they have held a subscription or paid for something."""
+    if not current_user.is_authenticated:
+        return False
+    if membership_groups():
+        return True
+    return db.session.query(db.exists().where(MemberSubscription.user_id == current_user.id)).scalar() or \
+        db.session.query(db.exists().where(Payment.user_id == current_user.id)).scalar()
 
 
 def donations_menu_shown() -> bool:

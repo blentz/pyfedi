@@ -1,4 +1,4 @@
-"""/donations is upstream's donation page; membership is on a CMS page through [membership], and the day's bitcoin
+"""/donations is upstream's donation page; membership is managed in Settings -> Subscription, and the day's bitcoin
 price is shown with BTCPay buttons and by [btcprice N] (plan 2026-11-16-donations-and-membership-pages.md, DM1-DM5)."""
 from datetime import timedelta
 from types import SimpleNamespace
@@ -11,7 +11,7 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.cms import cms_nav_links_changed, membership_page_url
+from app.cms import cms_nav_links_changed, plans_page_url
 from app.complimentary import grant_complimentary
 from app.models import BtcDailyRate, CmsPage, MemberSubscription, Offer, Payment, PaymentProvider, PromoCode, Site, \
     SiteDomain, utcnow
@@ -149,26 +149,45 @@ class TestDonationsIsUpstreams:
         assert 'Support PieFed development' in body
 
 
-class TestMembershipShortcode:
+class TestSettingsSubscription:
+    SETTINGS = '/user/settings/subscription'
+
     def test_a_visitor_is_asked_to_log_in(self, env):
-        page(env, 'Plans\n\n[membership]')
-        body = get(env, '/subscribe')
-        assert '/auth/login' in body and '[membership]' not in body
+        answer = env.client.get(self.SETTINGS, base_url=env.base)
+        assert answer.status_code == 302 and '/auth/login' in answer.headers['Location']
+
+    def test_it_is_a_settings_tab(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)   # a settings form draws its token
+        login(env)
+        body = get(env, '/user/settings/filters')
+        assert f'href="{self.SETTINGS}"' in body
+
+    def test_no_tab_where_nothing_is_paid_for(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
+        env.home.registration_offer_id = None
+        db.session.commit()
+        clear_domain_cache()
+        login(env)
+        assert self.SETTINGS not in get(env, '/user/settings/filters')
 
     def test_a_member_sees_their_tier_and_can_cancel_it(self, env):
         row = holding(env, env.tier, reference='inv_1', current_period_end=utcnow() + timedelta(days=20))
-        page(env, '[membership]')
         login(env)
-        body = get(env, '/subscribe')
+        body = get(env, self.SETTINGS)
         assert 'Furcas' in body and row.current_period_end.strftime('%Y-%m-%d') in body
         assert f'/donations/subscriptions/{row.id}/cancel' in body
-        assert 'name="next" value="/subscribe"' in body
+        assert f'name="next" value="{self.SETTINGS}"' in body
 
-    def test_cancelling_comes_back_to_the_page(self, env):
+    def test_it_leads_to_the_plans(self, env):
+        page(env, f'[checkout {env.tier.id}]')
+        login(env)
+        assert 'href="/subscribe">See the plans' in get(env, self.SETTINGS)
+
+    def test_cancelling_comes_back_to_it(self, env):
         row = holding(env, env.tier, reference='inv_1', current_period_end=utcnow() + timedelta(days=20))
         login(env)
-        answer = post(env, f'/donations/subscriptions/{row.id}/cancel', next='/subscribe')
-        assert answer.status_code == 302 and answer.headers['Location'].endswith('/subscribe')
+        answer = post(env, f'/donations/subscriptions/{row.id}/cancel', next=self.SETTINGS)
+        assert answer.status_code == 302 and answer.headers['Location'].endswith(self.SETTINGS)
         assert row.ends_at is not None
 
     def test_somewhere_else_is_not_where_it_goes_back_to(self, env):
@@ -179,78 +198,71 @@ class TestMembershipShortcode:
 
     def test_a_regular_donation_is_left_to_donations(self, env):
         holding(env, env.regular)
-        page(env, '[membership]')
         login(env)
-        assert 'Monthly gift' not in get(env, '/subscribe')
+        assert 'Monthly gift' not in get(env, self.SETTINGS)
 
     def test_the_code_box_and_a_held_code(self, env):
         db.session.add(PromoCode(code='twenty', kind='percent', percent=20))
         db.session.commit()
-        page(env, '[membership]')
         login(env)
         with env.client.session_transaction(base_url=env.base) as session:
             session['discount_code'] = 'twenty'
-        body = get(env, '/subscribe')
+        body = get(env, self.SETTINGS)
         assert 'Have a code?' in body and '/donations/redeem' in body and 'twenty' in body
         assert '/donations/code/clear' in body
 
-    def test_redeeming_comes_back_to_the_page(self, env):
+    def test_redeeming_comes_back_to_it(self, env):
         db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.tier.id, days=30))
         db.session.commit()
         login(env)
-        answer = post(env, '/donations/redeem', code='GIFT-MONTH', next='/subscribe')
-        assert answer.headers['Location'].endswith('/subscribe')
+        answer = post(env, '/donations/redeem', code='GIFT-MONTH', next=self.SETTINGS)
+        assert answer.headers['Location'].endswith(self.SETTINGS)
 
     def test_complimentary_says_so_and_takes_no_code(self, env):
         grant_complimentary(env.member)
         db.session.commit()
-        page(env, '[membership]')
         login(env)
-        body = get(env, '/subscribe')
-        assert 'Complimentary' in body and 'Have a code?' not in body
+        body = get(env, self.SETTINGS)
+        assert 'Complimentary' in body and 'Have a code?' not in body and 'See the plans' not in body
 
     def test_their_payments_are_listed(self, env):
         db.session.add(Payment(user_id=env.member.id, offer_id=env.tier.id, provider_kind='btcpay',
                                provider_reference='inv_9', amount_minor=666, currency='usd', status='paid'))
         db.session.commit()
-        page(env, '[membership]')
         login(env)
-        assert 'Your payments' in get(env, '/subscribe')
+        assert 'Your payments' in get(env, self.SETTINGS)
 
-    def test_in_code_it_stays_as_written(self, env):
-        page(env, '`[membership]`')
-        login(env)
-        assert '[membership]' in get(env, '/subscribe')
-
-
-class TestWhereMembersAreSent:
-    def test_the_page_with_the_shortcode(self, env):
-        page(env, 'Our plans [membership]')
-        with env.app.test_request_context():
-            assert membership_page_url() == '/subscribe'
-
-    def test_without_one_donations(self, env):
-        with env.app.test_request_context():
-            assert membership_page_url() == '/donations'
-
-    def test_a_lapsed_member_is_sent_there(self, env):
-        page(env, '[membership]')
+    def test_a_lapsed_member_is_sent_there_and_told(self, env):
+        holding(env, env.tier, reference='inv_old').status = 'ended'
         env.member.created = utcnow() - timedelta(days=10)
         env.member.access_lapsed_at = utcnow() - timedelta(days=10)
         db.session.commit()
         login(env)
         answer = env.client.get('/communities', base_url=env.base)
-        assert answer.status_code == 302 and answer.headers['Location'].endswith('/subscribe')
+        assert answer.status_code == 302 and answer.headers['Location'].endswith(self.SETTINGS)
+        assert 'Your subscription has ended' in get(env, self.SETTINGS)
 
-    def test_the_complimentary_button_leads_there(self, env):
+
+class TestThePlansPage:
+    def test_the_page_with_a_checkout_button(self, env):
+        page(env, f'Our plans [checkout {env.tier.id}]')
+        with env.app.test_request_context():
+            assert plans_page_url() == '/subscribe'
+            assert plans_page_url(external=True).endswith('/subscribe')
+
+    def test_without_one_donations(self, env):
+        with env.app.test_request_context():
+            assert plans_page_url() == '/donations'
+
+    def test_the_current_plan_and_complimentary_buttons_lead_to_settings(self, env):
         grant_complimentary(env.member)
         db.session.commit()
-        page(env, f'[membership] [checkout {env.tier.id}]')
+        page(env, f'[checkout {env.tier.id}]')
         login(env)
-        assert 'href="/subscribe">Complimentary' in get(env, '/subscribe')
+        assert 'href="/user/settings/subscription">Complimentary' in get(env, '/subscribe')
 
-    def test_the_reminder_mail_leads_there(self, env):
-        page(env, '[membership]')
+    def test_the_reminder_mail_leads_to_the_plans(self, env):
+        page(env, f'[checkout {env.tier.id}]')
         holding(env, env.tier, reference='inv_1', current_period_end=utcnow() + timedelta(days=3))
         sent = []
         with patch('app.email.send_email', side_effect=lambda *args, **kwargs: sent.append((args, kwargs))):

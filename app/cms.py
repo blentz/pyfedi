@@ -43,22 +43,22 @@ def cms_nav_links(signed_in: bool = False) -> dict:
 
 def cms_nav_links_changed() -> None:
     cache.delete_memoized(cms_nav_links)
-    cache.delete_memoized(_membership_page)
+    cache.delete_memoized(_plans_page)
 
 
-MEMBERSHIP_SHORTCODE = '[membership]'
+PLANS_SHORTCODE = '[checkout '
 
 
 @cache.memoize(timeout=3600)
-def _membership_page() -> str | None:
-    page = CmsPage.query.filter(CmsPage.body.contains(MEMBERSHIP_SHORTCODE)).order_by(CmsPage.id).first()
+def _plans_page() -> str | None:
+    page = CmsPage.query.filter(CmsPage.body.contains(PLANS_SHORTCODE)).order_by(CmsPage.id).first()
     return page.url if page else None
 
 
-def membership_page_url(external: bool = False) -> str:
-    """Where a member manages their membership (plan 2026-11-16 DM4): the first CMS page with [membership] in it,
-    else /donations."""
-    path = _membership_page()
+def plans_page_url(external: bool = False) -> str:
+    """Where the plans are bought (plan 2026-11-16 DM4): the first CMS page with a [checkout N] button in it (hell.cloud:
+    /subscribe), else /donations."""
+    path = _plans_page()
     if path is None:
         return url_for('payments.donations', _external=external)
     return url_for('main.index', _external=True).rstrip('/') + path if external else path

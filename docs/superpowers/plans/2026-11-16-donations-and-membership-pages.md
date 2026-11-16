@@ -1,10 +1,10 @@
-# /donations is for donations; membership lives on the CMS page
+# /donations is for donations; membership is managed in user settings
 
 Owner, 2026-11-16: "the /donations page is not the membership page. there is a /subscribe page that needs the day's BTC
 price. the /donations page should match the upstream page." Then: "We are a multi-tenant capable site. So, some domains
 may show the /donations page, some domains may show the /subscribe page. /donations is for charitable donations.
-/subscribe already exists in hell.cloud's CMS and is for the first domain's subscriptions." Rulings: a `[membership]`
-shortcode; /donations lists donations only; keep upstream's "Support PieFed development" section; the BTC price both
+/subscribe already exists in hell.cloud's CMS and is for the first domain's subscriptions." Rulings: membership managed in
+user settings (DM3); /donations lists donations only; keep upstream's "Support PieFed development" section; the BTC price both
 beside each BTCPay button and as a `[btcprice N]` shortcode.
 
 ## Decisions
@@ -17,12 +17,13 @@ beside each BTCPay button and as a `[btcprice N]` shortcode.
   details), a card per donation offer, "Prices are in <currency>", and upstream's "Support PieFed development" section
   with its Patreon and Liberapay buttons. No tiers, codes, membership status, payment history or BTC price there.
   Complimentary membership still declines payment (K5): its holder is told so instead of offered plans.
-- **DM3 `[membership]`.** On a CMS page (hell.cloud: /subscribe), the signed-in member's membership: each subscription
-  that is not a regular donation (tiers, gifts, complimentary) with its date, Cancel where it can be cancelled (B6), a
-  held discount code with Clear, "Have a code?", and their payments. A visitor is asked to log in. Its forms come back
-  to the page they were sent from.
-- **DM4 Where members are sent.** The membership page is the first CMS page containing `[membership]`; without one,
-  /donations. A lapsed member, the "Your current plan" and "Complimentary" buttons and the prepaid reminder mail go
-  there.
+- **DM3 Settings -> Subscription.** Owner, later the same day: "users should manage their subscription from the user
+  settings." (This replaces a `[membership]` shortcode, never deployed.) `/user/settings/subscription`, a settings tab
+  shown wherever some domain has membership tiers or the member has held a subscription or paid: each subscription
+  that is not a regular donation (tiers, gifts, complimentary) with its date, Cancel where it can be cancelled (B6), "See
+  the plans", a held discount code with Clear, "Have a code?", and their payments. Its forms come back to it.
+- **DM4 Where members are sent.** A lapsed member, and the "Your current plan" and "Complimentary" buttons, go to
+  Settings -> Subscription. "See the plans" and the prepaid reminder mail go to the plans page: the first CMS page with
+  a `[checkout N]` button in it (hell.cloud: /subscribe), else /donations.
 - **DM5 BTC price.** Each BTCPay `[checkout N]` button shows "<amount> BTC today" beside it; `[btcprice N]` writes the
   amount alone wherever it is put (nothing when the offer isn't BTCPay's or no price is fixed yet).

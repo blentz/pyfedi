@@ -2,11 +2,11 @@
 {% if offer is none -%}
 <span class="text-muted">{{ _('Not available') }}</span>
 {%- elif complimentary -%}
-<a class="btn btn-outline-secondary" href="{{ membership_page_url() }}">{{ _('Complimentary') }}</a>
+<a class="btn btn-outline-secondary" href="{{ url_for('payments.subscription') }}">{{ _('Complimentary') }}</a>
 {%- elif offer.kind == 'link' -%}
 <a class="btn btn-primary" href="{{ offer.url }}" rel="noopener noreferrer nofollow">{{ label or _('Go to this page') }}</a>
 {%- elif held -%}
-<a class="btn btn-outline-secondary" href="{{ membership_page_url() }}">{{ _('Your current plan') }}</a>
+<a class="btn btn-outline-secondary" href="{{ url_for('payments.subscription') }}">{{ _('Your current plan') }}</a>
 {%- else -%}
 {%- if joinable -%}
 <a class="btn btn-primary" href="{{ url_for('auth.register', offer=offer.id) }}">{{ _('Join') }}</a>

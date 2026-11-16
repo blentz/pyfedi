@@ -7,9 +7,9 @@ from flask_login import current_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.cms import cms_nav_links, membership_page_url
+from app.cms import cms_nav_links, plans_page_url
 from app.login_gate import refuse_lapsed, refuse_logged_out
-from app.payments.offers import donations_menu_shown, money
+from app.payments.offers import donations_menu_shown, money, subscription_settings_shown
 from app.payments.shortcodes import checkout_shortcodes
 from app.permissions import holds_any_grant, may_act_on_user, may_ban
 from app.referral import referrals_available
@@ -128,7 +128,8 @@ def register_request_hooks(app):
 
     app.jinja_env.globals['len'] = len
     app.jinja_env.globals['checkout_shortcodes'] = checkout_shortcodes
-    app.jinja_env.globals['membership_page_url'] = membership_page_url
+    app.jinja_env.globals['plans_page_url'] = plans_page_url
+    app.jinja_env.globals['subscription_settings_shown'] = subscription_settings_shown
     app.jinja_env.globals['sidebar_boxes'] = sidebar_boxes
     app.jinja_env.globals['project_links'] = project_links
     app.jinja_env.globals['footer_invitation'] = footer_invitation

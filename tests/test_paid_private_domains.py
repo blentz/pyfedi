@@ -13,7 +13,7 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import CmsPage, MemberSubscription, Offer, Payment, Site, SiteDomain, User, utcnow
+from app.models import MemberSubscription, Offer, Payment, Site, SiteDomain, User, utcnow
 from app.payments.core import apply_event, cancel_subscription
 from app.payments.events import Paid, SubscriptionEnded, SubscriptionStarted
 from app.payments.registration import registration_offer, remove_unpaid_registrations
@@ -397,10 +397,12 @@ class TestLapsing:
 
         response = env.client.get('/communities', base_url=PAID)
 
-        assert response.status_code == 302 and '/donations' in response.headers['Location']
+        # Settings -> Subscription, which says so and leads to the plans (2026-11-16 DM4)
+        assert response.status_code == 302 and response.headers['Location'].endswith('/user/settings/subscription')
 
-    @pytest.mark.parametrize('path', ['/donations', '/user/settings/import_export', '/delete_account', '/auth/logout'],
-                             ids=['renew', 'export', 'delete', 'logout'])
+    @pytest.mark.parametrize('path', ['/donations', '/user/settings/subscription', '/user/settings/import_export',
+                                      '/delete_account', '/auth/logout'],
+                             ids=['donations', 'renew', 'export', 'delete', 'logout'])
     def test_past_grace_they_can_renew_or_leave(self, env, member, path, monkeypatch):
         monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
         self.end(env, member, days_ago=8)
@@ -408,7 +410,7 @@ class TestLapsing:
 
         response = env.client.get(path, base_url=PAID)
 
-        assert '/donations' not in response.headers.get('Location', '') or path == '/donations'
+        assert '/user/settings/subscription' not in response.headers.get('Location', '')
 
     def test_an_htmx_request_gets_nothing_to_swap_in(self, env, member):
         self.end(env, member, days_ago=8)
@@ -517,11 +519,9 @@ class TestCancelling:
         row = MemberSubscription.query.filter_by(provider_reference='sub_1').one()
         row.ends_at = utcnow() + timedelta(days=20)
         db.session.commit()
-        db.session.add(CmsPage(url='/subscribe', title='Subscribe', body='[membership]', body_html='<p>[membership]</p>'))
-        db.session.commit()
         login(env.client, member)
 
-        body = env.client.get('/subscribe', base_url=PAID).get_data(as_text=True)   # membership's page (2026-11-16 DM3)
+        body = env.client.get('/user/settings/subscription', base_url=PAID).get_data(as_text=True)   # Settings -> Subscription (2026-11-16 DM3)
 
         assert row.ends_at.strftime('%Y-%m-%d') in body and 'Cancel subscription' not in body
 

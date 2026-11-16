@@ -9,7 +9,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
-from app.models import CmsPage, MemberSubscription, Offer, OfferDomain, Payment, PromoCode, PromoCodeUse, Site, SiteDomain, \
+from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCode, PromoCodeUse, Site, SiteDomain, \
     utcnow
 from app.payments.core import apply_event
 from app.payments.events import Paid
@@ -243,10 +243,8 @@ class TestThePage:
             db.session.add(Payment(user_id=user.id, offer_id=env.offer.id, provider_kind='stripe',
                                    provider_reference=reference, amount_minor=amount, currency='usd', status='paid'))
         db.session.commit()
-        db.session.add(CmsPage(url='/subscribe', title='Subscribe', body='[membership]', body_html='<p>[membership]</p>'))   # payments are listed on the membership page (2026-11-16 DM3)
-        db.session.commit()
         login(env.client, env.member)
-        history = env.client.get('/subscribe').data.split(b'Your payments')[1]
+        history = env.client.get('/user/settings/subscription').data.split(b'Your payments')[1]
         assert b'$5.00' in history and b'$9.00' not in history
 
 

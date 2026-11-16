@@ -3,4 +3,4 @@
 {{ _('Your subscription %(plan)s has been paid up until %(date)s. It does not renew by itself.', plan=plan, date=ends.strftime('%Y-%m-%d')) }}
 
 {{ _('To carry on, pay for another period before then. Any time you have left carries over:') }}
-{{ membership_page_url(external=True) }}
+{{ plans_page_url(external=True) }}

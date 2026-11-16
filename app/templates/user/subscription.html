@@ -1,0 +1,23 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'subscription' %}
+
+{% block app_content %}
+<div class="row">
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <nav class="mb-2" id="breadcrumb_nav" title="{{ _('Navigation') }}">
+          <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/">{{ _('Home') }}</a></li>
+            <li class="breadcrumb-item"><a href="/u/{{ current_user.link() }}">{{ current_user.display_name() }}</a></li>
+            <li class="breadcrumb-item active" aria-current="page">{{ _('Subscription') }}</li>
+          </ol>
+        </nav>
+        <h1>{{ _('Subscription') }}</h1>
+        {% include "user/_user_nav.html" %}
+        {% include "payments/_subscription_panel.html" %}
+    </main>
+</div>
+{% endblock %}
