@@ -21,6 +21,7 @@ from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, Complimentar
 from app.complimentary import KIND as COMPLIMENTARY, end_complimentary, grant_complimentary
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, PromoCode, PromoCodeUse, \
     SiteDomain, User, utcnow
+from app.local_names import local_named, split_local_name
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import ProviderError
 from app.payments.adapters.btcpay_adapter import REQUIRED_EVENTS as BTCPAY_EVENTS, REQUIRED_PERMISSIONS as BTCPAY_PERMISSIONS, \
@@ -457,12 +458,11 @@ _NO_SUCH_MEMBER = object()
 
 def _member_named(form: GiftCodeForm):
     """The id of the local account the code is for (owner 2026-11-16), None for nobody's; on a name that is no local
-    account, _NO_SUCH_MEMBER with the field told so."""
-    name = (form.user_name.data or '').strip()
-    if not name:
+    account, _NO_SUCH_MEMBER with the field told so. A bare name is on this storefront, name@host on that hosted domain."""
+    if not (form.user_name.data or '').strip():
         return None
-    user = User.query.filter(func.lower(User.user_name) == name.lower(), User.ap_id.is_(None),
-                             User.deleted.is_(False)).first()
+    split = split_local_name(form.user_name.data)
+    user = User.query.filter(local_named(User, *split), User.deleted.is_(False)).first() if split else None
     if user is None:
         form.user_name.errors = list(form.user_name.errors) + [_('No local account is called that.')]
         return _NO_SUCH_MEMBER

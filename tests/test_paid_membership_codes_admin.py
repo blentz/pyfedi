@@ -283,3 +283,9 @@ class TestACodeForAMember:
         post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, days=90, active='y', user_name='nope')
         row = db.session.get(PromoCode, code.id)
         assert (row.assigned_to, row.days) == (first.id, 30)
+
+    def test_a_name_with_a_hosted_domain_finds_the_member_there(self, env, admin):
+        member = somebody(env, 'handout')
+        server = env.app.config['SERVER_NAME']
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='', user_name=f'@handout@{server}')
+        assert PromoCode.query.one().assigned_to == member.id
