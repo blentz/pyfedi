@@ -692,6 +692,9 @@ class GiftCodeForm(FlaskForm):
                             validators=[Optional(), NumberRange(min=1, max=1000000)])
     expires_at = DateField(_l('Last day it can be used'), validators=[Optional()])
     active = BooleanField(_l('Can be used'), default=True)
+    user_name = StringField(_l('For member'), validators=[Optional(), Length(max=255)],
+                            description=_l("A local account's user name. The code is listed on their referral page for "
+                                           "them to hand out. Leave empty for nobody's."))
     save_code = SubmitField(_l('Save'))
 
 

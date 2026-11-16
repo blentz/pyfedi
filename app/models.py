@@ -6850,6 +6850,9 @@ class PromoCode(db.Model):
     # (discount_code_id) or 'none' of its own
     benefit = db.Column(db.String(10))
     discount_code_id = db.Column(db.Integer, db.ForeignKey('promo_code.id', ondelete='SET NULL'))
+    # A gift or discount code an admin made for this member to hand out (owner 2026-11-16): listed on their referral
+    # page, but not a referral; it stays a working code if the account goes
+    assigned_to = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'), index=True)
     created_by = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'))
     created_at = db.Column(db.DateTime, default=utcnow)
 

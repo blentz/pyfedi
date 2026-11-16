@@ -24,6 +24,7 @@
             {{ render_field(form.max_uses) }}
             {{ render_field(form.expires_at) }}
             {{ render_field(form.active) }}
+            {{ render_field(form.user_name) }}
             {{ render_field(form.save_code) }}
         </form>
         <p><a href="{{ url_for('admin.admin_payments_codes') }}">{{ _('Back to codes') }}</a></p>

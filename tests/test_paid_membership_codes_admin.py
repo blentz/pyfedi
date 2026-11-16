@@ -52,6 +52,7 @@ def admin(env):
 
 def csrf(env):
     with env.app.test_request_context():
+        g.pop('csrf_token', None)   # flask_wtf keeps the token on g, which outlives a request made before this one
         token = generate_csrf()
         raw = flask_session['csrf_token']
     with env.client.session_transaction() as session:
@@ -218,3 +219,67 @@ class TestDiscountCodes:
         db.session.add(code)
         db.session.commit()
         assert 'value="1.66"' in env.client.get(f'/admin/payments/codes/{code.id}').get_data(as_text=True)
+
+
+class TestACodeForAMember:
+    """A gift or discount code made for one member to hand out (owner 2026-11-16): not a referral, so no referral row
+    and none of the member's caps; it is listed on their referral page (see tests/test_assigned_codes.py)."""
+
+    def test_making_one_names_the_member(self, env, admin):
+        member = somebody(env, 'Handout')
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='', user_name=' handout ')
+        code = PromoCode.query.one()
+        assert (code.assigned_to, code.owner_id) == (member.id, None)
+
+    def test_a_discount_can_be_one(self, env, admin):
+        member = somebody(env, 'handout')
+        post(env, '/admin/payments/codes/add', kind='percent', percent=20, offer_id=0, code='', user_name='handout')
+        assert PromoCode.query.one().assigned_to == member.id
+
+    @pytest.mark.parametrize('name', ['nobody-here', 'faraway'], ids=['unknown', 'remote'])
+    def test_only_a_local_account_can_be_named(self, env, admin, name):
+        make_user(env.baseline.instance_remote, 'faraway', local=False)
+        body = post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='',
+                    user_name=name).get_data(as_text=True)
+        assert PromoCode.query.count() == 0 and 'No local account is called that.' in body
+
+    def test_a_deleted_account_cannot_be_named(self, env, admin):
+        member = somebody(env, 'gone')
+        member.deleted = True
+        db.session.commit()
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='', user_name='gone')
+        assert PromoCode.query.count() == 0
+
+    def test_left_empty_it_is_nobodys(self, env, admin):
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='', user_name='')
+        assert PromoCode.query.one().assigned_to is None
+
+    def test_the_list_says_whose(self, env, admin):
+        member = somebody(env, 'handout')
+        db.session.add(PromoCode(code='for-handout-1', kind='gift', offer_id=env.knight.id, days=30,
+                                 assigned_to=member.id))
+        db.session.commit()
+        page = BeautifulSoup(env.client.get('/admin/payments/codes').get_data(as_text=True), 'html.parser')
+        row = page.find('tr', id=f'code-{PromoCode.query.one().id}')
+        assert 'Gift code for handout' in row.get_text()
+
+    def test_editing_shows_and_changes_the_member(self, env, admin):
+        first, second = somebody(env, 'first'), somebody(env, 'second')
+        code = PromoCode(code='for-first-1', kind='gift', offer_id=env.knight.id, days=30, assigned_to=first.id)
+        db.session.add(code)
+        db.session.commit()
+        page = BeautifulSoup(env.client.get(f'/admin/payments/codes/{code.id}').get_data(as_text=True), 'html.parser')
+        assert page.find('input', attrs={'name': 'user_name'})['value'] == 'first'
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, days=30, active='y', user_name='second')
+        assert db.session.get(PromoCode, code.id).assigned_to == second.id
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, days=30, active='y', user_name='')
+        assert db.session.get(PromoCode, code.id).assigned_to is None
+
+    def test_editing_to_an_unknown_name_changes_nothing(self, env, admin):
+        first = somebody(env, 'first')
+        code = PromoCode(code='for-first-1', kind='gift', offer_id=env.knight.id, days=30, assigned_to=first.id)
+        db.session.add(code)
+        db.session.commit()
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, days=90, active='y', user_name='nope')
+        row = db.session.get(PromoCode, code.id)
+        assert (row.assigned_to, row.days) == (first.id, 30)

@@ -325,7 +325,8 @@ def _codes_page(default_form=None, code_form=None):
     codes = PromoCode.query.order_by(PromoCode.owner_id.isnot(None), PromoCode.created_at.desc(), PromoCode.id.desc()).all()
     uses = dict(db.session.execute(db.select(PromoCodeUse.promo_code_id, func.count())
                                    .group_by(PromoCodeUse.promo_code_id)).all())
-    owners = {user.id: user for user in User.query.filter(User.id.in_({code.owner_id for code in codes if code.owner_id}))}
+    owners = {user.id: user for user in User.query.filter(User.id.in_(
+        {code.owner_id or code.assigned_to for code in codes if code.owner_id or code.assigned_to}))}
     tiers = {offer.id: offer.title for offer in Offer.query.all()}
     if default_form is None:
         chosen = default_referral_choice()
@@ -451,6 +452,23 @@ def _code_refusal(form: GiftCodeForm, kind: str) -> str | None:
     return None
 
 
+_NO_SUCH_MEMBER = object()
+
+
+def _member_named(form: GiftCodeForm):
+    """The id of the local account the code is for (owner 2026-11-16), None for nobody's; on a name that is no local
+    account, _NO_SUCH_MEMBER with the field told so."""
+    name = (form.user_name.data or '').strip()
+    if not name:
+        return None
+    user = User.query.filter(func.lower(User.user_name) == name.lower(), User.ap_id.is_(None),
+                             User.deleted.is_(False)).first()
+    if user is None:
+        form.user_name.errors = list(form.user_name.errors) + [_('No local account is called that.')]
+        return _NO_SUCH_MEMBER
+    return user.id
+
+
 def _apply_code(form: GiftCodeForm, code: PromoCode) -> None:
     code.offer_id = form.offer_id.data or None
     code.days = form.days.data if code.kind == 'gift' else None
@@ -476,6 +494,9 @@ def admin_payments_codes_add():
     if refusal is not None:
         form.kind.errors = list(form.kind.errors) + [refusal]
         return _codes_page(code_form=form)
+    member = _member_named(form)
+    if member is _NO_SUCH_MEMBER:
+        return _codes_page(code_form=form)
     text = normalise(form.code.data) or ''.join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
     if len(text) < TYPED_CODE_MINIMUM:
         form.code.errors.append(_('A code needs at least %(count)d characters, so it cannot be guessed.',
@@ -484,7 +505,7 @@ def admin_payments_codes_add():
     if PromoCode.query.filter_by(code=text).first() is not None:
         form.code.errors.append(_('That code is taken.'))
         return _codes_page(code_form=form)
-    code = PromoCode(code=text, kind=kind, created_by=current_user.id, created_at=utcnow())
+    code = PromoCode(code=text, kind=kind, created_by=current_user.id, created_at=utcnow(), assigned_to=member)
     _apply_code(form, code)
     db.session.add(code)
     db.session.commit()
@@ -509,8 +530,12 @@ def admin_payments_code_edit(code_id):
             form.expires_at.data = code.expires_at.date()
         if code.amount_minor:
             form.amount.data = from_minor(code.amount_minor, get_setting(CURRENCY_SETTING) or 'usd')
-    if form.validate_on_submit() and _code_refusal(form, code.kind) is None:
+        if code.assigned_to:
+            form.user_name.data = db.session.get(User, code.assigned_to).user_name
+    if form.validate_on_submit() and _code_refusal(form, code.kind) is None \
+            and (member := _member_named(form)) is not _NO_SUCH_MEMBER:
         _apply_code(form, code)
+        code.assigned_to = member
         db.session.commit()
         flash(_('Code saved.'))
         return redirect(url_for('admin.admin_payments_codes'))
