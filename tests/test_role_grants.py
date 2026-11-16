@@ -57,13 +57,16 @@ def _migrate(old_shape):
     """Downgrade to the old schema, let `old_shape()` fill it, and upgrade again."""
     migration = load_migration('b4e8d2a6f1c9_role_grants.py')
     later = load_migration('d6a1f4c8e2b3_permission_scope.py')
+    tiers = load_migration('b5e9a3d7c1f4_tier_roles.py')   # its column is on role_grant, which `later` remakes
     db.session.commit()
     with Operations.context(MigrationContext.configure(db.session.connection())):
+        tiers.downgrade()
         later.downgrade()
         migration.downgrade()
         old_shape()
         migration.upgrade()
         later.upgrade()
+        tiers.upgrade()
 
 
 def test_the_migration_turns_assignments_into_grants_and_admin_into_the_built_in_role(people):
@@ -149,6 +152,8 @@ def test_the_downgrade_keeps_instance_wide_grants_and_gives_admin_its_rows_back(
     first_id, admin_id = first.id, admin.id   # read now: the ORM cannot refresh a role from the old schema
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            tiers = load_migration('b5e9a3d7c1f4_tier_roles.py')   # its column is on role_grant
+            tiers.downgrade()
             later = load_migration('d6a1f4c8e2b3_permission_scope.py')
             later.downgrade()
             db.session.execute(text('INSERT INTO role_grant (user_id, role_id, site_domain_id) VALUES (:u, :r, :d)'),
@@ -161,6 +166,7 @@ def test_the_downgrade_keeps_instance_wide_grants_and_gives_admin_its_rows_back(
             assert 'change user roles' in admin_rows and 'ban users' in admin_rows
             migration.upgrade()
             later.upgrade()
+            tiers.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()

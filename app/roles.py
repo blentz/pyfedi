@@ -13,13 +13,14 @@ every change is in the modlog (RB9) and is seen on the holders' next request (RB
 """
 from datetime import datetime
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 
 from app import cache, db
 from app.api.alpha.views import user_view
 from app.complimentary import grant_complimentary
-from app.models import MemberSubscription, ModLog, Offer, Role, RoleGrant, RolePermission, RolePermissionDomain, Settings, SiteDomain, User, \
+from app.models import MemberSubscription, ModLog, Offer, PromoCode, Role, RoleGrant, RolePermission, RolePermissionDomain, Settings, SiteDomain, User, \
     offer_role, utcnow
+from app.payments.discounts import DISCOUNT_KINDS
 from app.permission_cache import permissions_changed
 from app.permissions import BY_NAME, INSTANCE_ONLY_PERMISSIONS, STAFF_PERMISSIONS, STAFF_SCOPABLE_PERMISSIONS, \
     home_domain_id
@@ -353,9 +354,10 @@ def may_attach(actor: User, role: Role) -> bool:
     return True
 
 
-def set_offer_roles(actor: User, offer: Offer, roles) -> None:
+def set_offer_roles(actor: User, offer: Offer, roles) -> int:
     """Make `roles` the ones `offer` carries (T1, D1) and give or end them for its members now (D4). Only a
-    subscription carries roles; each role added or taken away must be one `actor` may attach (T5)."""
+    subscription carries roles; each role added or taken away must be one `actor` may attach (T5). Answers how many
+    codes reaching it were turned off, as their makers may no longer hand it out (T6)."""
     if offer.kind != 'subscription':
         raise RoleError('Only a subscription carries roles.')
     before = {role.id: role for role in offer_roles(offer)}
@@ -368,16 +370,36 @@ def set_offer_roles(actor: User, offer: Offer, roles) -> None:
         if not may_attach(actor, role):
             raise RoleError(f'You do not hold every permission of {role.name}, on every domain it reaches.')
     if before.keys() == after.keys():
-        return
+        return 0
     db.session.execute(offer_role.delete().where(offer_role.c.offer_id == offer.id))
     if after:
         db.session.execute(offer_role.insert(), [{'offer_id': offer.id, 'role_id': role_id} for role_id in after])
     db.session.flush()
+    turned_off = _codes_off(offer) if after.keys() - before.keys() else 0
     for user in _members_of(offer):
         sync_tier_roles(user)
     db.session.commit()
     _log('edit_offer_roles', actor, role_name=offer.title,
-         reason=f'{offer.title}: ' + (', '.join(sorted(role.name for role in after.values())) or 'no roles'))
+         reason=f'{offer.title}: ' + (', '.join(sorted(role.name for role in after.values())) or 'no roles') +
+         (f'; {turned_off} code(s) turned off' if turned_off else ''))
+    return turned_off
+
+
+def _codes_off(offer: Offer) -> int:
+    """Turn off the codes that hand `offer` out (a gift of it, or a discount for it or for any offer) whose maker may
+    not manage it now that it carries more (security review 2026-11-16): made before, they would hand out its new role
+    for a manager who couldn't. A member's referral code is not one of these."""
+    codes = PromoCode.query.filter(PromoCode.active.is_(True), PromoCode.owner_id.is_(None),
+                                   or_(PromoCode.offer_id == offer.id,
+                                       and_(PromoCode.offer_id.is_(None), PromoCode.kind.in_(DISCOUNT_KINDS)))).all()
+    makers = {user.id: user for user in User.query.filter(User.id.in_({code.created_by for code in codes}))}
+    count = 0
+    for code in codes:
+        maker = makers.get(code.created_by)
+        if maker is None or not may_manage_offer(maker, offer):
+            code.active = False
+            count += 1
+    return count
 
 
 def _members_of(offer: Offer) -> list[User]:

@@ -954,8 +954,11 @@ def admin_payments_offer_roles(offer_id):
         chosen = {int(value) for value in request.form.getlist('role') if value.isdigit()}
         keep = (chosen & changeable) | (carried - changeable)
         try:
-            set_offer_roles(current_user, offer, [role for role in roles if role.id in keep])
+            turned_off = set_offer_roles(current_user, offer, [role for role in roles if role.id in keep])
             flash(_('Roles saved.'))
+            if turned_off:
+                flash(_('%(count)d code(s) for it were turned off: whoever made them may not hand out its roles.',
+                        count=turned_off), 'warning')
         except RoleError as refused:
             db.session.rollback()
             flash(str(refused), 'error')

@@ -85,8 +85,10 @@ def _migrate(old_shape):
     migration = load_migration('c5f9e3b7a2d1_split_permissions.py')
     later = load_migration('d6a1f4c8e2b3_permission_scope.py')
     latest = load_migration('e4c8a1d7f3b6_split_moderation_permissions.py')
+    tiers = load_migration('b5e9a3d7c1f4_tier_roles.py')   # its column is on role_grant, which `later` remakes
     db.session.commit()
     with Operations.context(MigrationContext.configure(db.session.connection())):
+        tiers.downgrade()
         latest.downgrade()
         later.downgrade()
         migration.downgrade()
@@ -94,6 +96,7 @@ def _migrate(old_shape):
         migration.upgrade()
         later.upgrade()
         latest.upgrade()
+        tiers.upgrade()
     return ids
 
 
@@ -154,6 +157,8 @@ def test_the_downgrade_gives_back_administer_all_communities_and_drops_the_rest(
     db.session.commit()
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            tiers = load_migration('b5e9a3d7c1f4_tier_roles.py')   # its column is on role_grant, which `later` remakes
+            tiers.downgrade()
             later = load_migration('d6a1f4c8e2b3_permission_scope.py')
             later.downgrade()
             migration.downgrade()
@@ -161,6 +166,7 @@ def test_the_downgrade_gives_back_administer_all_communities_and_drops_the_rest(
             assert _held(helpers_id) == set()
             migration.upgrade()
             later.upgrade()
+            tiers.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()

@@ -367,3 +367,53 @@ class TestOnlyLastingPowersCount:
         set_offer_roles(env.admin, env.knight, [env.helper])
         start(treasurer, env.knight)
         assert user_access('administer all users', treasurer.id) and not may_attach(treasurer, env.helper)
+
+
+class TestCodesMadeBeforeAPowerWasAdded:
+    """Security review 2026-11-16: a code a manager made for a tier before an admin gave the tier a power they lack
+    would hand that power out. Adding the role turns such codes off; an admin's own stay."""
+
+    @pytest.fixture
+    def treasurer(self, env):
+        user = member(env, 'treasurer')
+        grant_permission(user, 'manage monetization')
+        return user
+
+    def code(self, creator, **values):
+        row = PromoCode(code=f'code-{len(PromoCode.query.all())}-made', created_by=creator.id,
+                        **({'kind': 'gift', 'days': 30} | values))
+        db.session.add(row)
+        db.session.commit()
+        return row
+
+    def test_a_managers_gift_code_for_it_is_turned_off(self, env, treasurer):
+        row = self.code(treasurer, offer_id=env.knight.id)
+        set_offer_roles(env.admin, env.knight, [env.helper])
+        assert db.session.get(PromoCode, row.id).active is False
+
+    def test_so_is_their_discount_for_any_offer(self, env, treasurer):
+        row = self.code(treasurer, kind='percent', percent=50, days=None)
+        set_offer_roles(env.admin, env.knight, [env.helper])
+        assert db.session.get(PromoCode, row.id).active is False
+
+    def test_an_admins_code_stays_on(self, env):
+        row = self.code(env.admin, offer_id=env.knight.id)
+        set_offer_roles(env.admin, env.knight, [env.helper])
+        assert db.session.get(PromoCode, row.id).active is True
+
+    def test_a_badge_leaves_a_managers_code_on(self, env, treasurer):
+        row = self.code(treasurer, offer_id=env.knight.id)
+        set_offer_roles(env.admin, env.knight, [env.supporter])
+        assert db.session.get(PromoCode, row.id).active is True
+
+    def test_another_tiers_code_stays_on(self, env, treasurer):
+        row = self.code(treasurer, offer_id=env.duke.id)
+        set_offer_roles(env.admin, env.knight, [env.helper])
+        assert db.session.get(PromoCode, row.id).active is True
+
+    def test_a_code_nobody_made_is_turned_off(self, env):
+        row = PromoCode(code='orphan-code-1', kind='gift', offer_id=env.knight.id, days=30)
+        db.session.add(row)
+        db.session.commit()
+        assert set_offer_roles(env.admin, env.knight, [env.helper]) == 1
+        assert db.session.get(PromoCode, row.id).active is False
