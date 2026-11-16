@@ -368,6 +368,20 @@ class TestCodeOrPay:
         response = self.register(env, question='', tier=env.duke.id)
         assert pay_link(response) == CHECKOUT and joiner().registration_pending_since is not None
 
+    def test_a_referral_link_fills_in_its_code(self, env, rendering, code):
+        assert self.code_field(env, f'/auth/register?ref={code}') == code
+
+    def test_a_gift_code_link_fills_in_its_code(self, env, rendering):
+        assert self.code_field(env, '/auth/register?code=Winter-Gift-2026') == 'winter-gift-2026'
+
+    def test_a_posted_code_is_not_replaced_by_the_links(self, env, rendering, code):
+        page = BeautifulSoup(self.register(env, question='typed-one-wrong').get_data(as_text=True), 'html.parser')
+        assert page.find(attrs={'name': 'question'}).get_text().strip() == 'typed-one-wrong'
+
+    def code_field(self, env, path):
+        page = BeautifulSoup(env.client.get(path, base_url=env.base).get_data(as_text=True), 'html.parser')
+        return page.find(attrs={'name': 'question'}).get_text().strip()
+
 
 class TestJoinButtons:
     """A visitor on a paid domain is asked to join, not to log in (plan M6)."""

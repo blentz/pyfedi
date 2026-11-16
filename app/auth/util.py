@@ -35,6 +35,7 @@ from app.referral import REFERRAL_MODE, record_referral, referral_discount, refe
     referral_mode_on, referrer_for
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, onion_proof_refused, prepare_onion_proof
+from app.payments.code_text import normalise
 from app.payments.offers import money
 from app.payments.discounts import discounted, find_discount_code, usable as discount_usable
 from app.payments.gifts import GiftUnavailable, checking_codes, find_gift_code, start_gift
@@ -253,6 +254,8 @@ def register_on_paid_domain(form):
         if request.method == 'GET':
             asked = request.args.get('offer', type=int)
             form.tier.data = asked if any(tier.id == asked for tier in tiers) else offer.id
+            if codes:   # a referral link (RC9) or a gift or discount code's link fills the code in
+                form.question.data = normalise(request.args.get('ref') or request.args.get('code'))
         if request.method == 'POST' and not onion_proof_refused(form) and form.validate_on_submit():
             if codes and (form.question.data or '').strip():
                 with checking_codes():
