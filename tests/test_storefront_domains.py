@@ -117,6 +117,10 @@ def load_migration(name: str = '*_site_domain.py'):
 def seed_schema(db_session):
     """site_domain as the seed wrote into it: without the instance link plan C2's migration adds after it."""
     per_domain_instance = load_migration('c8f4d2a6b9e1_per_domain_instance.py')
+    # Put back exactly the check the schema has now, not a copy of an older one: one that left out 'paid' broke every
+    # later test making a paying domain on the same worker (2026-11-17)
+    check = db.session.execute(text("SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                                    "WHERE conname = 'ck_site_domain_registration'")).scalar()
     with Operations.context(MigrationContext.configure(db.session.connection())) as ops:
         per_domain_instance.downgrade()
         Operations(ops.migration_context).drop_constraint('ck_site_domain_registration', 'site_domain', type_='check')
@@ -126,9 +130,8 @@ def seed_schema(db_session):
     finally:
         db.session.rollback()
         db.session.execute(text('DELETE FROM site_domain'))
-        with Operations.context(MigrationContext.configure(db.session.connection())) as ops:
-            Operations(ops.migration_context).create_check_constraint('ck_site_domain_registration', 'site_domain',
-                                                                      "registration IN ('anyone','closed')")
+        db.session.execute(text(f'ALTER TABLE site_domain ADD CONSTRAINT ck_site_domain_registration {check}'))
+        with Operations.context(MigrationContext.configure(db.session.connection())):
             per_domain_instance.upgrade()
         db.session.commit()
 
@@ -201,3 +204,10 @@ def test_server_name_is_served_when_no_row_names_it(app, db_session, site, rows)
     assert domain_for_host('evil.example') is None
     response = app.test_client().get('/robots.txt', base_url='https://test.piefed.local')
     assert response.status_code == 200
+
+
+def test_the_seed_schema_puts_back_the_check_it_found(db_session):
+    """Asked after a test using seed_schema has run on this worker: a paying domain is still allowed."""
+    check = db.session.execute(text("SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                                    "WHERE conname = 'ck_site_domain_registration'")).scalar()
+    assert "'paid'" in check
