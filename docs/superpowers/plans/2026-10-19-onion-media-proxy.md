@@ -241,12 +241,10 @@ Behaviour:
 - [ ] **Step 2:** Run `python -m tests.fuzz.smoke --seconds 20` in the test-runner (as in the gaps work). Expect all targets clean.
 - [ ] **Step 3: Commit** `test: fuzz the onion media rewrite and its signature check`.
 
-### Task 7: Deploy (local-only sources plus the tracked Caddyfile; the owner pushes)
+### Task 7: Caddyfile, and what the deployment needs
 
 **Files:**
-- Modify: `Caddyfile` (tracked), `deploy/quadlet/pyfedi-web.container`, `deploy/quadlet/pyfedi-celery-background.container`,
-  `deploy/quadlet/pyfedi-caddy.container`, `deploy/DEPLOY_GUIDE.md` §11
-- Create: `deploy/systemd/pyfedi-job@evict_onion_media.timer`
+- Modify: `Caddyfile`
 
 - [ ] **Step 1: Caddyfile.** In `(piefed_routes)`, inside `reverse_proxy web:5000 { … }`, add the following (it is
   harmless on clearnet, because the route is onion-only):
@@ -260,20 +258,7 @@ Behaviour:
       file_server
   }
   ```
-  Validate with `caddy validate`. Commit `deploy: Caddy serves cached onion media files itself`.
-- [ ] **Step 2: Units.**
-  - Add `Volume=/home/rocky/pyfedi/media_proxy:/app/media_proxy:z` to web and celery-background.
-  - Add `Volume=/home/rocky/pyfedi/media_proxy:/srv/media_proxy:ro,z` to Caddy.
-  - Set `CELERY_QUEUES=background,onion_media` on celery-background.
-  - Add a timer that runs `pyfedi-job@evict_onion_media.service` every 15 min.
-  - Back up to `~/backups` before installing. Then `mkdir ~/pyfedi/media_proxy`, owned by rocky.
-  - Install, `daemon-reload`, and restart the stack after the owner's push has deployed Tasks 1–5.
-- [ ] **Step 3: Verify.**
-  - From the tor-like curl (`--connect-to <onion>:80:10.89.0.250:8081`), `/c/memes@lemmy.world` has no remote
-    media host in `src`/`srcset`.
-  - A proxied image URL gives 200 with an image `Content-Type`, `nosniff` and the CSP header.
-  - A `Range: bytes=0-99` request on a cached video gives 206.
-  - The same page on clearnet is unchanged.
-  - 0 tracebacks.
-  - The owner repeats the Tor Browser HAR check: 0 requests to any host but the onion.
-- [ ] **Step 4:** Update DEPLOY_GUIDE §11 (cache dir, settings, timer, queue) and the `first-domain-quadlet-deploy` memory.
+  Validate with `caddy validate`. Commit `feat: Caddy serves cached onion media files itself`.
+- [ ] **Step 2: Deployment needs.** A deployment must mount one cache directory read-write at `/app/media_proxy` in
+  web and celery-background and read-only at `/srv/media_proxy` in Caddy, set `CELERY_QUEUES=background,onion_media`
+  on celery-background, and run the `evict_onion_media` job every 15 min. Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.

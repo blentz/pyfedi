@@ -22,7 +22,7 @@
 - Only logged-in users (or an RSS token user) see local-only content; anonymous requests never do.
 - "Local" filters mean the request's domain (`current_storefront()`).
 - TDD, one commit per task, 100% changed-line and branch coverage, gates from repo tools (`./run_tests.sh`), inline imports only if technically unavoidable (break cycles), slow tests are bugs. Fuzz campaigns touch no DB: any fuzz target reaching the new helpers stubs them.
-- Migration runs through autodeploy (encrypted dump first). The owner pushes. `deploy/` is local-only.
+- The owner pushes.
 
 ## Review Focus
 
@@ -279,10 +279,6 @@ def test_first_domain_actor_and_webfinger_are_byte_identical(...)   # snapshot o
 - [ ] **Step 2–4:** `./run_tests.sh tests/test_mail_home_domain.py tests/test_onion_third_party.py -q`; FAIL then PASS. Update the docstring of `default_storefront` to say ruling I1 is replaced by recipient home domains.
 - [ ] **Step 5: Commit** `feat: mail to an account links to its home domain`
 
-### Task 13: Deploy and verify (controller, after the owner pushes)
+### Task 13: Deploy and verify
 
-- [ ] **Step 1 (before the push):** on the server, save `curl -s -H 'Accept: application/activity+json' https://<first-domain>/u/<a real account>`, its WebFinger answer, `/c/<a real community>` and `/nodeinfo/2.1` to `~/backups/<date>-identity/before/`.
-- [ ] **Step 2:** after autodeploy, the same four, and `diff` against before: identical (NodeInfo counts may differ only by activity since; compare the shape and `software`).
-- [ ] **Step 3:** confirm the onion row (`site_domain` id 2) has `federates` False and `registration` `admin`; onion `/auth/register` refuses; logging in on the onion as `wakko@example.org` works; an admin-added onion test account's WebFinger is 404 from clearnet.
-- [ ] **Step 4:** 0 tracebacks in `pyfedi-web`, `pyfedi-celery`, `pyfedi-celery-background` for 10 min.
-- [ ] **Step 5:** update memories (`onion-storefront-track`) and DEPLOY_GUIDE §11 (adding onion accounts, the federation lock).
+Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.

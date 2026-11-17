@@ -20,7 +20,7 @@
 - **Feed names stay globally unique** (`Feed.name` is a global unique column and feeds have no domain). **Ruling** — the spec gives domains to accounts and communities only; a per-domain feed namespace needs a column and an index for no asked-for gain — cost if wrong: a feed name taken on one domain is unavailable on the others.
 - A new local user or community always gets a `site_domain_id` (never NULL).
 - TDD, one commit per task, 100% changed-line and branch coverage (`python tests/check_changed_line_coverage.py coverage.json <BASE> --branches`), gates from repo tools (`./run_tests.sh`), inline imports only if technically unavoidable, slow tests are bugs. Fuzz campaigns touch no DB: a fuzz target reaching `app/local_names.py` stubs `storefront.domain_rows`.
-- The owner pushes. `deploy/` is local-only.
+- The owner pushes.
 
 ## Review Focus
 
@@ -221,9 +221,6 @@ def test_a_new_local_row_never_has_a_null_domain(app, two_domains):             
 - [ ] **Step 4: Run to verify pass** — the full suite with coverage, `./run_tests.sh -q --cov=app --cov-branch --cov-report=json`, then `python tests/check_changed_line_coverage.py coverage.json <BASE> --branches`. Both clean.
 - [ ] **Step 5: Commit** — `git commit -m "feat: a local name is unique per domain, so two domains can each have a bob (C1)"`
 
-### Task 6: Deploy and verify (controller, after the owner pushes)
+### Task 6: Deploy and verify
 
-- [ ] **Step 1 (before the push):** save the first-domain identity set to `~/backups/<date>-identity/before/`, as plan B Task 13 did (DEPLOY_GUIDE §11, "Check after a deploy that touches identity").
-- [ ] **Step 2:** after the autodeploy, fetch the same set and `cmp`. Only `updated` and NodeInfo counts may differ. Check for 0 tracebacks in the three app units over 10 min.
-- [ ] **Step 3:** on the onion, as a logged-in first-domain user, open a post holding a first-domain profile link. It goes to `/u/<name>@example.org`.
-- [ ] **Step 4:** update DEPLOY_GUIDE §11 "Accounts on the onion": names are per domain, and an admin may reuse a first-domain name for an onion account. Update the memory `onion-storefront-track`.
+Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.

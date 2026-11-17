@@ -4,7 +4,7 @@
 
 **Goal:** An inbound post or comment that carries several languages in `contentMap`/`nameMap`/`summaryMap` keeps every variant and shows each viewer the one for their locale; the first domain runs its own LibreTranslate so the translate buttons work.
 
-**Architecture:** One reader (`language_variants_from`) turns the maps into a default language code plus a dict of non-default variants, stored in a nullable JSONB column `language_variants` on `post` and `post_reply`; a second (`object_language`) picks the item's `Language` from that code, replacing the four "first key of `contentMap`" sites. A new module `app/variants.py` chooses the variant for the viewer (`?lang=` first, then the locale's primary subtag) and exposes it to templates as the Jinja global `shown(item)`. The LibreTranslate container is a quadlet unit in the git-ignored `deploy/` directory, installed by the owner.
+**Architecture:** One reader (`language_variants_from`) turns the maps into a default language code plus a dict of non-default variants, stored in a nullable JSONB column `language_variants` on `post` and `post_reply`; a second (`object_language`) picks the item's `Language` from that code, replacing the four "first key of `contentMap`" sites. A new module `app/variants.py` chooses the variant for the viewer (`?lang=` first, then the locale's primary subtag) and exposes it to templates as the Jinja global `shown(item)`. The LibreTranslate container is provisioned by the deployment, outside this repo.
 
 **Tech Stack:** Flask, SQLAlchemy (PostgreSQL JSONB), Alembic, Jinja2, marshmallow (alpha API), podman quadlet, pytest via `./run_tests.sh`.
 
@@ -24,7 +24,6 @@
 - Never assign `app.config[...]` in a test; use `monkeypatch.setitem(app.config, ...)` (ratchet: `tests/test_parallel_workers.py::TestNothingLeaksConfigIntoLaterTests`).
 - Commit attribution line: `Co-Authored-By: <your model> <noreply@anthropic.com>`.
 - Migration on the single head `a7c3e9f1b5d2`.
-- `deploy/` is git-ignored: files there are written but never committed; their test runs with `python3 -m pytest deploy/autodeploy -q`.
 
 ## Plan rulings (controller, for the owner's visibility)
 
@@ -1105,114 +1104,9 @@ git commit -m "feat: the alpha API returns a post's and a comment's language var
 
 ---
 
-### Task 7: LibreTranslate quadlet unit (local `deploy/`, not committed)
+### Task 7: LibreTranslate container
 
-**Files (all git-ignored; write them, never `git add` them):**
-- Create: `deploy/quadlet/pyfedi-libretranslate.container`
-- Create: `deploy/quadlet/pyfedi-libretranslate-data.volume`
-- Modify: `deploy/quadlet/pyfedi-web.container`
-- Modify: `deploy/DEPLOY_GUIDE.md`
-- Test: `deploy/autodeploy/tests/test_quadlet_libretranslate.py` (new)
-
-- [ ] **Step 1: Write the failing test** `deploy/autodeploy/tests/test_quadlet_libretranslate.py`:
-
-```python
-"""C3: the LibreTranslate unit runs on the pyfedi network and the web unit does not depend on it hard."""
-from pathlib import Path
-
-QUADLET = Path(__file__).resolve().parent.parent.parent / 'quadlet'
-
-
-def keys(name):
-    """Every `Key=value` line of a unit as a list of (key, value); quadlet repeats keys, so no configparser."""
-    pairs = []
-    for line in (QUADLET / name).read_text().splitlines():
-        if '=' in line and not line.lstrip().startswith(('#', '[')):
-            key, value = line.split('=', 1)
-            pairs.append((key.strip(), value.strip()))
-    return pairs
-
-
-def test_the_translator_unit():
-    unit = dict(keys('pyfedi-libretranslate.container'))
-    assert unit['Image'] == 'docker.io/libretranslate/libretranslate:v1.9.6'
-    assert unit['ContainerName'] == 'pyfedi_libretranslate'
-    assert unit['Network'] == 'pyfedi.network' and unit['NetworkAlias'] == 'libretranslate'
-    assert unit['EnvironmentFile'] == '/home/rocky/pyfedi/.env.quadlet'
-    assert unit['Volume'] == 'pyfedi-libretranslate-data.volume:/home/libretranslate/.local:z'
-    assert 'PublishPort' not in unit and unit['Restart'] == 'always'
-    assert 'healthcheck.py' in unit['HealthCmd']
-
-
-def test_the_data_volume_exists():
-    assert (QUADLET / 'pyfedi-libretranslate-data.volume').read_text().startswith('[Volume]')
-
-
-def test_web_wants_but_does_not_require_the_translator():
-    pairs = keys('pyfedi-web.container')
-    assert ('Wants', 'pyfedi-libretranslate.service') in pairs
-    assert any(k == 'After' and 'pyfedi-libretranslate.service' in v for k, v in pairs)
-    assert not any(k == 'Requires' and 'libretranslate' in v for k, v in pairs)
-
-
-def test_autodeploy_does_not_restart_the_translator():
-    script = (QUADLET.parent / 'autodeploy' / 'pyfedi-autodeploy').read_text()
-    assert 'libretranslate' not in script
-```
-
-- [ ] **Step 2: Run it to verify it fails** — `python3 -m pytest deploy/autodeploy/tests/test_quadlet_libretranslate.py -q` — FAIL (file not found).
-
-- [ ] **Step 3: The units.** `deploy/quadlet/pyfedi-libretranslate.container`:
-
-```ini
-[Unit]
-Description=PieFed LibreTranslate (translate buttons; TRANSLATE_ENDPOINT=http://libretranslate:5000)
-
-[Container]
-ContainerName=pyfedi_libretranslate
-Image=docker.io/libretranslate/libretranslate:v1.9.6
-# Reads LT_LOAD_ONLY (default list in DEPLOY_GUIDE.md section 9) from the shared env file.
-EnvironmentFile=/home/rocky/pyfedi/.env.quadlet
-# Downloaded models; without this every recreate downloads them again.
-Volume=pyfedi-libretranslate-data.volume:/home/libretranslate/.local:z
-Network=pyfedi.network
-NetworkAlias=libretranslate
-HealthCmd=./venv/bin/python scripts/healthcheck.py
-HealthInterval=60s
-HealthTimeout=10s
-HealthRetries=3
-# The first start downloads models before it serves.
-HealthStartPeriod=600s
-
-[Service]
-Restart=always
-TimeoutStartSec=900
-
-[Install]
-WantedBy=multi-user.target
-```
-
-`deploy/quadlet/pyfedi-libretranslate-data.volume`:
-
-```ini
-[Volume]
-VolumeName=pyfedi-libretranslate-data
-```
-
-In `deploy/quadlet/pyfedi-web.container` `[Unit]`: add `Wants=pyfedi-libretranslate.service` and append ` pyfedi-libretranslate.service` to the `After=` line. Do not touch `Requires=`.
-
-- [ ] **Step 4: `DEPLOY_GUIDE.md`** — add a section "9. LibreTranslate" (renumber if 9 exists) containing, verbatim in substance:
-  - What it is for (the translate buttons) and that the site keeps running when it is down (`Wants=`, not `Requires=`).
-  - `.env.docker` additions, then regenerate `.env.quadlet` as section 6 says:
-    `LT_LOAD_ONLY=en,es,fr,de,pt,it,ja,nl,pl,zh`, `TRANSLATE_ENDPOINT=http://libretranslate:5000`, `TRANSLATE_KEY=`.
-  - Install: `scp deploy/quadlet/pyfedi-libretranslate.container deploy/quadlet/pyfedi-libretranslate-data.volume deploy/quadlet/pyfedi-web.container rocky@<first-domain>:` then the same `sudo install -m 644 -o root -g root ... /etc/containers/systemd/ && sudo restorecon ... && sudo systemctl daemon-reload` pattern as the existing web-unit section, then `sudo systemctl start pyfedi-libretranslate` and `sudo systemctl restart pyfedi-web`.
-  - First start downloads the models into the volume (minutes); check with `sudo podman logs -f pyfedi_libretranslate` and `curl -s http://127.0.0.1:...` is not available (no published port): use `sudo podman exec piefed_app1 curl -s http://libretranslate:5000/languages`.
-  - Memory: roughly 1–2 GB with the default list; changing `LT_LOAD_ONLY` then `sudo systemctl restart pyfedi-libretranslate`.
-  - The autodeploy timer does not restart it.
-
-- [ ] **Step 5: Run the deploy suite** — `python3 -m pytest deploy/autodeploy -q` — Expected: PASS (new and existing tests).
-
-- [ ] **Step 6: No commit.** `git status --short deploy/` must print nothing (the directory is ignored). Report the four file paths in the task report.
+Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.
 
 ---
 
@@ -1221,5 +1115,4 @@ In `deploy/quadlet/pyfedi-web.container` `[Unit]`: add `Wants=pyfedi-libretransl
 - [ ] **Step 1:** `./run_tests.sh tests/ -q -p no:cacheprovider --cov=app --cov-branch --cov-report=json:coverage.json` — Expected: all pass.
 - [ ] **Step 2:** `python3 tests/check_changed_line_coverage.py coverage.json fd2d24102 --branches` — Expected: every changed line and branch covered.
 - [ ] **Step 3:** `python3 tests/check_coverage_floors.py coverage.json coverage_floors.ini` — Expected: all floors met.
-- [ ] **Step 4:** `python3 -m pytest deploy/autodeploy -q` — Expected: PASS.
-- [ ] **Step 5:** `flask db heads` (or the repo's single-head test) — Expected: one head, `b8e2d4f6a1c3`.
+- [ ] **Step 4:** `flask db heads` (or the repo's single-head test) — Expected: one head, `b8e2d4f6a1c3`.

@@ -98,23 +98,15 @@ ingest, choosing a variant by `read_language_ids`, searching inside variants, tr
 `language_variants` (object or null) is added read-only to the alpha API post view and comment view schemas;
 null for a deleted item, as C2 does for `quote_ap_id`.
 
-## LibreTranslate container (the first domain)
+## LibreTranslate container
 
-`deploy/` is local-only (git-ignored); these files live there and the owner installs them per `DEPLOY_GUIDE.md`.
+The translator runs as its own container on the deployment's private network; the deployment's tooling, outside this
+repo, provisions it.
 
-- `deploy/quadlet/pyfedi-libretranslate.container`: `Image=docker.io/libretranslate/libretranslate:<pinned tag>`,
-  `ContainerName=pyfedi_libretranslate`, `EnvironmentFile=/home/rocky/pyfedi/.env.quadlet`,
-  `Network=pyfedi.network`, `NetworkAlias=libretranslate`, no `PublishPort`, the data volume mounted at the image's
-  model directory, a health check on `/languages`, `Restart=always`.
-- `deploy/quadlet/pyfedi-libretranslate-data.volume`.
-- `.env.quadlet` (via `.env.docker`, regenerated as section 6 describes): `LT_LOAD_ONLY=en,es,fr,de,pt,it,ja,nl,pl,zh`,
-  `TRANSLATE_ENDPOINT=http://libretranslate:5000`, `TRANSLATE_KEY=` empty (no API keys on a private network).
-- `pyfedi-web.container` and both celery units: `Wants=` and `After=pyfedi-libretranslate.service`, not `Requires=`:
-  the site must keep running when the translator is down.
-- The autodeploy script does not restart the translator on each deploy (it is not an app unit).
-- `DEPLOY_GUIDE.md` gains a section: install, first start (models download), memory, how to change languages.
-- Tests: `deploy/autodeploy/tests/` (the deploy dir's own suite) gains a test that parses the new unit and checks
-  the keys above, and that the web unit wants rather than requires it.
+- The app reaches it at `TRANSLATE_ENDPOINT` (e.g. `http://libretranslate:5000`), with `TRANSLATE_KEY` empty on a
+  private network. `LT_LOAD_ONLY` limits the loaded languages.
+- The app units want the translator but must not require it: the site keeps running when it is down.
+- An app deploy does not restart the translator (it is not an app unit).
 
 ## Errors and limits
 

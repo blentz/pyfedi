@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
 # LAST stage, and that has to remain the production image.
 FROM builder AS test
 
-# git: deploy/autodeploy's tests drive real throwaway repositories, and FediTest installs from a git commit.
+# git: FediTest installs from a git commit, and some tests ask git which files are tracked.
 COPY requirements-test.txt /tmp/requirements-test.txt
 RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
     apt-get update && apt-get install -y --no-install-recommends git \

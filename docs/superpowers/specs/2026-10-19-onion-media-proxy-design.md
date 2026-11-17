@@ -124,7 +124,7 @@ Anti-goals (a failure even if it "works")
 - Fuzz harness contract: campaigns never touch the DB or network. A fuzz target for the URL rewrite and the
   signature check stubs both.
 - Deploy: a new bind mount in three quadlet units (web, celery-background, Caddy), the `onion_media` queue on the
-  celery-background worker, a Caddyfile change on the onion site, a new job timer. All are local-only `deploy/` sources, plus the tracked Caddyfile. The owner pushes.
+  celery-background worker, a Caddyfile change on the onion site, a new scheduled job. Only the Caddyfile is in this repo; the rest is the deployment's. The owner pushes.
 
 ## 5. Left to the builder
 - The exact media-extension list for `href`, and how `srcset` candidates are re-joined.

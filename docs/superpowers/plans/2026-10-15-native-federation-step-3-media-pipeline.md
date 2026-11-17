@@ -69,7 +69,7 @@ The code survey of 2026-10-15 found spec §2, §5.1, §5.3 and §5.5 out of line
    - The old purge path removed only a video stored on S3. Local and audio media are new.
 9. **Failure.** `probe_media` runs on the `background` celery queue. A failure sets `extensions.media.status = 'failed'` with an `error`, leaves the post unpublished, and notifies the author with a `Notification` of `notif_type=NOTIF_DEFAULT`, `subtype='media_failed'`.
 10. **Container image.** `ffmpeg` goes into the Dockerfile `builder` stage, which `test` inherits, and the `runtime` stage. It is also added to `INSTALL.md`.
-    - `deploy/DEPLOY_GUIDE.md` and `INSTALL.md` document the matching reverse-proxy body limit: Caddy `request_body { max_size 510MB }`; nginx `client_max_body_size 510M`.
+    - `INSTALL.md` documents the matching reverse-proxy body limit: Caddy `request_body { max_size 510MB }`; nginx `client_max_body_size 510M`.
 
 ## Review Focus
 
@@ -97,7 +97,7 @@ The code survey of 2026-10-15 found spec §2, §5.1, §5.3 and §5.5 out of line
 | `app/community/routes.py`, `app/shared/post.py`, `app/templates/post/post_edit.html` (and the add-post template) | modify | the upload branch goes to `store_uploaded_media` |
 | `app/shared/tasks/pages.py` | modify | `send_post` refuses a media post that is not ready |
 | `app/models.py` | modify | `Post.delete_dependencies` removes local or S3 media |
-| `Dockerfile`, `INSTALL.md`, `deploy/DEPLOY_GUIDE.md`, `Caddyfile` | modify | ffmpeg and the body limit |
+| `Dockerfile`, `INSTALL.md`, `Caddyfile` | modify | ffmpeg and the body limit |
 | `tests/fixtures/media/*` | create | tiny real media files (made once with ffmpeg, committed) |
 | `tests/test_media_*.py`, `interop/test_media_pipeline.py` | create | tests |
 
@@ -914,7 +914,7 @@ def publish_ready_post(post) -> None:
 - Create: `interop/test_media_pipeline.py` (marker `interop`)
 - Modify: `interop/seed_piefed.py`: a `video_channel` community `vc_media` and a `podcast` community `pod_media`, both moderated by alice. Set `allow_video_file_uploads`/`allow_audio_file_uploads` to `users`.
 - Modify: `interop/clients.py` if a PieFed web-session helper is needed. Log in through the web form, the way the existing clients do any web call; reuse it if present.
-- Modify: `deploy/DEPLOY_GUIDE.md`, `INSTALL.md` (nginx section ~:514), and the repo `Caddyfile` with `request_body { max_size 510MB }` on the PieFed site block.
+- Modify: `INSTALL.md` (nginx section ~:514), and the repo `Caddyfile` with `request_body { max_size 510MB }` on the PieFed site block.
 - Modify: `docs/superpowers/specs/2026-10-14-native-federation-design.md`: add a line under A13 stating the gates' results once done.
 
 - [ ] **Step 1: Write the interop test.** Use the harness PieFed image, which now has ffmpeg.
@@ -926,7 +926,7 @@ def publish_ready_post(post) -> None:
 
 - [ ] **Step 2:** Run it: `interop/run.sh test interop/test_media_pipeline.py`. Expected: PASS. If the Range answer is not 206, fix the serving path, not the test.
 - [ ] **Step 3: Docs.**
-  - `DEPLOY_GUIDE.md` gets a "Media uploads" subsection. It covers the body limit (Caddy `request_body max_size`, nginx `client_max_body_size`), set to the larger upload limit plus 10 MB.
+  - `INSTALL.md` gets a "Media uploads" note. It covers the body limit (Caddy `request_body max_size`, nginx `client_max_body_size`), set to the larger upload limit plus 10 MB.
   - It states that `ffmpeg` is in the image.
   - It states that step 3 must not ship before step 4 (A13.6).
 - [ ] **Step 4:** Run all gates:

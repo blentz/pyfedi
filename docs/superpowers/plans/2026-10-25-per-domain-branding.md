@@ -286,21 +286,9 @@ before committing it. If a licence is not OFL, stop and report.
   pass.
 - [ ] Commit: `docs: no document names the first domain, and a test keeps it so (project 4)`.
 
-### Task 9: Deploy and verify (controller)
+### Task 9: Deploy and verify
 
-The Caddyfile now needs `PIEFED_DOMAIN` and `ACME_EMAIL` set in the pyfedi-caddy unit, **before** the owner pushes.
-Without them Caddy serves nothing.
+The Caddyfile now needs `PIEFED_DOMAIN` and `ACME_EMAIL` set in Caddy's environment **before** the push;
+without them Caddy serves nothing.
 
-- [ ] On prod:
-  - back up `pyfedi-caddy.container`;
-  - add `Environment=PIEFED_DOMAIN=…` and `Environment=ACME_EMAIL=…`, with the values from the current Caddyfile;
-  - mirror the change in the local `deploy/quadlet/`.
-- [ ] Run `caddy validate` with the new Caddyfile and env, inside the running container image, before the push.
-- [ ] Owner pushes. After autodeploy:
-  - 0 new traceback kinds over 10 min;
-  - the identity documents are byte-identical to `~/backups/2026-10-25-identity/after`, with only `updated` and
-    counts differing;
-  - first-domain pages look unchanged;
-  - an onion page carries the CSP and has no off-site `src` or `url(`;
-  - a hacker_bbs theme on the onion loads its fonts from the onion.
-- [ ] Update DEPLOY_GUIDE §11 (branding and the Caddy env) and the memory `onion-storefront-track`.
+Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.

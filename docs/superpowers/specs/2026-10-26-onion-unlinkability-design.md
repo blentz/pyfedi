@@ -56,7 +56,7 @@ Goals:
    error or traceback kind appeared, per unit, named by exception type and the app's file:line.
    - They contain no IP, user name, email, URL path, query, host name or activity id.
    - They stay on disk for 21 days, then are deleted.
-   - They replace the "prior week" log searches in the post-deploy check (DEPLOY_GUIDE §11).
+   - They replace the "prior week" log searches in the post-deploy check.
    - The builder picks the counting point (a log handler, or a minutely journal reader) and the storage
      (a file under the LUKS mount, or a DB table).
 6. **The onion media cache moves to the LUKS volume, capped at 5 GiB** (owner).
@@ -182,7 +182,7 @@ Anti-goals:
   still fit.
 - **The clearnet fail2ban lines stay byte-identical**, and a test asserts it.
 - **The file log handler** is removed everywhere, dev and tests included.
-- **Rollout** is runbook text in DEPLOY_GUIDE, plus idempotent scripts where they help.
+- **Rollout** is runbook text kept with the deployment, outside this repo, plus idempotent scripts where they help.
   - Settings change first (volatile journal, rsyslog, fail2ban), then the deletions, each confirmed with
     the owner.
   - A ban-coverage gap of a few minutes during the switch is acceptable.

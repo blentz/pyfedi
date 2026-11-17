@@ -150,7 +150,7 @@ succeeds but shows a clear warning naming each reference.
 
 ## 4. Constraints
 
-- **The first domain is byte-identical.** After deploy, the identity check in DEPLOY_GUIDE §11 must match: actor,
+- **The first domain is byte-identical.** After deploy, the post-deploy identity check must match: actor,
   WebFinger, NodeInfo, community and instance actor. Only `updated` and counts may differ. Pages, emails and the
   manifest look the same.
 - **No hard-coded domain** (owner). This is enforced by a test, so a reintroduction fails the gate. §6 ruling 2
@@ -197,8 +197,7 @@ succeeds but shows a clear warning naming each reference.
        (tests/test_caddyfile_routing.py) and a config `caddy validate` with the prod values.
    - **Docs:** `docs/` and the other tracked docs are rewritten the same way, including historical specs and plans
      (Claude's reading of "everything in the repo").
-   - **Out of the repo's reach:** git history and commit messages. The git-ignored `deploy/` guide stays as it is,
-     since it is local-only and records the real host.
+   - **Out of the repo's reach:** git history and commit messages.
    - **Guard:** a test scans every tracked file (`git ls-files`) and fails if the first domain's name appears. The
      name it looks for is not a literal, so the guard does not hard-code it either. The test app's SERVER_NAME is a
      test host, so the real name has to come from somewhere else: the deploy environment, or a hash the guard

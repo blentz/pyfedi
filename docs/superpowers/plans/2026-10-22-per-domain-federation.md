@@ -82,12 +82,10 @@
 
 ### Task 7: The admin can add a federating domain
 
-**Files:** `app/admin/routes.py:331-352` (drop the refusal of `federates=True` for non-default rows; the C2 lock on `federates` once a domain has owners stays), `Caddyfile` (a commented, ready-to-copy site block for a federating domain using `import piefed_routes`, no `Onion-Location`), `tests/test_caddyfile_routing.py` (the template parses and routes like the first domain's block when uncommented — test the text), `deploy/DEPLOY_GUIDE.md` "Adding a federating domain" (DNS, domain row, Caddy block, reload, first checks: WebFinger, `/actor`, NodeInfo, follow from a remote account) — `deploy/` is local-only.
+**Files:** `app/admin/routes.py:331-352` (drop the refusal of `federates=True` for non-default rows; the C2 lock on `federates` once a domain has owners stays), `Caddyfile` (a commented, ready-to-copy site block for a federating domain using `import piefed_routes`, no `Onion-Location`), `tests/test_caddyfile_routing.py` (the template parses and routes like the first domain's block when uncommented — test the text).
 - Tests: the form creates a federating non-default domain with its key pair and instance row; the lock still refuses flipping `federates` on a domain with owners.
 - Commit: `feat: an admin can add a second federating domain (C3)`.
 
-### Task 8: Deploy dark and verify (controller)
+### Task 8: Deploy dark and verify
 
-- [ ] Before the push: identity before-set on prod (`/u/wakko`, WebFinger, `/c/microblogs`, `/actor`, `/`, `/.well-known/host-meta`, `/.well-known/nodeinfo`, `/nodeinfo/2.1`) to `~/backups/<date>-identity/before/`.
-- [ ] After autodeploy: `cmp` — only `updated` and NodeInfo counts differ; the migration gave no key to the default row and a key to the onion row (every non-default row gets one, in case a domain with no owners is switched to federate), and the onion's `/actor` still answers no other server; 0 tracebacks over 10 min in all app units; one first-domain post federates to a remote follower as before (check the outbound log / a remote copy).
-- [ ] Update DEPLOY_GUIDE §11 and the memory `onion-storefront-track`; note the live second-domain checks owed when the owner adds one.
+Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.

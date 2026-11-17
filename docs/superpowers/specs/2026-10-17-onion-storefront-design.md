@@ -88,7 +88,7 @@ A new "Domains" section in admin site settings (`app/admin/`). It is a table wit
 domain, scheme, federate checkbox, registration dropdown (Anyone / Staff and admins / Admins only), and a
 "Default" radio button. Rows can be added and removed. Project 1 labels the federate and registration
 controls as "takes effect in a later release". Adding a domain does not configure DNS, TLS or Tor. The
-form says so and links to `deploy/DEPLOY_GUIDE.md`.
+form says so.
 
 ### 3.3 Resolving the storefront per request
 
@@ -247,9 +247,7 @@ onion requests only. Clearnet is unchanged.
 
 ## 4. Project 2: Tor deploy for the first domain
 
-Deploy sources live in the local-only `deploy/quadlet/` and `deploy/systemd/` (git-ignored, see
-`first-domain-quadlet-deploy` memory). Units are installed over ssh as `rocky@<first-domain>`. Back up the unit
-files and the Caddyfile to `~/backups` before editing.
+The deployment's own tooling, outside this repo, holds the units and runbook for this project.
 
 ### 4.1 Tor container
 
@@ -272,11 +270,10 @@ files and the Caddyfile to `~/backups` before editing.
 
 - Volume `pyfedi-tor-data.volume` holds `hs_pyfedi/`. It must persist: losing
   `hs_ed25519_secret_key` loses the address for good.
-- Back up `hs_ed25519_secret_key` once, age-encrypted to the same recipient as the DB dumps (the owner
-  holds the restore key file in rocky's home; its exact name is in `deploy/DEPLOY_GUIDE.md`), to `~/backups/tor/`. Never leave a plaintext copy outside the
+- Back up `hs_ed25519_secret_key` once, age-encrypted to the same recipient as the DB dumps. Never leave a plaintext copy outside the
   volume.
 - The onion hostname goes into the `site_domain` table through the admin UI (project 1). It is also
-  recorded in `deploy/DEPLOY_GUIDE.md`.
+  recorded in the deployment's runbook.
 
 ### 4.3 Caddy
 
@@ -331,7 +328,7 @@ Prod runs fail2ban with only an `sshd` jail.
 4. From Tor Browser: browse, log in, post, upload an image, receive a live notification. Check the
    network panel shows no request to `<first-domain>`.
 5. Enable the fail2ban jails. Run a test ban from an outside IP and confirm it blocks 443.
-6. Update `deploy/DEPLOY_GUIDE.md`: the onion address, the backup location, how to restore the key.
+6. Record in the deployment's runbook: the onion address, the backup location, how to restore the key.
 
 ## 5. Constraints
 

@@ -161,7 +161,7 @@
 - Create: an alembic migration
 - Modify: `app/__init__.py`. Attach `ErrorCountHandler` to `app.logger` at WARNING. The Celery worker init attaches it too, so it lands in `celery_worker.py` or `app/__init__.py`, wherever Celery's app is built.
 - Modify: `app/cli.py`. Add `flask error-counts [--days N]`, which prints `day unit level count kind` sorted, and `flask prune-error-counts`, which deletes `day < today - 21`.
-- Create: `deploy/systemd/pyfedi-job@prune_error_counts.timer` (daily). deploy/ is git-ignored; the controller installs it in Task 8.
+- Deployment: run `flask prune-error-counts` daily (`prune_error_counts.sh`); scheduling it is the deployment's job.
 - Test: `tests/test_error_counts.py`
 
 **Interfaces:**
@@ -213,46 +213,6 @@
 
 Then run the full bare gate and the coverage check against the plan's BASE.
 
-### Task 8 (controller, on prod, after merge and BEFORE the owner pushes): deploy settings
+### Task 8: Deploy settings (before the owner pushes)
 
-All of this is local `deploy/` plus prod. Back up every unit and env file first. Confirm each deletion with the owner.
-
-- [ ] **Step 1: RAM Redis.**
-  - Create `deploy/quadlet/pyfedi-redis-onion.container`: image as `pyfedi-redis`, command `redis-server --save "" --appendonly no --maxmemory 64mb --maxmemory-policy volatile-lru`, no volume, on `pyfedi.network`.
-  - Add `ONION_REDIS_URL=redis://pyfedi-redis-onion:6379/0` to `.env.docker` and regenerate `.env.quadlet`.
-  - Install, `daemon-reload`, start.
-  - Check from the web container that `redis-cli -u $ONION_REDIS_URL ping` answers `PONG`.
-- [ ] **Step 2: Media cache on LUKS.**
-  - Create `/home/rocky/pyfedi/pgdata-media`: a second filesystem image file on the LUKS volume, or another LV on the same LUKS device. Check its layout first, and never put the cache inside `PGDATA`.
-  - Point `MEDIA_PROXY_DIR` at it in both the web and Caddy units (`/srv/media_proxy`).
-  - Set the `onion_media_cache_bytes` setting to `5368709120`.
-  - Add the unlock step to the DEPLOY_GUIDE §LUKS runbook.
-- [ ] **Step 3: Logs.**
-  - Add the journald drop-in `/etc/systemd/journald.conf.d/50-pyfedi.conf` with `Storage=volatile`, `MaxRetentionSec=1h` and `RuntimeMaxUse=512M`, then restart journald.
-  - Set rsyslog so `/var/log/messages` drops container and pyfedi output: a filter in `/etc/rsyslog.d/10-no-pyfedi.conf`, or `ForwardToSyslog=no`. Pick the setting that also keeps sshd and cron logging to the journal.
-  - fail2ban: `logtarget = SYSTEMD-JOURNAL`, `dbpurgeage = 1h`.
-  - Make sure the jails read the journal backend. Check each jail with `fail2ban-regex` and one real test ban from a throwaway host.
-- [ ] **Step 4: Timer.** Install `pyfedi-job@prune_error_counts.timer` and enable it.
-- [ ] **Step 5: Owner push**, then autodeploy. The migrations run: the sentinel and `error_count`.
-- [ ] **Step 6: Deletions** (owner confirms each):
-  - `/var/log/journal/*`;
-  - `/var/log/messages*`;
-  - `/var/log/fail2ban.log*`;
-  - `~/pyfedi/logs/`;
-  - the old `~/pyfedi/media_proxy/`;
-  - the onion keys in the main Redis: SCAN and DEL the prefixes Task 3's report lists, then `BGSAVE`;
-  - old `dump.rdb` copies.
-  - Shred them where shredding means anything.
-- [ ] **Step 7: Verify.**
-  - The identity docs are unchanged (DEPLOY_GUIDE §11 set).
-  - `swapon --show` is empty.
-  - No onion key in the main Redis after 15 min of onion use.
-  - `journalctl --disk-usage` is under /run only.
-  - `flask error-counts` shows today's rows.
-  - The onion account rows hold the sentinel.
-  - Onion login works.
-  - A clearnet test ban works.
-  - Tracebacks: no new kinds.
-- [ ] **Step 8: DEPLOY_GUIDE.**
-  - §11 notes: the 1 h RAM journal, the counts replacing week searches, the RAM Redis, the media cache on LUKS, "swap must stay off or be encrypted", and "never IP-ban 169.254.88.88: it is every onion account".
-  - Update memory.
+Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.

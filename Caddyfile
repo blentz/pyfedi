@@ -12,7 +12,7 @@
 (piefed_routes) {
 	encode zstd gzip
 
-	# Media uploads (deploy/DEPLOY_GUIDE.md, "Media uploads"): the largest upload limit, max_video_upload_bytes
+	# Media uploads: the largest upload limit, max_video_upload_bytes
 	# (default 524288000, 500 MiB), plus 10 MiB for the rest of the form. MiB, not MB: Caddy reads "MB" as 10^6
 	# bytes, and 510MB is less than 500 MiB. The app still refuses anything over its own per-request limit.
 	request_body {
@@ -74,7 +74,7 @@
 	import piefed_routes
 }
 
-# A second federating domain (deploy/DEPLOY_GUIDE.md, "Adding a federating domain"). Add the domain in the admin
+# A second federating domain. Add the domain in the admin
 # Domains form first, point its DNS here, then uncomment this block, replace shop.example, and reload Caddy. It
 # gets the same routing as the first domain and no Onion-Location header: that header names the onion site of the first domain.
 # shop.example {

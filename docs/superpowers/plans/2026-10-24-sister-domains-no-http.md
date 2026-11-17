@@ -69,7 +69,6 @@
 - [ ] Tests (httpx captured, never real): a shop.example user replies to a first-domain post in a first-domain community with one remote follower instance → the reply row exists at once with an `ap_id` on shop.example; zero HTTP requests to any hosted domain; exactly one Announce to the remote follower's inbox with `actor` = the first-domain community, id on the first domain, `keyId` = community's `#main-key`, signature verifying with the community's key, and an inner `Create` whose actor and id are on shop.example; the first-domain post's author gets a reply notification without HTTP; the same for a vote and for a post (the post also reaches the shop user's piefed/mbin followers as an Announce and others as the user-signed Create, per `pages.py:410-497`). Mirror case: a first-domain user replies in a shop.example community → Announce from shop.example, inner Create on the first domain.
 - [ ] Commit: `test: a sister domain's reply is stored directly and federated by the right domain (C4)`.
 
-### Task 6: Deploy and verify (controller)
+### Task 6: Deploy and verify
 
-- [ ] After autodeploy: 0 new traceback kinds over 10 min in all app units; no `hosted domain, not sent` log rows on prod in the first hour (any row means a fan-out still aims at us — investigate); the `ChatMessage target is not local` / `empty uri` failure counts do not rise (the `empty uri` one should fall to 0); first-domain identity documents byte-identical to the C3 after-set (`~/backups/2026-10-24-identity/after`).
-- [ ] Update DEPLOY_GUIDE §11 and the memory `onion-storefront-track`; note the live sister checks owed when the owner adds a second domain (Task 5's scenario over real HTTP to a remote follower).
+Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.

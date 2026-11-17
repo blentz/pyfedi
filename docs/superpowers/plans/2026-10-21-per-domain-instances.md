@@ -89,9 +89,6 @@
 - Tests: the Review Focus 3 pair on both storefronts, hot and scaled; `new`/`top`/`active` order unchanged by domain; a first-domain community list with two otherwise-equal communities lists the first domain's first on the first domain and the onion's first on the onion; with no sisters and no request, the hot order equals today's for row-1 vs remote posts offset by exactly the boost (pin one case).
 - Commit: `feat: hot feeds on each domain lift that domain's own posts, then its sister domains' (C2)`.
 
-### Task 8: Deploy and verify (controller, after the owner pushes)
+### Task 8: Deploy and verify
 
-- [ ] Before the push: save the identity set to `~/backups/<date>-identity/before/` (DEPLOY_GUIDE §11), plus `select id, domain, inbox from instance where id = 1 or domain in (select domain from site_domain)` and the onion's user/community/post counts by instance_id.
-- [ ] After autodeploy: identity `cmp` (only `updated`, NodeInfo counts differ); the onion has its own instance row with no inbox and its rows moved to it; 0 tracebacks in web/celery/beat/background/notifs over 10 min; anonymous `/instances` on the first domain has no onion hostname.
-- [ ] Owner: on the onion while logged in, the home hot feed shows onion posts lifted; blocking the first domain's instance from an onion account hides first-domain posts.
-- [ ] Update DEPLOY_GUIDE §11 (sister instance rows, blocking, ranking) and the memory `onion-storefront-track`.
+Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.

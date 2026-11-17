@@ -26,7 +26,7 @@
 - Test runs: `./run_tests.sh <paths>`. Full gate: `./run_tests.sh -q --cov=app --cov-branch --cov-report=json:coverage.json -p no:randomly`.
 - Before each run, `pgrep -a -x podman | grep pyfedi_test-runner` must print nothing. Never run two runs at once, never kill a run, never use `timeout`.
 - Implementer commit trailer: `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
-- The owner pushes. `deploy/` is git-ignored and local-only.
+- The owner pushes.
 
 ## Review Focus
 
@@ -455,11 +455,6 @@ def test_an_existing_feed_is_unchanged_after_the_backfill(app, three_domains):
 - [ ] **Step 3: Full gate.** `./run_tests.sh -q --cov=app --cov-branch --cov-report=json:coverage.json -p no:randomly`, then `python tests/check_changed_line_coverage.py coverage.json <BASE> --branches`; expected: all pass, no uncovered changed line or branch.
 - [ ] **Step 4: Commit.** `test: per-domain feeds end to end, the first domain's documents unchanged (F4)`.
 
-### Task 11: Deploy and verify on prod (controller)
+### Task 11: Deploy and verify
 
-- [ ] **Pre-flight on prod, read-only.** Count local feeds whose owner's home domain does not federate (legacy onion-owned feeds; Task 7 keeps them off federation, but they stay listed on the first domain). Report the count to the owner before the push. Count `lower(name)` duplicates among local feeds (expect 0: the column was unique).
-- [ ] **Before-set.** For each public local feed on the first domain, save the actor document, its four collections and its WebFinger JRD (`Accept: application/activity+json`) to `~/backups/<date>-feeds/before/`. Save the `/feeds` HTML list of feed names.
-- [ ] **Backup.** Take the full database backup the DEPLOY_GUIDE backup section describes, and check the file is non-empty.
-- [ ] **Owner pushes.** The hourly auto-deploy applies it and runs the migration. Check the alembic head is `d5a9c3e7f1b4` and every local feed has `site_domain_id` set to the default domain's id. Then run `flask restamp-notifications --all` once in the web container, so that notifications naming an onion feed written before this deploy are stamped (follow-up F6's stamp rule now covers feeds).
-- [ ] **After-set.** Fetch the same documents to `.../after/` and `cmp` each pair: byte-identical. Check `/feeds` on the first domain lists the same names. Check the onion's `/feeds` lists the first domain's feeds while the onion has none, and `/f/<an onion feed>@<onion host>` is 404 on the first domain if one exists. Check for 0 tracebacks over 10 minutes in every app unit.
-- [ ] **Notes.** Add a "Per-domain feeds (F4)" entry to `deploy/DEPLOY_GUIDE.md`: the migration, its downgrade caveat (it fails while two domains share a feed name), and the checks above. Update the memory `onion-storefront-track` with F4 done.
+Deployment and production verification are done with the deployment's own tooling and runbook, outside this repo.

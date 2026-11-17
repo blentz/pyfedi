@@ -265,7 +265,7 @@ Tombstone path unchanged.
 - The upload streams to a temp file in 1 MiB chunks while counting bytes. If the count passes the limit,
   the request is aborted with 413 and the temp file is removed. The file is never fully written.
 - Flask `MAX_CONTENT_LENGTH` is set to `max(max_video_upload_bytes, max_audio_upload_bytes) + 10 MiB` as a
-  global backstop. `deploy/DEPLOY_GUIDE.md` documents the matching reverse-proxy body limit.
+  global backstop. `INSTALL.md` documents the matching reverse-proxy body limit.
 - Type is checked by magic bytes, not by extension or client mime:
   - video: MP4/MOV (`ftyp`), WebM (EBML header);
   - audio: MP3 (ID3 tag or frame sync), M4A (`ftyp` M4A brand), Ogg (`OggS`, covering Vorbis and Opus).
@@ -577,8 +577,8 @@ Each step gets its own implementation plan and its own commits, and each ends wi
        - Such a post goes back to `processing`, by the same compare-and-set, increments `requeues`, and is queued again. Once `attempts` or `requeues` reaches 3, it fails with "processing timed out" and the author is notified. A run whose claim was taken back (its `probing_since` token no longer matches) writes nothing.
        - Every move is a compare-and-set on the media status the sweep expects, and also requires `Post.status = POST_STATUS_PROCESSING`. An upload that turned ready, failed or published after the sweep's query is never moved. The sweep skips any other media status (security review, 2026-10-16).
   10. **Container image.** `ffmpeg` goes into the Dockerfile `builder` stage, which `test` inherits, and the `runtime` stage. It is also added to `INSTALL.md`.
-      - `deploy/DEPLOY_GUIDE.md` and `INSTALL.md` document the matching reverse-proxy body limit: Caddy `request_body { max_size 510MB }`; nginx `client_max_body_size 510M`.
-        - Correction: Caddy reads `MB` as 10^6 bytes, so `510MB` (510000000) is less than the 500 MiB default video limit. The `Caddyfile` and the guide use `510MiB` (534773760). nginx's `M` is already MiB.
+      - `INSTALL.md` documents the matching reverse-proxy body limit: Caddy `request_body { max_size 510MB }`; nginx `client_max_body_size 510M`.
+        - Correction: Caddy reads `MB` as 10^6 bytes, so `510MB` (510000000) is less than the 500 MiB default video limit. The `Caddyfile` uses `510MiB` (534773760). nginx's `M` is already MiB.
   - **Gates (2026-10-15, Task 7).** `interop/test_media_pipeline.py` passes in the harness. A video upload to `vc_media` and an audio upload to `pod_media` each reach `extensions.media.status = 'ready'` and are published. Each answers `Range: bytes=0-99` through Caddy with `206`, `Content-Range: bytes 0-99/<size>` and `Access-Control-Allow-Origin: *`. A `not_media.mp4` upload makes no post. The full interop suite passes on a fresh stack: 17 tests.
 - **A14 (§6.4), owner ruling 2026-10-15:** an accepted Undo releases the dedupe claim of the activity it undoes (same actor, signature-verified).
   - `release_undone_activity` (`app/activitypub/util.py`) runs from the `Undo` arms of `Follow` (community, feed, user) and of `Like`, `Dislike` and `EmojiReact`, only when the handler took something back.

@@ -156,7 +156,7 @@ Anti-goals (a failure even if it "works")
 - fail2ban's register and scan jails read gunicorn access lines today. Instead the app logs only the events they
   need, in the style of the existing `auth: login failed ip=<ip>` line: a registration attempt, and a request to a
   probe path (`/wp-`, `/.env`, `/phpmyadmin`, `/cgi-bin`, `/xmlrpc.php`) answered 4xx. Onion requests log
-  `ip=onion`, which no jail matches. The jail filters in `deploy/fail2ban/` change to match. (Owner chose this.)
+  `ip=onion`, which no jail matches. A deployment's fail2ban filters change to match. (Owner chose this.)
 - The relay-delivery diagnosis that counted per-relay access lines now needs the flag turned on.
 
 ## 4. Constraints
@@ -166,7 +166,7 @@ Anti-goals (a failure even if it "works")
 - Federation regressions are tested against the first domain's real stored shapes: an existing actor's ID, key and
   WebFinger answer are byte-identical before and after.
 - Deploy: owner pushes; the migration runs through autodeploy (age-encrypted dump first). Caddyfile is tracked;
-  fail2ban, env and quadlet changes are local-only `deploy/` sources.
+  fail2ban, env and unit changes are the deployment's, outside this repo.
 
 ## 5. Left to the builder
 - How the ownership resolution is cached per request, and the exact column and index names.
