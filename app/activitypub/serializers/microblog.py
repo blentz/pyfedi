@@ -90,7 +90,8 @@ def note_content(post) -> str:
     original = post.body_html or ''
     body = link_hashtags(original, object_base(post))[0]
     title = (post.title or '').strip()
-    if not title or starts_with_title(html_to_text(original).strip(), title):
+    # a microblog post's title was taken from its text, not written (shared.post.edit_post), so it is not sent
+    if not title or post.microblog or starts_with_title(html_to_text(original).strip(), title):
         return body
     if post.type in (POST_TYPE_LINK, POST_TYPE_VIDEO) and web_url(post):
         return f'<p><a href="{escape(post.url)}">{escape(title)}</a></p>{body}'

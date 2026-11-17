@@ -26,7 +26,7 @@ from app.admin.util import topics_for_form
 from app.api.alpha.utils.misc import get_resolve_object
 from app.community.util import hashtags_recent
 from app.constants import SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, \
-    POST_STATUS_REVIEWING, VERSION, POST_FORM_TYPES
+    POST_STATUS_REVIEWING, VERSION, POST_FORM_TYPES, POST_TYPE_ARTICLE, SRC_WEB
 from app.email import send_email, send_registration_approved_email, mail_name
 from app.inoculation import inoculation
 from app.community import server_view_list
@@ -38,7 +38,10 @@ from flask_login import current_user
 from flask_babel import _
 from sqlalchemy import desc, text
 
-from app.main.forms import ShareLinkForm
+from app.main.forms import ShareLinkForm, QuickPostForm, QUICK_POST_MAX
+from app.community.forms import CreateDiscussionForm
+from app.community.util import notify_admins_of_post_needing_approval
+import app.shared.post as shared_post
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.shared.tasks.maintenance import refresh_instance_chooser
@@ -53,6 +56,7 @@ from app.storefront import ON_DOMAIN_PARAM, current_instance_id, current_storefr
     domain_base_url, hidden_instance_ids, hosted_instance_ids, on_domain, on_domain_sql, storefront_host, storefront_cache_key, \
     storefront_link, storefront_url
 from app.utils import etag_stamp
+from app.utils import can_create_post, validation_required, approval_required, show_ban_message, user_ip_banned
 from app.utils import render_template, ensure_rss_token, get_setting, request_etag_matches, return_304, blocked_domains, \
     ap_datetime, shorten_string, user_filters_home, \
     joined_communities, joined_server_views, moderating_communities, markdown_to_html, \
@@ -373,10 +377,64 @@ def add_post():
             kind = request.args.get('type')
             return redirect(url_for('community.add_post', actor=community.link(),
                                     type=kind if kind in POST_FORM_TYPES else None))
+    return choose_community_page(QuickPostForm())
+
+
+def quick_post_community():
+    """The local microblogs community when the user may post in it, else None: the chooser's quick post box."""
+    microblogs = find_microblogging_community()
+    return microblogs if can_create_post(current_user, microblogs) else None
+
+
+def choose_community_page(quick_form):
+    """The chooser: a quick post box for the local microblogs community above the list of other communities, which
+    leaves microblogs out because the box (and its link to the full compose form) stands for it."""
+    microblogs = quick_post_community()
+    sections = post_destination_sections()
+    if microblogs is not None:
+        sections = [(key, label, [picked for picked in communities if picked.id != microblogs.id])
+                    for key, label, communities in sections]
     can_create = user_access('create local communities', current_user.get_id(), on=here()) or \
         not g.site.community_creation_admin_only
-    return render_template('choose_community.html', title=_('Create post'), sections=post_destination_sections(),
-                           can_create=can_create)
+    return render_template('choose_community.html', title=_('Create post'), sections=sections,
+                           can_create=can_create, microblogs=microblogs, quick_form=quick_form,
+                           quick_post_max=QUICK_POST_MAX)
+
+
+@bp.route('/add_post/quick', methods=['POST'])
+@login_required
+@validation_required
+@approval_required
+def add_quick_post():
+    """The chooser's quick post box: a short post in the local microblogs community, no title or options, so it is a
+    microblog post as a Mastodon one is (shared.post.edit_post gives it its title). The full compose form
+    (`/c/microblogs/submit`) has the rest."""
+    if current_user.banned or user_ip_banned():
+        return show_ban_message()
+    microblogs = quick_post_community()
+    if microblogs is None:
+        abort(403)
+    quick_form = QuickPostForm()
+    if not quick_form.validate_on_submit():
+        return choose_community_page(quick_form)
+    body = quick_form.body.data.strip()
+    form = CreateDiscussionForm(formdata=None, meta={'csrf': False},
+                                data={'communities': microblogs.id, 'title': '', 'body': body, 'notify_author': True,
+                                      'language_id': current_user.language_id or g.site.language_id,
+                                      'timezone': current_user.timezone, 'visibility': 'public'})
+    del form.flair
+    try:
+        post = shared_post.make_post(form, microblogs, POST_TYPE_ARTICLE, SRC_WEB)
+    except Exception:
+        # as community.add_post: logged, not flashed, since the text can name internals
+        current_app.logger.exception('quick post failed for user %s', current_user.id)
+        flash(_('Your post was not accepted. Please check the server log for details.'), 'error')
+        return choose_community_page(quick_form)
+    if post.status == POST_STATUS_REVIEWING:
+        flash(_('Because your account has not posted before we will review your post before allowing it to be published. Please wait.'), 'warning')
+        notify_admins_of_post_needing_approval(post)
+    flash(Markup(_('Your post has been created. <a href="/post/%(post_id)d/edit">Edit it</a> if you notice any typos!', post_id=post.id)))
+    return redirect(post.slug)
 
 
 @bp.route('/communities', methods=['GET'])

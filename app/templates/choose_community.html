@@ -9,6 +9,21 @@
 <div class="row">
     <main class="col-12 col-lg-8 position-relative main_pane">
         <h1>{{ _('Create post') }}</h1>
+        {% if microblogs -%}
+            <section class="quick_post mb-4" id="quick_post">
+                <h2 class="h5">{{ _('Quick post') }}</h2>
+                <form method="post" action="{{ url_for('main.add_quick_post') }}">
+                    {{ quick_form.hidden_tag() }}
+                    <label for="{{ quick_form.body.id }}" class="visually-hidden">{{ quick_form.body.label.text }}</label>
+                    {{ quick_form.body(placeholder=_('Up to %(max)d characters', max=quick_post_max)) }}
+                    {% for error in quick_form.body.errors -%}
+                        <div class="invalid-feedback d-block">{{ error }}</div>
+                    {% endfor -%}
+                    {{ quick_form.submit(class_='btn btn-primary mt-2') }}
+                </form>
+                <p class="mt-2"><a href="{{ url_for('community.add_post', actor=microblogs.link()) }}">{{ _('Additional Microblogging Options') }}</a></p>
+            </section>
+        {% endif -%}
         {% if sections | selectattr(2) | list -%}
             <p>{{ _('Choose the community to post in.') }}</p>
             {{ community_picker(sections) }}

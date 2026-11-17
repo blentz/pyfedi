@@ -2440,6 +2440,13 @@ def microblog_content_to_title(html: str) -> Tuple[str, str]:
     return title.strip(), link
 
 
+def microblog_title(body_html: str) -> str:
+    """The title stored for a microblog post, which has none of its own: taken from its text the way an incoming
+    Mastodon Note's is (activitypub.util's microblog branch), so a local one is stored as a remote one would be."""
+    title = microblog_content_to_title(body_html or '')[0]
+    return ('[Microblog] ' + title if len(title) < 20 else title).strip()[:255]
+
+
 def _nothing_follows(node, ancestor) -> bool:
     """Whether, from `node` up to `ancestor`, only whitespace text and <br> come after it: `node` ends the text."""
     while node is not ancestor:

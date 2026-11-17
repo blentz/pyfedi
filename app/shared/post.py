@@ -36,7 +36,7 @@ from app.shared.tasks import task_selector
 import app.shared.tasks.boosts as boosts_task   # the module: it reaches this one through app.activitypub (cycle)
 from app.shared.upload import open_uploaded_image
 from app.visibility import is_open, post_title_for
-from app.utils import recipients_for, user_banned_from_community
+from app.utils import recipients_for, user_banned_from_community, microblog_title
 from app.utils import build_gallery_thumbnail, render_template, authorise_api_user, shorten_string, gibberish, ensure_directory_exists, \
     max_album_images, \
     piefed_markdown_to_lemmy_markdown, markdown_to_html, fixup_url, domain_from_url, \
@@ -772,6 +772,12 @@ def edit_post(input, post: Post, type, src, user=None, auth=None, uploaded_file=
     post.title = title
     post.body = piefed_markdown_to_lemmy_markdown(body, object_base(post))   # the post's domain names it (C3)
     post.body_html = markdown_to_html(post.body, link_base=object_base(post))
+    if is_local_microblogs(post.community) and type not in (POST_TYPE_POLL, POST_TYPE_EVENT) and \
+            (post.microblog or not title):
+        # A post given no title here is a microblog post, as a Mastodon one is: stored and shown like one, its title
+        # taken from its text (and re-taken on each edit), and federated as a Note of its text alone
+        post.microblog = True
+        post.title = microblog_title(post.body_html)
     post.type = type
     post.scheduled_for = scheduled_for
     post.repeat = repeat

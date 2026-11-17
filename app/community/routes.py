@@ -10,6 +10,7 @@ from flask import redirect, url_for, flash, request, make_response, current_app,
 from markupsafe import Markup, escape
 from flask_login import current_user
 from flask_babel import _, force_locale, gettext, ngettext
+from wtforms.validators import Length, Optional
 from slugify import slugify
 from sqlalchemy import or_, asc, desc, text
 from sqlalchemy.orm.exc import NoResultFound
@@ -1331,6 +1332,25 @@ def refused_media_repeat(form, media_upload) -> bool:
     return True
 
 
+def untitled_microblog_form(form, community, type) -> bool:
+    """In the local microblogs community the title is optional: a post without one is a microblog post, as a Mastodon
+    one is, titled from its text (shared.post.edit_post). Polls and events keep their required title."""
+    if not is_local_microblogs(community) or type in ('poll', 'event'):
+        return False
+    form.title.validators = [Optional(), Length(max=255)]
+    form.title.flags.required = False
+    form.title.label.text = _('Title (optional)')
+    return True
+
+
+def refused_empty_microblog(form, untitled, type) -> bool:
+    """An untitled text post needs its text, which is all a microblog post is."""
+    if not untitled or type != 'discussion' or (form.title.data or '').strip() or (form.body.data or '').strip():
+        return False
+    form.body.errors.append(_('Write something, or give the post a title.'))
+    return True
+
+
 @bp.route('/<actor>/submit/<string:type>', methods=['GET', 'POST'])
 @bp.route('/<actor>/submit', methods=['GET', 'POST'])
 @login_required
@@ -1408,6 +1428,7 @@ def add_post(actor, type=None):
         form.flair.choices = select_choices(flair_choices)
     else:
         del form.flair
+    untitled = untitled_microblog_form(form, community, type)
 
     # A13.6: a media file is taken only from a moderator of a video or podcast community whom the upload switch
     # admits, on the form of that community's kind. Everyone else's form has no file field, so it is never read.
@@ -1418,7 +1439,8 @@ def add_post(actor, type=None):
                                                 and episode_form_wanted(community)):
         del form.episode_number, form.season, form.explicit   # A17.4: only a podcast's audio upload has them
 
-    if form.validate_on_submit() and not refused_media_repeat(form, media_upload):
+    if form.validate_on_submit() and not refused_media_repeat(form, media_upload) and \
+            not refused_empty_microblog(form, untitled, type):
         if type == 'image' or type == 'event' or media_upload:
             uploaded_file = request.files.get('image_file')
         else:

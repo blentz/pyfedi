@@ -879,6 +879,16 @@ podcast apps that sync through gpodder.net, can now sign in to a PieFed account.
   template had never existed, so it was a 500. It shows a community only to
   someone who may see the community's own page: a banned community is a 404, a
   private one a 403 to non-members (`4ccf385f`).
+- **Quick post and untitled microblog posts.** The "Create post" chooser
+  (`/add_post`) opens with a quick post box for the local microblogs community:
+  up to 250 characters, a Post button, and a link to that community's full
+  compose form ("Additional Microblogging Options"). Microblogs is no longer
+  listed among the communities below it. A post in the local microblogs
+  community made without a title (every quick post, and the full form, where the
+  title is now optional) is a microblog post as a Mastodon one is: stored with
+  `microblog` set and a title taken from its text by the rule used for incoming
+  Notes, re-taken on each edit, and federated as a Note of its text alone. A
+  post given a title there is unchanged.
 
 ### 2.4 API contract changes (for client developers)
 
