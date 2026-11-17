@@ -144,6 +144,9 @@ def admin_payments():
 @login_required
 @permission_required('manage monetization')
 def admin_payments_stripe():
+    if (refusal := _providers_admins_alone()) is not None:
+        flash(refusal, 'error')
+        return redirect(url_for('admin.admin_payments'))
     form = StripeCredentialsForm()
     if not form.validate_on_submit():
         return _page(stripe_form=form)
@@ -174,6 +177,9 @@ def admin_payments_stripe():
 @login_required
 @permission_required('manage monetization')
 def admin_payments_btcpay():
+    if (refusal := _providers_admins_alone()) is not None:
+        flash(refusal, 'error')
+        return redirect(url_for('admin.admin_payments'))
     form = BtcpayCredentialsForm()
     if not form.validate_on_submit():
         return _page(btcpay_form=form)
@@ -205,6 +211,9 @@ def admin_payments_btcpay():
 @login_required
 @permission_required('manage monetization')
 def admin_payments_paypal():
+    if (refusal := _providers_admins_alone()) is not None:
+        flash(refusal, 'error')
+        return redirect(url_for('admin.admin_payments'))
     form = PaypalCredentialsForm()
     if not form.validate_on_submit():
         return _page(paypal_form=form)
@@ -236,6 +245,9 @@ def admin_payments_paypal():
 @login_required
 @permission_required('manage monetization')
 def admin_payments_stripe_import():
+    if (refusal := _providers_admins_alone()) is not None:
+        flash(refusal, 'error')
+        return redirect(url_for('admin.admin_payments'))
     """Bring a site's Stripe setup in from its environment (C5). Running it again changes nothing already there."""
     if not credentials_available():
         flash(_('Credentials cannot be stored until PAYMENT_SECRETS_KEY is set.'), 'error')
@@ -388,6 +400,18 @@ def _benefit_reach(choice: str | None) -> list[Offer]:
         code = db.session.get(PromoCode, int(number))
         return _offers_reached(code.kind, code.offer_id) if code is not None else []
     return []
+
+
+def _providers_admins_alone() -> str | None:
+    """Why the signed-in manager may not change the payment providers, or None (T8, owner 2026-11-17): with a provider's
+    credentials or webhook secret they could forge payments, and so the role a tier carries. While any subscription (or
+    complimentary membership) carries one they could not attach, that is an admin's."""
+    locked = sorted({offer.title for offer in Offer.query.filter_by(kind='subscription')
+                     if not may_manage_offer(current_user, offer)})
+    if not locked:
+        return None
+    return _('Only an admin can change the payment providers while %(tiers)s gives a role whose permissions you do not '
+             'hold.', tiers=', '.join(locked))
 
 
 def _admins_alone(offers) -> str | None:

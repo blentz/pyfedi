@@ -1,5 +1,6 @@
 """The pages for roles carried by subscription tiers (plan docs/superpowers/plans/2026-11-16-tier-roles.md D5, D7)."""
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from bs4 import BeautifulSoup
@@ -276,3 +277,41 @@ def test_the_roles_page_says_how_many_codes_it_turned_off(env, admin):
     post(env, roles_path(env.knight), role=[env.helper.id])
     body = env.client.get('/admin/payments').get_data(as_text=True)
     assert '1 code(s) for it were turned off' in body
+
+
+PROVIDER_PATHS = ['/admin/payments/stripe', '/admin/payments/btcpay', '/admin/payments/paypal', '/admin/payments/stripe/import']
+PROVIDERS_REFUSED = 'Only an admin can change the payment providers while Furcas gives a role whose permissions you do not hold.'
+
+
+class TestProvidersAreAdminsWhileATierGivesAPower:
+    """T8 (owner 2026-11-17): with provider credentials a manager could forge payments, and so a tier's power."""
+
+    @pytest.mark.parametrize('path', PROVIDER_PATHS, ids=['stripe', 'btcpay', 'paypal', 'stripe-import'])
+    def test_a_manager_is_refused(self, env, treasurer, path):
+        set_offer_roles(make_admin(somebody(env, 'boss')), env.knight, [env.helper])
+        with patch('app.admin.payments_routes.credentials_available') as available:
+            response = post(env, path, secret_key='sk_test_x', webhook_secret='whsec_x', url='https://pay.example',
+                            store_id='store', api_key='key', client_id='id', client_secret='secret')
+        assert response.status_code == 302 and not available.called
+        assert PROVIDERS_REFUSED in env.client.get('/admin/payments').get_data(as_text=True)
+
+    def test_complimentary_carrying_a_power_counts_too(self, env, treasurer):
+        boss = make_admin(somebody(env, 'boss'))
+        offer = complimentary_offer()
+        db.session.commit()
+        set_offer_roles(boss, offer, [env.helper])
+        post(env, '/admin/payments/stripe', secret_key='sk_test_x')
+        assert 'Only an admin can change the payment providers while Complimentary' in \
+            env.client.get('/admin/payments').get_data(as_text=True)
+
+    def test_a_badge_leaves_them_to_the_manager(self, env, treasurer):
+        set_offer_roles(make_admin(somebody(env, 'boss')), env.knight, [env.supporter])
+        post(env, '/admin/payments/stripe', secret_key='sk_test_x')
+        assert 'Only an admin can change the payment providers' not in \
+            env.client.get('/admin/payments').get_data(as_text=True)
+
+    def test_an_admin_may(self, env, admin):
+        set_offer_roles(admin, env.knight, [env.helper])
+        post(env, '/admin/payments/stripe', secret_key='sk_test_x')
+        assert 'Only an admin can change the payment providers' not in \
+            env.client.get('/admin/payments').get_data(as_text=True)
