@@ -456,3 +456,14 @@ class TestPowersHeldTwice:
             grant_role(env.admin, treasurer, role)
         assert may_attach(treasurer, env.helper)
 
+
+
+def test_a_lapse_kept_from_when_the_domain_charged_gives_no_grace_once_it_is_free(env):
+    """Taking a role off a tier syncs its members without refresh_access, which would have cleared the old lapse."""
+    set_offer_roles(env.admin, env.knight, [env.supporter])
+    user = member(env)
+    start(user, env.knight)
+    user.access_lapsed_at = utcnow() - timedelta(hours=1)   # from when the domain charged
+    db.session.commit()
+    set_offer_roles(env.admin, env.knight, [])
+    assert not holds(user, env.supporter)
