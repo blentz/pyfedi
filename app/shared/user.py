@@ -244,8 +244,15 @@ def follow_user(follow_id: int, src, auth=None):
     to_follow: User = found_here(User, follow_id)
     if to_follow is None:   # nobody's, or hidden here: one answer (follow-up F6)
         raise Exception('user not found')
+    follow_user_as(user, to_follow)
+
+
+def follow_user_as(user: User, to_follow: User):
+    """`user` (local) follows `to_follow`: the row, the counts, a local target's notification, a remote one's Follow.
+    Also called with no request user, for an account move (move_account_followers)."""
     if refuses_remote_contact(user, to_follow):
         raise Exception(REMOTE_CONTACT_REFUSAL)
+    follow_id = to_follow.id
 
     # Following someone already followed, or already asked, changes nothing (repeated actions are idempotent)
     already = db.session.query(UserFollower).filter(UserFollower.local_user_id == user.id,
@@ -304,7 +311,12 @@ def unfollow_user(follow_id: int, src, auth=None):
     to_unfollow: User = found_here(User, follow_id)
     if to_unfollow is None:   # nobody's, or hidden here: one answer (follow-up F6)
         raise Exception('user not found')
+    unfollow_user_as(user, to_unfollow)
 
+
+def unfollow_user_as(user: User, to_unfollow: User):
+    """`user` (local) stops following `to_unfollow`: the row, the counts, and a remote one's Undo."""
+    follow_id = to_unfollow.id
     removed = db.session.execute(text(
         'DELETE FROM "user_follower" WHERE local_user_id = :local_user_id AND remote_user_id = :remote_user_id AND is_inward is false RETURNING is_accepted'),
             {'local_user_id': user.id, 'remote_user_id': to_unfollow.id}).scalars().all()
@@ -320,6 +332,26 @@ def unfollow_user(follow_id: int, src, auth=None):
             'DELETE FROM "user_follow_request" WHERE user_id = :user_id AND follow_id = :follow_id'),
                 {'user_id': user.id, 'follow_id': to_unfollow.id})
         db.session.commit()
+
+
+def move_account_followers(old: User, new: User) -> int:
+    """An account moved from `old` to `new` (an ActivityPub Move, verified by the caller): each local user who
+    followed `old` follows `new` instead, as Mastodon's own followers do. Returns how many follows moved. A follower
+    `new` refuses contact with keeps neither follow; one who already follows `new` just drops `old`."""
+    followers = db.session.query(User).join(UserFollower, UserFollower.local_user_id == User.id).filter(
+        UserFollower.remote_user_id == old.id, UserFollower.is_inward == False,
+        UserFollower.is_accepted.is_not(False), User.deleted == False, User.banned == False).all()
+    moved = 0
+    for follower in followers:
+        if follower.id == new.id:
+            continue
+        try:
+            follow_user_as(follower, new)
+            moved += 1
+        except Exception as refusal:   # e.g. REMOTE_CONTACT_REFUSAL: the old follow still goes
+            current_app.logger.info('account move: %s not moved to %s: %s', follower.id, new.id, refusal)
+        unfollow_user_as(follower, old)
+    return moved
 
 
 def bot_challenge_user(user_id: int, src, auth=None):

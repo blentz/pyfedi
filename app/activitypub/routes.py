@@ -42,7 +42,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, NEW_CONTENT_TYPES, follow_a
     post_replies_for_ap, is_vote, resolve_remote_post_from_search, proactively_delete_content, \
     process_quote_boost, object_has_missing_fields, find_microblogging_community, process_announce_of_uri, \
     announce_target_uri, undo_boost, undo_reaction, withdraw_flag, LD_SIGNED_LOG_PREFIX, current_ld_signed, current_as_sent, normalise_activity_types, \
-    NO_STRING_TYPE_MESSAGE, names_actor, refresh_user_profile_task, delete_remote_group, GROUP_DELETED_MESSAGE, \
+    NO_STRING_TYPE_MESSAGE, names_actor, find_actor_or_create, remote_object_to_json, refresh_user_profile_task, delete_remote_group, GROUP_DELETED_MESSAGE, \
     may_delete_group, ANNOUNCED_GROUP_DELETE_REFUSED, user_followers_count, user_following_count, user_liked_count, create_activity_of
 # The module, not the name: app.community.routes reaches this file through
 # app.activitypub.signature before show_community is defined (U-circular-import)
@@ -82,6 +82,7 @@ import app.post.routes as post_routes
 from app.visibility import OPEN_VISIBILITIES, followers_only_addressing, is_open, listable_clause, post_title_for, \
     post_withheld_from_peers, visible_to_clause
 from app.shared.tasks import task_selector
+from app.shared.user import move_account_followers
 # The module, not the names: app.shared.tasks.pages reaches this file through
 # app.activitypub.signature before they are defined (import cycle: shared.tasks.pages)
 import app.shared.tasks.pages as shared_pages
@@ -591,6 +592,10 @@ def user_profile(actor):
                           "published": ap_datetime(user.created),
                           "attributionDomains": [domain_authority(home)]
                           }
+            if user.also_known_as:
+                # Account migration: Mastodon moves an account only to one that names it here (a back-reference)
+                actor_data['alsoKnownAs'] = list(user.also_known_as)
+                actor_data['@context'].append({'alsoKnownAs': {'@id': 'as:alsoKnownAs', '@type': '@id'}})
 
             if user.avatar_id is not None:
                 avatar_image = user.avatar_image()
@@ -2030,6 +2035,16 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                     process_remove(core_activity, user, community, feed, announced, id, saved_json, session)
                     return
 
+                if core_activity['type'] == 'Move' and 'origin' not in core_activity:
+                    # An account Move (Mastodon's migration): {actor: old, object: old, target: new}. Lemmy's post
+                    # Move, below, always names an origin community; this one never does
+                    if announced:   # only the account itself may say it moved
+                        log_incoming_ap(id, APLOG_MOVE, APLOG_FAILURE, saved_json,
+                                        'Announced account Move refused: only the account itself may send it')
+                    else:
+                        process_account_move(user, core_activity, id, saved_json)
+                    return
+
                 if core_activity['type'] == 'Move':
                     origin_community: Community = find_actor_or_create_cached(core_activity['origin'], community_only=True)
                     target_community = find_actor_or_create_cached(core_activity['target'], community_only=True)
@@ -3272,6 +3287,45 @@ def process_actor_update(user: User, actor_json: dict, id, saved_json):
     # lock is held here because nothing in dispatch writes the signer's row first; a change that did would deadlock
     refresh_user_profile_task(user.id, actor_json)
     log_incoming_ap(id, APLOG_UPDATE, APLOG_SUCCESS, saved_json)
+
+
+def names_alias(target: User, old: User) -> bool:
+    """Whether `target` lists `old` among its other accounts (`alsoKnownAs`): a local target from its stored
+    aliases, a remote one from its actor document fetched now, as Mastodon checks a Move it receives."""
+    if target.is_local():
+        aliases = target.also_known_as or []
+    else:
+        document = remote_object_to_json(target.ap_profile_id, retry_delay=0)   # inbox: no sleep (D775)
+        aliases = (document or {}).get('alsoKnownAs') or []
+        if not isinstance(aliases, list):
+            aliases = [aliases]
+    return any(names_actor(_id_of(alias), old) for alias in aliases)
+
+
+def process_account_move(user: User, move_json: dict, id, saved_json):
+    """An account Move (Mastodon's account migration): the remote account `user` moved to `target`. Each local user
+    who followed it follows the target instead.
+
+    Accepted only from the account itself (object is the signer) and only when the target names it in `alsoKnownAs`
+    -- the back-reference Mastodon requires, without which any account could claim another's followers."""
+    if not isinstance(user, User) or user.is_local():
+        log_incoming_ap(id, APLOG_MOVE, APLOG_FAILURE, saved_json, 'Account Move from a local or unknown actor refused')
+        return
+    if not names_actor(_id_of(move_json.get('object')), user):
+        log_incoming_ap(id, APLOG_MOVE, APLOG_FAILURE, saved_json, 'Move of another account refused')
+        return
+    target_url = _id_of(move_json.get('target'))
+    target = find_actor_or_create(target_url) if target_url else None
+    if not isinstance(target, User) or target.id == user.id:
+        log_incoming_ap(id, APLOG_MOVE, APLOG_FAILURE, saved_json, 'Account Move target not found')
+        return
+    if not names_alias(target, user):
+        log_incoming_ap(id, APLOG_MOVE, APLOG_FAILURE, saved_json,
+                        'Account Move refused: the target does not name the old account in alsoKnownAs')
+        return
+    moved = move_account_followers(user, target)
+    log_incoming_ap(id, APLOG_MOVE, APLOG_SUCCESS, saved_json,
+                    f'{user.ap_id} moved to {target.ap_id or target.user_name}: {moved} local follows moved')
 
 
 def process_upvote(user, store_ap_json, request_json, announced):

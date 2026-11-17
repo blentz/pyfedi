@@ -46,7 +46,8 @@ import app.shared.user as shared_user
 from app.user import bp
 from app.user.forms import ProfileForm, SettingsForm, DeleteAccountForm, ReportUserForm, \
     FilterForm, KeywordFilterEditForm, RemoteFollowForm, ImportExportForm, UserNoteForm, BanUserForm, DeleteFileForm, \
-    UploadFileForm, BlockUserForm, BlockCommunityForm, BlockDomainForm, BlockInstanceForm, UnsubAllForm
+    UploadFileForm, BlockUserForm, BlockCommunityForm, BlockDomainForm, BlockInstanceForm, UnsubAllForm, \
+    AccountAliasForm, RemoveAccountAliasForm
 from app.user.utils import unsubscribe_from_community, search_for_user, _get_user_moderates, \
     _get_user_upvoted_posts, _get_user_subscribed_communities, _get_user_posts, _get_user_post_replies, \
     _get_user_archived_replies, _get_user_posts_and_replies, _get_user_same_ip, insert_or_update_user_note, \
@@ -1729,6 +1730,57 @@ def import_settings_task(user_id, redis_key):
             raise
         finally:
             session.close()
+
+
+ACCOUNT_ALIASES_MAX = 10
+
+
+@bp.route('/user/settings/aliases', methods=['GET', 'POST'])
+@login_required
+def user_settings_aliases():
+    """Account migration: the old accounts this one is also known as (ActivityPub `alsoKnownAs`). Mastodon moves an
+    account only to one that names it there, so a user moving here names the old account first, then starts the move
+    on the old server."""
+    user = User.query.filter_by(id=current_user.id, deleted=False, banned=False, ap_id=None).first()
+    if user is None:
+        abort(404)
+    form = AccountAliasForm()
+    if form.validate_on_submit():
+        handle = form.handle.data.strip().removeprefix('@')
+        try:
+            old = find_actor_or_create(handle) if handle else None
+        except Exception:   # an unreachable or malformed server: the same answer as an unknown account
+            current_app.logger.info('account alias lookup failed for %r', handle, exc_info=True)
+            old = None
+        aliases = list(user.also_known_as or [])
+        if not isinstance(old, User) or old.is_local() or not old.ap_profile_id:
+            form.handle.errors.append(_('No account was found at that address on another server.'))
+        elif old.ap_profile_id in aliases:
+            form.handle.errors.append(_('That account is already an alias.'))
+        elif len(aliases) >= ACCOUNT_ALIASES_MAX:
+            form.handle.errors.append(_('An account can have at most %(max)d aliases.', max=ACCOUNT_ALIASES_MAX))
+        else:
+            user.also_known_as = aliases + [old.ap_profile_id]
+            db.session.commit()
+            flash(_('%(handle)s is now an alias of this account. You can start the move on its server.',
+                    handle=old.ap_id or old.ap_profile_id))
+            return redirect(url_for('user.user_settings_aliases'))
+    return render_template('user/aliases.html', title=_('Account aliases'), user=user, form=form,
+                           aliases=list(user.also_known_as or []), remove_form=RemoveAccountAliasForm())
+
+
+@bp.route('/user/settings/aliases/remove', methods=['POST'])
+@login_required
+def user_settings_alias_remove():
+    user = User.query.filter_by(id=current_user.id, deleted=False, banned=False, ap_id=None).first()
+    if user is None:
+        abort(404)
+    form = RemoveAccountAliasForm()
+    if form.validate_on_submit() and form.alias.data in (user.also_known_as or []):
+        user.also_known_as = [alias for alias in user.also_known_as if alias != form.alias.data]
+        db.session.commit()
+        flash(_('Alias removed.'))
+    return redirect(url_for('user.user_settings_aliases'))
 
 
 @bp.route('/user/settings/filters', methods=['GET', 'POST'])

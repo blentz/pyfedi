@@ -188,8 +188,10 @@ SIGNED_FETCH_AP_ONLY_PREFIXES = ('/activities/', '/quote_boost_auth')
 # the routed endpoint, so an actor's collections (/u/<name>/outbox, /c/<name>/followers...) stay refused.
 MINIMAL_ACTOR_ENDPOINTS = ('activitypub.user_profile', 'activitypub.community_profile', 'activitypub.feed_profile')
 
-# What the minimal actor document keeps: enough to verify a signature and to deliver, nothing about the actor.
-MINIMAL_ACTOR_FIELDS = ('@context', 'id', 'type', 'preferredUsername', 'inbox', 'publicKey')
+# What the minimal actor document keeps: enough to verify a signature and to deliver, nothing about the actor -- but
+# its account aliases, which a user publishes so that another server will move an account to it: Mastodon resolves a
+# Move's target with an unsigned fetch first, and would read a minimal document without them as "no back-reference".
+MINIMAL_ACTOR_FIELDS = ('@context', 'id', 'type', 'preferredUsername', 'inbox', 'publicKey', 'alsoKnownAs')
 
 # Set in the WSGI environ, which is per request (g is not, while a test keeps an app context pushed).
 _MINIMAL_ACTOR_FLAG = 'pyfedi.minimal_actor_document'

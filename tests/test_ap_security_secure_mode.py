@@ -47,7 +47,9 @@ def test_the_exempt_and_ap_only_lists_are_pinned():
     # R-SECUREACTORS: answered unsigned, but only in minimal form
     assert MINIMAL_ACTOR_ENDPOINTS == ('activitypub.user_profile', 'activitypub.community_profile',
                                        'activitypub.feed_profile')
-    assert MINIMAL_ACTOR_FIELDS == ('@context', 'id', 'type', 'preferredUsername', 'inbox', 'publicKey')
+    # alsoKnownAs: account aliases, published so another server will move an account here (Mastodon's Move check
+    # fetches the target unsigned first)
+    assert MINIMAL_ACTOR_FIELDS == ('@context', 'id', 'type', 'preferredUsername', 'inbox', 'publicKey', 'alsoKnownAs')
 
 
 def _refusal(app, path='/post/1', method='GET', accept=AP_ACCEPT, secure=True):

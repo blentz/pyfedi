@@ -1,0 +1,49 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
+{% set active_child = 'settings' %}
+
+{% block app_content %}
+
+<div class="row">
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <nav class="mb-2"  id="breadcrumb_nav" title="{{ _('Navigation') }}">
+          <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/">{{ _('Home') }}</a></li>
+            <li class="breadcrumb-item"><a href="/u/{{ user.link() }}">{{ user.display_name() }}</a></li>
+            <li class="breadcrumb-item active" aria-current="page">{{ _('Account aliases') }}</li>
+          </ol>
+        </nav>
+        <h1>{{ _('Change settings') }}</h1>
+        {% include "user/_user_nav.html" %}
+        <h5>{{ _('Moving from a different account') }}</h5>
+        <p>{{ _('To move an account from another server (Mastodon, for example) to this one, first add the old account here as an alias. Then start the move on the old server, naming this account (%(handle)s) as the new one. Your followers there will follow this account instead.', handle=user.mention_tag()) }}</p>
+        <form method="post" role="form" id="add_alias">
+            {{ form.hidden_tag() }}
+            {{ render_field(form.handle) }}
+            {{ render_field(form.submit) }}
+        </form>
+        <hr>
+        <h5>{{ _('Aliases') }}</h5>
+        {% if aliases -%}
+            <ul class="list-unstyled" id="aliases">
+                {% for alias in aliases -%}
+                    <li class="d-flex align-items-center justify-content-between mb-2">
+                        <a href="{{ alias }}" rel="nofollow noopener">{{ alias }}</a>
+                        <form method="post" action="{{ url_for('user.user_settings_alias_remove') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="alias" value="{{ alias }}">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Remove') }}</button>
+                        </form>
+                    </li>
+                {% endfor -%}
+            </ul>
+        {% else -%}
+            <p class="text-muted">{{ _('This account has no aliases.') }}</p>
+        {% endif -%}
+    </main>
+</div>
+{% endblock %}

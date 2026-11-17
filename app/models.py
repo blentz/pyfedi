@@ -2468,6 +2468,9 @@ class User(UserMixin, db.Model):
     interface_language = db.Column(db.String(10))  # a locale that the translation system understands e.g. 'en' or 'en-us'. If empty, use browser default
     language_id = db.Column(db.Integer, db.ForeignKey('language.id'))  # the default choice in the language dropdown when composing posts & comments. NOT UI language
     read_language_ids = db.Column(MutableList.as_mutable(ARRAY(db.Integer)))
+    # Account migration: the actor URLs of this account's other accounts (ActivityPub `alsoKnownAs`). A local user
+    # lists an old account here before moving from it, as Mastodon requires of a Move's target
+    also_known_as = db.Column(MutableList.as_mutable(ARRAY(db.String(512))))
     reply_collapse_threshold = db.Column(db.Integer, default=-10)
     reply_hide_threshold = db.Column(db.Integer, default=-20)
     feed_auto_follow = db.Column(db.Boolean, default=True)  # does the user want to auto-follow feed communities

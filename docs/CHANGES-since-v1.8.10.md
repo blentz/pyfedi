@@ -334,6 +334,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 45 | `c3f8a1e6d2b9` gpodder_episode_actions | Creates `gpodder_episode_action`. (`03f0b400`) | No |
 | 46 | `e5a8c2f7b4d1` sidebar_box_order | Adds `home_sidebar` and `community_sidebar` to `site` (default empty: the boxes in their usual order) and to `domain_branding` (NULL: the site's order). (`5c424327`) | No |
 | 47 | `f2b6d8a4c9e1` project_links | Adds `source_url`, `bug_report_url` and `get_involved_url` to `site`, each empty by default, which means upstream PieFed's. (`b65b4fd6`) | No |
+| 48 | `d7a2c5e9f3b1` user_also_known_as | Adds `also_known_as` (account aliases, NULL by default) to `user`. | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -889,6 +890,16 @@ podcast apps that sync through gpodder.net, can now sign in to a PieFed account.
   `microblog` set and a title taken from its text by the rule used for incoming
   Notes, re-taken on each edit, and federated as a Note of its text alone. A
   post given a title there is unchanged.
+- **Moving an account here (Mastodon migration).** Settings → Account aliases
+  (`/user/settings/aliases`) lets a user name an old account on another server
+  by its handle; the actor document then lists it in `alsoKnownAs`, the
+  back-reference Mastodon requires before it will move an account here. Secure
+  mode's minimal actor document keeps `alsoKnownAs`, since Mastodon's first
+  fetch is unsigned. An account `Move` received (`actor` and `object` the old
+  account, `target` the new) now moves each local follower of the old account
+  to the new one, only when the target names the old account in `alsoKnownAs`
+  (a remote target's document is fetched to check). It used to reach Lemmy's
+  post-Move branch and fail with `KeyError: 'origin'`.
 
 ### 2.4 API contract changes (for client developers)
 

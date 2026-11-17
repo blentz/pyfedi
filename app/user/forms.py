@@ -160,6 +160,18 @@ class ImportExportForm(FlaskForm):
     submit = SubmitField(_l('Import'))
 
 
+class AccountAliasForm(FlaskForm):
+    """Account migration: name an old account, on another server, that is to move to this one."""
+    handle = StringField(_l('Handle of the old account'), validators=[DataRequired(), Length(max=512)],
+                         render_kw={'placeholder': 'username@example.com', 'autocomplete': 'off'})
+    submit = SubmitField(_l('Create alias'))
+
+
+class RemoveAccountAliasForm(FlaskForm):
+    alias = HiddenField(validators=[DataRequired(), Length(max=512)])
+    submit = SubmitField(_l('Remove'))
+
+
 class DeleteAccountForm(FlaskForm):
     submit = SubmitField(_l('Yes, delete my account'))
 

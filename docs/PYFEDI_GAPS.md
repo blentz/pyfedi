@@ -83,10 +83,14 @@ Abbreviations: `R` = `app/activitypub/routes.py`, `U` = `app/activitypub/util.py
 
 All of these reports are still drafts or living documents. The test-suite task force has no tests or results yet.
 
-### Account migration (data-portability report): missing ✓
+### Account migration (data-portability report): partial
 
-- pyfedi never reads or writes `movedTo`.
-- `alsoKnownAs` is read only for discovery credits (`app/discovery/credits.py:173-177`) and is not stored.
+- Moving an account here works: a local user lists old accounts at `/user/settings/aliases`, stored in
+  `user.also_known_as` and published as the actor's `alsoKnownAs` (Mastodon requires this back-reference).
+- An account `Move` received is honoured: local followers of the old account follow the new one, when the target
+  names the old account in `alsoKnownAs`.
+- Moving an account away from here is not supported: pyfedi never sends a `Move` or writes `movedTo`, and a remote
+  account's `alsoKnownAs` is not stored (it is fetched when a Move is checked).
 - Export and import use a PieFed-specific settings format, not the report's following-list CSV. LOLA is not supported.
 
 ### HTTP Signatures report
