@@ -1695,6 +1695,10 @@ now used, and a handler returning `None` no longer nulls the data (D811,
 
 Residues of earlier fixes, found after the register was closed:
 
+- **Adding a moderator.** The find-moderator page's "Add" button was a link to
+  a route made POST-only by D1018, so adding a moderator answered 405. It is a
+  POST form with the CSRF token now, and a test scans every template for a link
+  to a POST-only route (one posting through htmx passes).
 - A defederation-list download that fails (unreachable, not 200, not a
   usable list) is logged and leaves that subscription's bans untouched;
   only a genuinely empty list clears them (D378 residue, `21d6d112`).

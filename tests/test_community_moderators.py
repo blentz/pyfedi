@@ -313,6 +313,27 @@ def test_adding_a_moderator_is_not_a_get(app, env):
     assert not moderates(member, first)
 
 
+def test_the_find_page_adds_a_moderator_with_a_post_form(app, env):
+    """The find-moderator page's "Add" was a link to the POST-only route above, so clicking it answered 405 and
+    nobody could be added. It is a POST form carrying the CSRF token now, and submitting it adds the moderator."""
+    import re
+    client, first, second, owner, member = env
+    token = csrf(app, client)   # first: rendering a page caches a token on g, which generate_csrf then reuses
+
+    html = client.post(f'/community/community/{first.id}/moderators/find',
+                       data={'user_name': member.user_name, 'csrf_token': token}).get_data(as_text=True)
+
+    add_url = f'/community/community/{first.id}/moderators/add/{member.id}'
+    assert f'href="{add_url}"' not in html
+    form = re.search(rf'<form method="post" action="{re.escape(add_url)}".*?</form>', html, re.DOTALL)
+    assert form and 'name="csrf_token"' in form.group(0)
+
+    response = client.post(add_url, data={'csrf_token': token})
+
+    assert response.status_code == 302
+    assert moderates(member, first)
+
+
 def test_a_non_owner_cannot_add_a_moderator(app, env):
     """D1018. `add_mod_to_community` raises `Exception('no_permission')` and
     nothing caught it, so this was an unhandled exception -- a 500 where the
