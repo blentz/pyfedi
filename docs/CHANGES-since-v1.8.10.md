@@ -892,7 +892,9 @@ podcast apps that sync through gpodder.net, can now sign in to a PieFed account.
   post given a title there is unchanged.
 - **Moving an account here (Mastodon migration).** Settings → Account aliases
   (`/user/settings/aliases`) lets a user name an old account on another server
-  by its handle; the actor document then lists it in `alsoKnownAs`, the
+  by its handle or actor URL (an address on a server blocked here, or off the
+  allowlist, is refused with that reason rather than "no account was found");
+  the actor document then lists it in `alsoKnownAs`, the
   back-reference Mastodon requires before it will move an account here. Secure
   mode's minimal actor document keeps `alsoKnownAs`, since Mastodon's first
   fetch is unsigned. An account `Move` received (`actor` and `object` the old

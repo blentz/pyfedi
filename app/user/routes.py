@@ -53,6 +53,9 @@ from app.user.utils import unsubscribe_from_community, search_for_user, _get_use
     _get_user_archived_replies, _get_user_posts_and_replies, _get_user_same_ip, insert_or_update_user_note, \
     _get_user_same_name, user_for_actor
 from app.utils import recipients_for
+from app.utils import instance_allowed, instance_banned, actor_contains_blocked_words
+from app.storefront import is_hosted_server
+from urllib.parse import urlsplit
 from app.utils import etag_stamp, feed_open_to_clause
 from app.utils import render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, back, user_banned_from_community, \
     gibberish, community_membership, user_filters_home, \
@@ -1735,6 +1738,24 @@ def import_settings_task(user_id, redis_key):
 ACCOUNT_ALIASES_MAX = 10
 
 
+def alias_refusal(handle: str) -> str | None:
+    """Why this server would refuse to look up `handle` (a name@host handle or an actor URL), or None. The rules and
+    their order are validate_remote_actor's (app/activitypub/actor.py), which refuses silently: without this the page
+    could only say "no account was found" for an account that exists on a server blocked here."""
+    host = (urlsplit(handle).hostname or '') if '://' in handle else handle.rpartition('@')[2]
+    host = host.lower()
+    if not host or is_hosted_server(host):
+        return None
+    if get_setting('use_allowlist', False):
+        if not instance_allowed(host):
+            return _('%(server)s is not on this server\'s allowlist, so its accounts cannot be aliases.', server=host)
+    elif instance_banned(host):
+        return _('%(server)s is blocked by this server, so its accounts cannot be aliases.', server=host)
+    if actor_contains_blocked_words(handle):
+        return _('That address contains a word blocked on this server.')
+    return None
+
+
 @bp.route('/user/settings/aliases', methods=['GET', 'POST'])
 @login_required
 def user_settings_aliases():
@@ -1747,14 +1768,21 @@ def user_settings_aliases():
     form = AccountAliasForm()
     if form.validate_on_submit():
         handle = form.handle.data.strip().removeprefix('@')
-        try:
-            old = find_actor_or_create(handle) if handle else None
-        except Exception:   # an unreachable or malformed server: the same answer as an unknown account
-            current_app.logger.info('account alias lookup failed for %r', handle, exc_info=True)
-            old = None
+        refusal = alias_refusal(handle) if handle else None
+        old = None
+        if refusal is None and handle:
+            try:
+                old = find_actor_or_create(handle)
+            except Exception:   # an unreachable or malformed server: the same answer as an unknown account
+                current_app.logger.info('account alias lookup failed for %r', handle, exc_info=True)
         aliases = list(user.also_known_as or [])
-        if not isinstance(old, User) or old.is_local() or not old.ap_profile_id:
-            form.handle.errors.append(_('No account was found at that address on another server.'))
+        if refusal:
+            form.handle.errors.append(refusal)
+        elif isinstance(old, User) and old.is_local():
+            form.handle.errors.append(_('That is an account on this server. An alias names an account elsewhere.'))
+        elif not isinstance(old, User) or not old.ap_profile_id:
+            form.handle.errors.append(_('No account was found at that address on another server, or its server '
+                                        'could not be reached. Check the address, e.g. username@example.com.'))
         elif old.ap_profile_id in aliases:
             form.handle.errors.append(_('That account is already an alias.'))
         elif len(aliases) >= ACCOUNT_ALIASES_MAX:

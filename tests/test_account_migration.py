@@ -116,8 +116,39 @@ class TestTheAliasesPage:
         response, lookup = self.add(app, client, 'someone@peer.example', None if found == 'nobody' else fan)
 
         assert response.status_code == 200
-        assert 'No account was found' in response.get_data(as_text=True)
+        message = 'No account was found' if found == 'nobody' else 'That is an account on this server'
+        assert message in response.get_data(as_text=True)
         assert not db.session.get(User, new.id).also_known_as
+
+    @pytest.mark.parametrize('handle', ['wakko@peer.example', 'https://peer.example/@wakko'])
+    def test_an_account_on_a_blocked_server_says_so(self, app, accounts, handle):
+        """validate_remote_actor refuses a banned server's actors silently, so the page said "no account was found"
+        for an account that exists. It names the block now, and does not look the account up."""
+        from app.models import BannedInstances
+        old, new, fan = accounts
+        db.session.add(BannedInstances(domain='peer.example'))
+        db.session.commit()
+        client = app.test_client()
+        login(client, new)
+
+        response, lookup = self.add(app, client, handle, old)
+
+        html = response.get_data(as_text=True)
+        assert 'is blocked by this server' in html and 'No account was found' not in html
+        lookup.assert_not_called()
+        assert not db.session.get(User, new.id).also_known_as
+
+    def test_an_account_on_a_server_off_the_allowlist_says_so(self, app, accounts):
+        from app.utils import set_setting
+        old, new, fan = accounts
+        set_setting('use_allowlist', True)
+        client = app.test_client()
+        login(client, new)
+
+        response, lookup = self.add(app, client, 'wakko@peer.example', old)
+
+        assert "is not on this server&#39;s allowlist" in response.get_data(as_text=True)
+        lookup.assert_not_called()
 
     def test_the_page_lists_and_removes_an_alias(self, app, accounts):
         old, new, fan = accounts
