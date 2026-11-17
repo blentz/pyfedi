@@ -33,3 +33,13 @@ Owner, 2026-11-16: "we need to be able to assign roles to subscription tiers."
 - **D6** Automatic grants are logged like expiries: a modlog row naming no admin.
 - **D7** The UI: a "Roles it gives" checkbox list on a subscription offer's edit page; one for complimentary membership on
   Admin -> Payments; the user's grants list says "through a subscription".
+
+## After the security reviews (owner, 2026-11-16)
+
+- **T6** A tier carrying a role a monetization manager could not attach is Admin's alone, wherever it could be handed
+  out or repriced: editing or deleting the offer, gift codes for it, discount codes reaching it (one for any offer
+  too), the referral default (automatic may pick any tier) and a member's referral benefit, and complimentary
+  membership when that carries such a role. Only an admin's grant with no end counts toward what a manager holds.
+  A tier gaining a role turns off gift and discount codes reaching it whose maker may not manage it now.
+- **T7** Referral benefits already pointing at a tier when an admin gives it a role with permissions are left as they
+  are, and the automatic default may fall onto such a tier: the admin giving the role checks the referral settings.
