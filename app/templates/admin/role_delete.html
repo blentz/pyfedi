@@ -11,6 +11,9 @@
 <div class="row">
     <div class="col-lg-9">
         <h1>{{ _('Delete the role %(name)s?', name=role.name) }}</h1>
+        {% if tiers -%}
+        <p id="tiers">{{ _('Deleting it also takes it off: %(tiers)s.', tiers=tiers|join(', ')) }}</p>
+        {% endif -%}
         {% if grants -%}
         <p>{{ ngettext('It has %(num)d grant, which deleting it revokes:', 'It has %(num)d grants, which deleting it revokes:', grants|length) }}</p>
         <ul id="grants">

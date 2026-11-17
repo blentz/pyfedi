@@ -39,6 +39,22 @@
         </ul>
         {% endif -%}
 
+        {% if not role.built_in -%}
+        <h2>{{ _('Given by subscriptions') }}</h2>
+        <div id="tiers">
+        {% if tiers -%}
+        <p>{{ _('Members of these hold it while they have access, as grants made through a subscription.') }}</p>
+        <ul>
+            {% for name, offer_id in tiers -%}
+            <li><a href="{{ url_for('admin.admin_payments_offer_roles', offer_id=offer_id) }}">{{ name }}</a></li>
+            {% endfor -%}
+        </ul>
+        {% else -%}
+        <p>{{ _('No subscription gives this role.') }}</p>
+        {% endif -%}
+        </div>
+        {% endif -%}
+
         <h2>{{ _('Grants') }}</h2>
         {% set next = url_for('admin.admin_role', role_id=role.id) %}
         {% with show='user' %}{% include 'admin/_grants.html' %}{% endwith %}

@@ -22,6 +22,7 @@
                 <th class="text-center">{{ _('Limited to some domains') }}</th>
                 <th class="text-center">{{ _('Listed publicly') }}</th>
                 <th class="text-center">{{ _('Holders') }}</th>
+                <th>{{ _('Given by subscriptions') }}</th>
                 <th></th>
             </tr>
             {% for row in rows -%}
@@ -33,6 +34,7 @@
                 <td class="text-center">{{ row.limited if not row.role.built_in else _('None') }}</td>
                 <td class="text-center">{{ _('Yes') if row.role.listed_publicly else _('No') }}</td>
                 <td class="text-center">{{ row.holders }}</td>
+                <td>{{ row.tiers|join(', ') }}</td>
                 <td class="text-end">
                     <a href="{{ url_for('admin.admin_role', role_id=row.role.id) }}">{{ _('View') }}</a>
                     {% if not row.role.built_in -%}

@@ -315,3 +315,32 @@ class TestProvidersAreAdminsWhileATierGivesAPower:
         post(env, '/admin/payments/stripe', secret_key='sk_test_x')
         assert 'Only an admin can change the payment providers' not in \
             env.client.get('/admin/payments').get_data(as_text=True)
+
+
+class TestTheRolesPagesNameTheTiers:
+    """Owner 2026-11-17: the subscriptions that give a role show on the Roles admin pages too."""
+
+    @pytest.fixture
+    def given(self, env, admin):
+        set_offer_roles(admin, env.knight, [env.helper])
+        offer = complimentary_offer()
+        db.session.commit()
+        set_offer_roles(admin, offer, [env.helper])
+        return offer
+
+    def test_the_list_says_which_give_each_role(self, env, given):
+        rows = {row.find('a').get_text(): row for row in page(env, '/admin/roles').find(id='roles').find_all('tr')[1:]}
+        assert 'Complimentary membership' in rows['Helper'].get_text() and 'Furcas' in rows['Helper'].get_text()
+        assert 'Furcas' not in rows['Supporter'].get_text()
+
+    def test_a_roles_page_links_each_to_its_roles(self, env, given):
+        section = page(env, f'/admin/roles/{env.helper.id}').find(id='tiers')
+        links = {a.get_text(): a['href'] for a in section.find_all('a')}
+        assert links == {'Furcas': roles_path(env.knight), 'Complimentary membership': roles_path(given)}
+
+    def test_a_role_no_tier_gives_says_so(self, env, given):
+        assert 'No subscription gives this role.' in page(env, f'/admin/roles/{env.supporter.id}').find(id='tiers').get_text()
+
+    def test_deleting_one_says_it_comes_off_them(self, env, given):
+        text = page(env, f'/admin/roles/{env.helper.id}/delete').get_text()
+        assert 'Deleting it also takes it off: Complimentary membership, Furcas' in text

@@ -15,7 +15,8 @@ from app import db
 from app.admin import bp
 from app.admin.forms import ExpiryForm, GrantForm, RoleForm
 from app.local_names import local_clause
-from app.models import Role, RoleGrant, User
+from app.complimentary import KIND as COMPLIMENTARY
+from app.models import Offer, Role, RoleGrant, User, offer_role
 from app.permissions import CATALOGUE, SCOPABLE_PERMISSIONS
 from app.roles import (RoleError, change_expiry, create_role, delete_role, grant_role, holder_ids, permission_scopes,
                        revoke_grant, update_role)
@@ -39,12 +40,24 @@ def role_rows():
     """The list page's rows: Admin first, then every role by name, with what the list shows of each."""
     holders = dict(db.session.execute(db.select(RoleGrant.role_id, func.count(func.distinct(RoleGrant.user_id)))
                                       .group_by(RoleGrant.role_id)).all())
+    tiers = tiers_by_role()
     rows = []
     for role in Role.query.order_by(Role.built_in.desc(), Role.name).all():
         scopes = permission_scopes(role)
         rows.append(dict(role=role, permission_count=len(scopes), holders=holders.get(role.id, 0),
-                         limited=sum(domains is not None for domains in scopes.values())))
+                         limited=sum(domains is not None for domains in scopes.values()),
+                         tiers=[name for name, _offer_id in tiers.get(role.id, [])]))
     return rows
+
+
+def tiers_by_role() -> dict[int, list[tuple[str, int]]]:
+    """The subscriptions that give each role (owner 2026-11-17), by name: role id -> [(name, offer id)]."""
+    rows = db.session.execute(db.select(offer_role.c.role_id, Offer).join(Offer, Offer.id == offer_role.c.offer_id)).all()
+    tiers: dict[int, list[tuple[str, int]]] = {}
+    for role_id, offer in rows:
+        name = _('Complimentary membership') if offer.provider_kind == COMPLIMENTARY else offer.title
+        tiers.setdefault(role_id, []).append((name, offer.id))
+    return {role_id: sorted(given) for role_id, given in tiers.items()}
 
 
 def submitted_scopes() -> dict[str, set[int] | None]:
@@ -120,7 +133,7 @@ def admin_role(role_id):
     grant_form = GrantForm(prefix='grant')
     return render_template('admin/role.html', title=role.name, role=role, permissions=permissions,
                            grants=grant_rows(RoleGrant.query.filter_by(role_id=role.id).all()),
-                           grant_form=grant_form, revoke_form=FlaskForm())
+                           grant_form=grant_form, revoke_form=FlaskForm(), tiers=tiers_by_role().get(role.id, []))
 
 
 def _role_form_page(form, role, scopes, title, confirm=None):
@@ -198,7 +211,7 @@ def admin_role_delete(role_id):
             flash(_('Role deleted'))
             return redirect(url_for('admin.admin_roles'))
     return render_template('admin/role_delete.html', title=_('Delete role'), role=role, form=form,
-                           grants=grant_rows(grants))
+                           grants=grant_rows(grants), tiers=[name for name, _offer_id in tiers_by_role().get(role.id, [])])
 
 
 # --------------------------------------------------------------------------
