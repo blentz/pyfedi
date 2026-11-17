@@ -46,3 +46,5 @@ Owner, 2026-11-16: "we need to be able to assign roles to subscription tiers."
 - **T8** (owner, 2026-11-17) While any subscription (or complimentary membership) carries a role a monetization
   manager could not attach, changing the payment providers (Stripe, BTCPay, PayPal credentials and webhook secrets,
   Stripe's price import) is Admin's: with them a manager could forge payments, and so the role.
+- **T9** (owner, 2026-11-17) Provider credentials a monetization manager saved before a tier gained a role they could
+  not attach are left as they are: the admin giving the role rotates them if needed. Nothing records who set them.
