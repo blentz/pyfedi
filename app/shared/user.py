@@ -337,13 +337,22 @@ def unfollow_user_as(user: User, to_unfollow: User):
 def move_account_followers(old: User, new: User) -> int:
     """An account moved from `old` to `new` (an ActivityPub Move, verified by the caller): each local user who
     followed `old` follows `new` instead, as Mastodon's own followers do. Returns how many follows moved. A follower
-    `new` refuses contact with keeps neither follow; one who already follows `new` just drops `old`."""
+    `new` refuses contact with keeps neither follow; one who already follows `new` just drops `old`.
+
+    As Mastodon's own move does, a block is never overridden: a follower who blocks `new` or its server, or whom
+    `new` blocks, is left as they were (still following `old`), and a banned or deleted `new` moves nobody. A server
+    banned here never gets this far: find_actor_or_create refuses its actors."""
+    if new.banned or new.deleted:
+        return 0
     followers = db.session.query(User).join(UserFollower, UserFollower.local_user_id == User.id).filter(
         UserFollower.remote_user_id == old.id, UserFollower.is_inward == False,
         UserFollower.is_accepted.is_not(False), User.deleted == False, User.banned == False).all()
     moved = 0
     for follower in followers:
         if follower.id == new.id:
+            continue
+        if follower.has_blocked_user(new.id) or follower.has_blocked_instance(new.instance_id) or \
+                new.has_blocked_user(follower.id):
             continue
         try:
             follow_user_as(follower, new)

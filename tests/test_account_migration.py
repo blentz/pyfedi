@@ -184,6 +184,34 @@ class TestAMoveReceived:
         assert follows(fan, old) is not None and follows(fan, new) is None
         assert ActivityPubLog.query.one().exception_message == 'Move of another account refused'
 
+    @pytest.mark.parametrize('block', ['follower_blocks_new', 'new_blocks_follower', 'follower_blocks_server'])
+    def test_a_block_is_never_overridden(self, app, accounts, block):
+        """As Mastodon's own move: the follower is left as they were, still following the old account."""
+        from app.models import InstanceBlock, UserBlock
+        old, new, fan = accounts
+        new.also_known_as = [old.ap_profile_id]
+        if block == 'follower_blocks_new':
+            db.session.add(UserBlock(blocker_id=fan.id, blocked_id=new.id))
+        elif block == 'new_blocks_follower':
+            db.session.add(UserBlock(blocker_id=new.id, blocked_id=fan.id))
+        else:
+            db.session.add(InstanceBlock(user_id=fan.id, instance_id=new.instance_id))
+        db.session.commit()
+
+        dispatch(move(old, new.public_url()))
+
+        assert follows(fan, new) is None and follows(fan, old) is not None
+        assert '0 local follows moved' in ActivityPubLog.query.one().exception_message
+
+    def test_a_banned_target_moves_nobody(self, app, accounts):
+        from app.shared.user import move_account_followers
+        old, new, fan = accounts
+        new.banned = True
+        db.session.commit()
+
+        assert move_account_followers(old, new) == 0
+        assert follows(fan, new) is None and follows(fan, old) is not None
+
     def test_a_remote_target_is_checked_against_its_fetched_document(self, app, accounts, monkeypatch):
         old, new, fan = accounts
         elsewhere = make_user(old.instance, 'wakko2')
