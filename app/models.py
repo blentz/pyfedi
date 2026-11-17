@@ -6849,7 +6849,7 @@ class PromoCode(db.Model):
     code = db.Column(db.String(64), nullable=False, unique=True)   # stored lower case and stripped (gifts.normalise)
     kind = db.Column(db.String(10), nullable=False)   # gift, percent, amount
     offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', ondelete='SET NULL'), index=True)   # a gift's tier
-    days = db.Column(db.Integer)   # a gift's length
+    periods = db.Column(db.Integer)   # a gift's length: how many of its tier's billing periods (owner 2026-11-17)
     percent = db.Column(db.Integer)
     amount_minor = db.Column(db.BigInteger)
     max_uses = db.Column(db.Integer)   # NULL: as many as come

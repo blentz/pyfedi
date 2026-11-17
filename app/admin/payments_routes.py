@@ -35,7 +35,7 @@ from app.roles import describe_scopes, may_attach, may_manage_offer, permission_
 from app.payments.discounts import DISCOUNT_KINDS
 from app.payments.gifts import AUTO, REFERRAL_BENEFIT_SETTING, Benefit, default_referral_choice, \
     referral_benefit
-from app.payments.offers import LINK, offers_changed, offers_on, tiers_on
+from app.payments.offers import LINK, offers_changed, offers_on, period_text, tiers_on
 from app.storefront import clear_domain_cache, domain_rows
 from app.tier_roles import offer_roles, sync_tier_roles
 from app.utils import get_setting, login_required, permission_required, render_template, roles_with, set_setting
@@ -336,11 +336,15 @@ def _codes_page(default_form=None, code_form=None):
         chosen = default_referral_choice()
         default_form = DefaultBenefitForm(benefit=_choice_of(chosen['kind'], chosen.get('offer_id'),
                                                              chosen.get('discount_id')),
-                                          days=chosen.get('days'))
+                                          periods=chosen.get('periods'))
     default_form.benefit.choices = _benefit_choices(None, own=False)
     # What each member's referral code gives on its owner's domain: its own, one without taking the default (X1)
     gives = {code.id: _describe(referral_benefit(code, owners[code.owner_id].home_domain()))
              for code in codes if code.owner_id in owners}
+    offers = {offer.id: offer for offer in Offer.query.all()}
+    gives.update({code.id: _describe(Benefit(offer=offers[code.offer_id], periods=code.periods))   # a gift code's
+                  for code in codes if code.owner_id is None and code.kind == 'gift' and code.offer_id in offers
+                  and code.periods})
     db.session.commit()
     code_form = code_form or GiftCodeForm()
     code_form.offer_id.choices = _tier_choices(none=True)
@@ -458,7 +462,7 @@ def admin_payments_codes_default():
     kind, _sep, number = form.benefit.data.partition(':')
     chosen = {'kind': kind}
     if kind == 'gift':
-        chosen.update(offer_id=int(number), days=form.days.data or None)
+        chosen.update(offer_id=int(number), periods=form.periods.data or None)
     elif kind == 'discount':
         chosen['discount_id'] = int(number)
     set_setting(REFERRAL_BENEFIT_SETTING, chosen)
@@ -489,13 +493,13 @@ def _describe(benefit: Benefit | None) -> str:
         return _('Nothing it can give: joining with it is refused')
     if benefit.discount is not None:
         return _('Discount code %(code)s', code=benefit.discount.code)
-    return _('%(tier)s for %(days)d days', tier=benefit.offer.title, days=benefit.days)
+    return _('%(tier)s for %(length)s', tier=benefit.offer.title, length=period_text(benefit.periods, benefit.offer.interval))
 
 
 def _code_refusal(form: GiftCodeForm, kind: str) -> str | None:
     """What a code of `kind` is missing, or None (G6, D7)."""
-    if kind == 'gift' and not (form.offer_id.data and form.days.data):
-        return _('A gift needs a tier and its days.')
+    if kind == 'gift' and not (form.offer_id.data and form.periods.data):
+        return _('A gift needs a tier and its number of units.')
     if kind == 'percent' and not form.percent.data:
         return _('Say how many percent it takes off, from 1 to 99.')
     if kind == 'amount' and not form.amount.data:
@@ -521,7 +525,7 @@ def _member_named(form: GiftCodeForm):
 
 def _apply_code(form: GiftCodeForm, code: PromoCode) -> None:
     code.offer_id = form.offer_id.data or None
-    code.days = form.days.data if code.kind == 'gift' else None
+    code.periods = form.periods.data if code.kind == 'gift' else None
     code.percent = form.percent.data if code.kind == 'percent' else None
     code.amount_minor = to_minor(str(form.amount.data), get_setting(CURRENCY_SETTING) or 'usd') \
         if code.kind == 'amount' else None
@@ -622,7 +626,7 @@ def _edit_referral_code(code: PromoCode):
         kind, _sep, number = form.benefit.data.partition(':')
         code.benefit = kind
         code.offer_id = int(number) if kind == 'gift' else None
-        code.days = form.days.data if kind == 'gift' else None
+        code.periods = form.periods.data if kind == 'gift' else None
         code.discount_code_id = int(number) if kind == 'discount' else None
         code.max_uses = form.max_uses.data or None
         code.expires_at = datetime.combine(form.expires_at.data, datetime.max.time()).replace(microsecond=0) \

@@ -2,7 +2,7 @@
 (C11): a link tells a provider nothing about the onion, where a checkout's return address would."""
 from babel.numbers import format_currency, get_currency_precision
 from flask import current_app
-from flask_babel import get_locale
+from flask_babel import get_locale, ngettext
 from flask_login import current_user
 
 from app import cache, db
@@ -98,3 +98,9 @@ def money_major(amount, currency: str) -> str:
     """An amount in whole units of `currency` (a rate per bitcoin, say), as money() shows one in its minor unit."""
     return format_currency(amount, currency.upper(),
                            locale=str(get_locale() or current_app.config.get('BABEL_DEFAULT_LOCALE') or 'en'))
+
+def period_text(count: int, interval: str | None) -> str:
+    """`count` of a tier's billing periods, in words: '1 month', '3 months', '1 year' (a gift's length)."""
+    if interval == 'year':
+        return ngettext('%(num)d year', '%(num)d years', count)
+    return ngettext('%(num)d month', '%(num)d months', count)

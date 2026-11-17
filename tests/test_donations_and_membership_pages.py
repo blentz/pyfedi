@@ -216,7 +216,7 @@ class TestSettingsSubscription:
         assert '/donations/code/clear' in body
 
     def test_redeeming_comes_back_to_it(self, env):
-        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.tier.id, days=30))
+        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.tier.id, periods=1))
         db.session.commit()
         login(env)
         answer = post(env, '/donations/redeem', code='GIFT-MONTH', next=self.SETTINGS)

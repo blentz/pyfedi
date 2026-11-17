@@ -229,7 +229,7 @@ class TestNoPayment:
     def test_a_code_is_refused(self, env):
         given(env.member)
         login(env.client, env.member)
-        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.tier.id, days=30))
+        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.tier.id, periods=1))
         db.session.commit()
         post(env, '/donations/redeem', code='GIFT-MONTH')
         assert MemberSubscription.query.filter_by(user_id=env.member.id, provider_kind='gift').count() == 0

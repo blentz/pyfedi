@@ -65,7 +65,7 @@ class TestThePrice:
         assert discounted(a_code('too-much', kind='amount', amount_minor=amount), env.knight) is None
 
     def test_a_gift_is_no_discount(self, env):
-        assert discounted(a_code('a-gift', kind='gift', offer_id=env.knight.id, days=30), env.knight) is None
+        assert discounted(a_code('a-gift', kind='gift', offer_id=env.knight.id, periods=1), env.knight) is None
 
 
 class TestFinding:
@@ -74,7 +74,7 @@ class TestFinding:
         assert find_discount_code(' Spring-TWENTY ') == code
 
     def test_a_gift_code_is_not_a_discount(self, env):
-        a_code('a-gift', kind='gift', offer_id=env.knight.id, days=30)
+        a_code('a-gift', kind='gift', offer_id=env.knight.id, periods=1)
         assert find_discount_code('a-gift') is None
 
     @pytest.mark.parametrize('values', [{'active': False}, {'expires_at': 'past'}], ids=['inactive', 'expired'])

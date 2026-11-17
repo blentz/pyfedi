@@ -134,7 +134,7 @@ def record_referral(referrer: User, referred: User) -> Referral:
         raise GiftUnavailable()
     db.session.flush()   # the gift's subscription, or the use, names the new account
     if benefit.offer is not None:
-        if start_gift(referred, code, commit=False, offer=benefit.offer, days=benefit.days) is None:
+        if start_gift(referred, code, commit=False, offer=benefit.offer, periods=benefit.periods) is None:
             raise GiftUnavailable()
     else:   # a use of the referral code, as a gift is (R5)
         db.session.add(PromoCodeUse(promo_code_id=code.id, user_id=referred.id, used_at=utcnow()))

@@ -8,7 +8,7 @@ from app.models import Offer, PromoCode, PromoCodeUse
 from app.payments.discounts import DISCOUNT_KINDS, usable as discount_usable
 from app.payments.gifts import Benefit, default_referral_benefit, referral_benefit, referral_gift_code, \
     usable as gift_usable
-from app.payments.offers import money
+from app.payments.offers import money, period_text
 from app.permissions import user_access
 from app.referral import (assigned_codes, caps, generate_code, lifetime_referrals, referral_link,
                           referral_page_available, referral_qr_png, referral_qr_svg, referrals_available,
@@ -66,7 +66,7 @@ def _assigned(row: PromoCode) -> dict:
         gives, can_be_used = _gives(Benefit(discount=row)), discount_usable(row)
     else:
         offer = db.session.get(Offer, row.offer_id) if row.offer_id else None
-        gives = _gives(Benefit(offer=offer, days=row.days)) if offer is not None and row.days else None
+        gives = _gives(Benefit(offer=offer, periods=row.periods)) if offer is not None and row.periods else None
         can_be_used = gift_usable(row)
     link = _assigned_link(row)
     uses = db.session.query(PromoCodeUse).filter_by(promo_code_id=row.id).count()
@@ -79,7 +79,8 @@ def _gives(benefit) -> str | None:
     if benefit is None:
         return None
     if benefit.offer is not None:
-        return _('%(days)d days of %(tier)s, free', days=benefit.days, tier=benefit.offer.title)
+        return _('%(length)s of %(tier)s, free', length=period_text(benefit.periods, benefit.offer.interval),
+                 tier=benefit.offer.title)
     discount = benefit.discount
     tier = db.session.get(Offer, discount.offer_id) if discount.offer_id else None
     off = _('%(percent)d%% off', percent=discount.percent) if discount.kind == 'percent' \

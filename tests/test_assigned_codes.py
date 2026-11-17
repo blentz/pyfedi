@@ -56,7 +56,7 @@ def login(env, user):
 
 def code_for(env, user, text='hand-out-one', **values):
     row = PromoCode(code=text, assigned_to=user.id if user else None,
-                    **({'kind': 'gift', 'offer_id': env.knight.id, 'days': 30} | values))
+                    **({'kind': 'gift', 'offer_id': env.knight.id, 'periods': 1} | values))
     db.session.add(row)
     db.session.commit()
     return row
@@ -106,15 +106,15 @@ class TestWhoSeesThePage:
 
 
 class TestWhatEachSays:
-    def test_a_gift_says_its_tier_and_days(self, env):
+    def test_a_gift_says_its_tier_and_length(self, env):
         holder = member(env)
         row = code_for(env, holder)
         login(env, holder)
-        assert '30 days of Furcas, free' in block(env, row).get_text()
+        assert '1 month of Furcas, free' in block(env, row).get_text()
 
     def test_a_discount_says_what_it_takes_off(self, env):
         holder = member(env)
-        row = code_for(env, holder, kind='percent', percent=20, offer_id=None, days=None)
+        row = code_for(env, holder, kind='percent', percent=20, offer_id=None, periods=None)
         login(env, holder)
         assert '20% off their first payment for any plan' in block(env, row).get_text()
 
@@ -122,7 +122,7 @@ class TestWhatEachSays:
         holder = member(env)
         first = code_for(env, holder)
         second = code_for(env, holder, text='hand-out-two', kind='amount', amount_minor=200, offer_id=env.knight.id,
-                          days=None)
+                          periods=None)
         login(env, holder)
         listed = page(env)
         assert listed.find(id=f'assigned-{first.id}') and listed.find(id=f'assigned-{second.id}')

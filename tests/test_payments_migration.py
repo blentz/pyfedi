@@ -37,6 +37,7 @@ def conn(app, db_session, monkeypatch):
     db.session.commit()
     connection = db.session.connection()
     with Operations.context(MigrationContext.configure(connection)):
+        load('gift_periods').downgrade()   # it reads the offer table to turn periods back into days
         load('tier_roles').downgrade()   # a tier's roles name the offer table
         load('btc_daily_price').downgrade()   # a recorded invoice names the offer table
         load('discount_codes').downgrade()   # a reserved use names the offer and payment tables

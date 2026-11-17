@@ -10,6 +10,7 @@ from app import db
 from app.models import MemberSubscription, Offer, PromoCode, PromoCodeUse, Site, utcnow
 from app.payments.adapters import adapter_for
 from app.payments.adapters.base import InvalidWebhook, ProviderError
+from app.payments.offers import period_text
 from app.payments.gifts import referral_gift_code
 from app.payments.holding import first_charge_after
 from app.payments.core import end_expired_prepaid, remind_expiring_prepaid
@@ -32,8 +33,8 @@ def env(app, api_baseline):
                            baseline=api_baseline)
 
 
-def a_code(env, code='GIFT-MONTH', days=30, **values):
-    row = PromoCode(code=code.lower(), kind='gift', offer_id=env.knight.id, days=days, **values)
+def a_code(env, code='GIFT-MONTH', periods=1, **values):
+    row = PromoCode(code=code.lower(), kind='gift', offer_id=env.knight.id, periods=periods, **values)
     db.session.add(row)
     db.session.commit()
     return row
@@ -69,7 +70,7 @@ class TestFindingACode:
             db.session.commit()
         assert find_gift_code('GIFT-MONTH') is None
 
-    @pytest.mark.parametrize('values', [{'offer_id': None}, {'days': None}, {'days': 0}], ids=['no_tier', 'no_days', 'zero_days'])
+    @pytest.mark.parametrize('values', [{'offer_id': None}, {'periods': None}, {'periods': 0}], ids=['no_tier', 'no_units', 'zero_units'])
     def test_a_gift_code_with_no_tier_or_length_is_not_found(self, env, values):
         row = a_code(env)
         for name, value in values.items():
@@ -90,7 +91,7 @@ class TestFindingACode:
 class TestAGift:
     def test_it_is_a_free_period_of_its_tier(self, env):
         before = utcnow()
-        subscription = start_gift(env.member, a_code(env, days=30))
+        subscription = start_gift(env.member, a_code(env, periods=1))
         assert (subscription.provider_kind, subscription.offer_id, subscription.status) == ('gift', env.knight.id, 'active')
         assert before + timedelta(days=30) <= subscription.current_period_end <= utcnow() + timedelta(days=30)
 
@@ -103,17 +104,17 @@ class TestAGift:
     def test_it_starts_when_what_is_held_ends(self, env):
         """PM8: we never short anybody."""
         paid = held(env, env.member, ends_in_days=20)
-        subscription = start_gift(env.member, a_code(env, days=30))
+        subscription = start_gift(env.member, a_code(env, periods=1))
         assert subscription.current_period_end == paid.current_period_end + timedelta(days=30)
 
     def test_a_gift_on_a_gift_stacks(self, env):
-        first = start_gift(env.member, a_code(env, 'FIRST', days=30))
-        second = start_gift(env.member, a_code(env, 'SECOND', days=365))
-        assert second.current_period_end == first.current_period_end + timedelta(days=365)
+        first = start_gift(env.member, a_code(env, 'FIRST', periods=1))
+        second = start_gift(env.member, a_code(env, 'SECOND', periods=12))
+        assert second.current_period_end == first.current_period_end + timedelta(days=360)
 
     def test_time_held_in_another_group_is_not_counted(self, env):
         held(env, env.member, ends_in_days=200, offer=env.other)
-        subscription = start_gift(env.member, a_code(env, days=30))
+        subscription = start_gift(env.member, a_code(env, periods=1))
         assert subscription.current_period_end <= utcnow() + timedelta(days=30)
 
     def test_one_account_uses_a_code_once(self, env):
@@ -124,7 +125,9 @@ class TestAGift:
 
     def test_its_end_is_mentioned_once_beforehand(self, env):
         """A gift is prepaid-like (G3): the member is told before it runs out, as for a paid period."""
-        subscription = start_gift(env.member, a_code(env, days=3))
+        subscription = start_gift(env.member, a_code(env))
+        subscription.current_period_end = utcnow() + timedelta(days=3)   # three days of its month left
+        db.session.commit()
         with patch('app.payments.core.send_prepaid_reminder') as mail:
             assert remind_expiring_prepaid() == 1 and remind_expiring_prepaid() == 0
         mail.assert_called_once_with(env.member, 'Furcas', subscription.current_period_end)
@@ -192,3 +195,27 @@ class TestEdges:
         db.session.add(gift)
         db.session.commit()
         assert first_charge_after(None, env.knight) is None and first_charge_after(env.member, gift) is None
+
+
+class TestAGiftIsWholePeriods:
+    """Owner 2026-11-17: a gift is a number of its tier's billing periods, each what one payment buys."""
+
+    def test_months_are_thirty_days_each(self, env):
+        before = utcnow()
+        subscription = start_gift(env.member, a_code(env, periods=3))
+        assert before + timedelta(days=90) <= subscription.current_period_end <= utcnow() + timedelta(days=90)
+
+    def test_years_are_a_year_each(self, env):
+        env.knight.interval = 'year'
+        db.session.commit()
+        before = utcnow()
+        subscription = start_gift(env.member, a_code(env, periods=2))
+        assert before + timedelta(days=730) <= subscription.current_period_end <= utcnow() + timedelta(days=730)
+
+
+@pytest.mark.parametrize('count, interval, text', [(1, 'month', '1 month'), (3, 'month', '3 months'),
+                                                   (1, 'year', '1 year'), (2, 'year', '2 years'), (2, None, '2 months')],
+                         ids=['a-month', 'months', 'a-year', 'years', 'no-interval'])
+def test_a_gifts_length_in_words(app, count, interval, text):
+    with app.test_request_context():
+        assert period_text(count, interval) == text

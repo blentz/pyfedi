@@ -75,7 +75,7 @@ def race(env, code_id, attempt):
 
 class TestAGiftCodeWithOneUseLeft:
     def test_the_second_member_waits_and_is_refused(self, env):
-        code = PromoCode(code='one-gift', kind='gift', offer_id=env.knight.id, days=30, max_uses=1)
+        code = PromoCode(code='one-gift', kind='gift', offer_id=env.knight.id, periods=1, max_uses=1)
         db.session.add(code)
         db.session.commit()
         code_id, second_id = code.id, env.second.id

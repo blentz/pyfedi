@@ -27,6 +27,11 @@ from app.utils import finalize_user_setup, get_setting
 LEGACY_GROUP = 'legacy'   # the group of a subscription with no offer: one migrated from the environment
 _MAX_ID = 2**31 - 1
 PERIOD_DAYS = {'month': 30, 'year': 365}   # what one payment buys, where nothing recurs
+
+
+def period_days(offer: Offer, periods: int) -> int:
+    """How many days `periods` of the tier's billing period come to: as many payments would buy (a gift's length)."""
+    return periods * PERIOD_DAYS.get(offer.interval, PERIOD_DAYS['month'])
 REMINDER_DAYS = 7
 
 

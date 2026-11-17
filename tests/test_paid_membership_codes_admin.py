@@ -73,7 +73,7 @@ class TestThePage:
         assert b'/admin/payments/codes' in env.client.get('/admin/payments').data
 
     def test_it_lists_every_code_with_its_uses(self, env, admin):
-        code = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, days=30, max_uses=5)
+        code = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, periods=1, max_uses=5)
         db.session.add(code)
         db.session.commit()
         db.session.add(PromoCodeUse(promo_code_id=code.id, user_id=admin.id))
@@ -100,48 +100,48 @@ class TestTheDefaultBenefit:
 
 class TestMakingACode:
     def test_one_is_generated_when_none_is_typed(self, env, admin):
-        assert post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=365, code='').status_code == 302
+        assert post(env, '/admin/payments/codes/add', offer_id=env.knight.id, periods=12, code='').status_code == 302
         code = PromoCode.query.one()
-        assert (code.kind, code.offer_id, code.days, code.owner_id) == ('gift', env.knight.id, 365, None)
+        assert (code.kind, code.offer_id, code.periods, code.owner_id) == ('gift', env.knight.id, 12, None)
         assert len(code.code) >= 10 and code.code == code.code.lower()
 
     def test_a_typed_one_is_kept_lower_case(self, env, admin):
-        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='  Winter-Gift-2026 ',
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, periods=1, code='  Winter-Gift-2026 ',
              max_uses=50, expires_at='2027-01-31')
         code = PromoCode.query.one()
         assert (code.code, code.max_uses, code.expires_at.date().isoformat()) == ('winter-gift-2026', 50, '2027-01-31')
 
     def test_a_short_one_is_refused_as_guessable(self, env, admin):
-        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='free')
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, periods=1, code='free')
         assert PromoCode.query.count() == 0
 
     def test_a_code_already_taken_is_refused(self, env, admin):
-        db.session.add(PromoCode(code='winter-gift-2026', kind='gift', offer_id=env.knight.id, days=30))
+        db.session.add(PromoCode(code='winter-gift-2026', kind='gift', offer_id=env.knight.id, periods=1))
         db.session.commit()
-        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='WINTER-GIFT-2026')
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, periods=1, code='WINTER-GIFT-2026')
         assert PromoCode.query.count() == 1
 
-    @pytest.mark.parametrize('offer, days', [('none', 30), ('tier', 0)], ids=['no_tier', 'no_days'])
-    def test_it_needs_a_tier_and_days(self, env, admin, offer, days):
-        post(env, '/admin/payments/codes/add', offer_id=env.knight.id if offer == 'tier' else 0, days=days, code='')
+    @pytest.mark.parametrize('offer, periods', [('none', 1), ('tier', 0)], ids=['no_tier', 'no_units'])
+    def test_it_needs_a_tier_and_a_number_of_units(self, env, admin, offer, periods):
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id if offer == 'tier' else 0, periods=periods, code='')
         assert PromoCode.query.count() == 0
 
 
 class TestChangingACode:
     @pytest.fixture
     def code(self, env):
-        row = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, days=30)
+        row = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, periods=1)
         db.session.add(row)
         db.session.commit()
         return row
 
     def test_its_gift_and_limits_change(self, env, admin, code):
-        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, days=90, max_uses=3, active='y')
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, periods=3, max_uses=3, active='y')
         row = db.session.get(PromoCode, code.id)
-        assert (row.days, row.max_uses, row.active) == (90, 3, True)
+        assert (row.periods, row.max_uses, row.active) == (3, 3, True)
 
     def test_it_can_be_turned_off(self, env, admin, code):
-        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, days=30)
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, periods=1)
         assert db.session.get(PromoCode, code.id).active is False
 
     def test_a_members_referral_code_gets_its_own_gift(self, env, admin):
@@ -152,16 +152,16 @@ class TestChangingACode:
         row = PromoCode.query.filter_by(owner_id=member.id).one()
         # Its choices are what the owner's domain has on offer: a tier whose provider is usable (plan 2026-11-16 R2)
         with patch('app.payments.adapters.btcpay_adapter.BtcpayAdapter.available', return_value=True):
-            post(env, f'/admin/payments/codes/{row.id}', benefit=f'gift:{env.knight.id}', days=365, active='y')
-        assert db.session.get(PromoCode, row.id).days == 365
+            post(env, f'/admin/payments/codes/{row.id}', benefit=f'gift:{env.knight.id}', periods=12, active='y')
+        assert db.session.get(PromoCode, row.id).periods == 12
 
     def test_an_unknown_code_is_404(self, env, admin):
-        assert post(env, '/admin/payments/codes/99999', offer_id=env.knight.id, days=30).status_code == 404
+        assert post(env, '/admin/payments/codes/99999', offer_id=env.knight.id, periods=1).status_code == 404
 
 
 class TestTheEditPage:
     def test_it_shows_the_code_with_its_last_day(self, env, admin):
-        code = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, days=30,
+        code = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, periods=1,
                          expires_at=datetime(2027, 1, 31, 23, 59, 59))
         db.session.add(code)
         db.session.commit()
@@ -183,7 +183,7 @@ class TestDiscountCodes:
     def test_percent_off_any_offer(self, env, admin):
         post(env, '/admin/payments/codes/add', kind='percent', percent=20, offer_id=0, code='spring-twenty')
         code = PromoCode.query.one()
-        assert (code.kind, code.percent, code.offer_id, code.days) == ('percent', 20, None, None)
+        assert (code.kind, code.percent, code.offer_id, code.periods) == ('percent', 20, None, None)
 
     def test_an_amount_off_one_offer(self, env, admin):
         set_setting('payment_currency', 'usd')
@@ -193,7 +193,7 @@ class TestDiscountCodes:
 
     @pytest.mark.parametrize('values', [{'kind': 'percent', 'percent': 0}, {'kind': 'percent', 'percent': 100},
                                         {'kind': 'percent'}, {'kind': 'amount'}, {'kind': 'amount', 'amount': '0'},
-                                        {'kind': 'gift', 'offer_id': 0, 'days': 30}],
+                                        {'kind': 'gift', 'offer_id': 0, 'periods': 1}],
                              ids=['zero', 'all', 'no_percent', 'no_amount', 'zero_amount', 'gift_without_tier'])
     def test_what_it_needs(self, env, admin, values):
         post(env, '/admin/payments/codes/add', **{'offer_id': 0, 'code': 'some-long-code', **values})
@@ -227,7 +227,7 @@ class TestACodeForAMember:
 
     def test_making_one_names_the_member(self, env, admin):
         member = somebody(env, 'Handout')
-        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='', user_name=' handout ')
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, periods=1, code='', user_name=' handout ')
         code = PromoCode.query.one()
         assert (code.assigned_to, code.owner_id) == (member.id, None)
 
@@ -239,7 +239,7 @@ class TestACodeForAMember:
     @pytest.mark.parametrize('name', ['nobody-here', 'faraway'], ids=['unknown', 'remote'])
     def test_only_a_local_account_can_be_named(self, env, admin, name):
         make_user(env.baseline.instance_remote, 'faraway', local=False)
-        body = post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='',
+        body = post(env, '/admin/payments/codes/add', offer_id=env.knight.id, periods=1, code='',
                     user_name=name).get_data(as_text=True)
         assert PromoCode.query.count() == 0 and 'No local account is called that.' in body
 
@@ -247,16 +247,16 @@ class TestACodeForAMember:
         member = somebody(env, 'gone')
         member.deleted = True
         db.session.commit()
-        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='', user_name='gone')
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, periods=1, code='', user_name='gone')
         assert PromoCode.query.count() == 0
 
     def test_left_empty_it_is_nobodys(self, env, admin):
-        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='', user_name='')
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, periods=1, code='', user_name='')
         assert PromoCode.query.one().assigned_to is None
 
     def test_the_list_says_whose(self, env, admin):
         member = somebody(env, 'handout')
-        db.session.add(PromoCode(code='for-handout-1', kind='gift', offer_id=env.knight.id, days=30,
+        db.session.add(PromoCode(code='for-handout-1', kind='gift', offer_id=env.knight.id, periods=1,
                                  assigned_to=member.id))
         db.session.commit()
         page = BeautifulSoup(env.client.get('/admin/payments/codes').get_data(as_text=True), 'html.parser')
@@ -265,27 +265,42 @@ class TestACodeForAMember:
 
     def test_editing_shows_and_changes_the_member(self, env, admin):
         first, second = somebody(env, 'first'), somebody(env, 'second')
-        code = PromoCode(code='for-first-1', kind='gift', offer_id=env.knight.id, days=30, assigned_to=first.id)
+        code = PromoCode(code='for-first-1', kind='gift', offer_id=env.knight.id, periods=1, assigned_to=first.id)
         db.session.add(code)
         db.session.commit()
         page = BeautifulSoup(env.client.get(f'/admin/payments/codes/{code.id}').get_data(as_text=True), 'html.parser')
         assert page.find('input', attrs={'name': 'user_name'})['value'] == 'first'
-        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, days=30, active='y', user_name='second')
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, periods=1, active='y', user_name='second')
         assert db.session.get(PromoCode, code.id).assigned_to == second.id
-        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, days=30, active='y', user_name='')
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, periods=1, active='y', user_name='')
         assert db.session.get(PromoCode, code.id).assigned_to is None
 
     def test_editing_to_an_unknown_name_changes_nothing(self, env, admin):
         first = somebody(env, 'first')
-        code = PromoCode(code='for-first-1', kind='gift', offer_id=env.knight.id, days=30, assigned_to=first.id)
+        code = PromoCode(code='for-first-1', kind='gift', offer_id=env.knight.id, periods=1, assigned_to=first.id)
         db.session.add(code)
         db.session.commit()
-        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, days=90, active='y', user_name='nope')
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=env.knight.id, periods=3, active='y', user_name='nope')
         row = db.session.get(PromoCode, code.id)
-        assert (row.assigned_to, row.days) == (first.id, 30)
+        assert (row.assigned_to, row.periods) == (first.id, 1)
 
     def test_a_name_with_a_hosted_domain_finds_the_member_there(self, env, admin):
         member = somebody(env, 'handout')
         server = env.app.config['SERVER_NAME']
-        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, days=30, code='', user_name=f'@handout@{server}')
+        post(env, '/admin/payments/codes/add', offer_id=env.knight.id, periods=1, code='', user_name=f'@handout@{server}')
         assert PromoCode.query.one().assigned_to == member.id
+
+
+class TestAGiftCountsInUnits:
+    """Owner 2026-11-17: each gift of a free period is a number of the tier's billing periods, not days."""
+
+    def test_the_forms_ask_for_a_number_of_units(self, env, admin):
+        body = env.client.get('/admin/payments/codes').get_data(as_text=True)
+        assert 'Number of units of a gift' in body and 'Days of a gift' not in body
+        assert 'Each unit is one billing period of the tier' in body
+
+    def test_the_list_says_a_gift_codes_length(self, env, admin):
+        db.session.add(PromoCode(code='three-months', kind='gift', offer_id=env.knight.id, periods=3))
+        db.session.commit()
+        page = BeautifulSoup(env.client.get('/admin/payments/codes').get_data(as_text=True), 'html.parser')
+        assert 'Furcas for 3 months' in page.find('tr', id=f'code-{PromoCode.query.one().id}').get_text()

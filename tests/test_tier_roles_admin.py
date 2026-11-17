@@ -202,7 +202,7 @@ class TestATierGivingAPowerIsAdmins:
         assert env.client.get(f'/admin/payments/offers/{env.tip.id}/edit').status_code == 200
 
     def test_no_gift_code_for_it(self, env, treasurer, locked):
-        post(env, '/admin/payments/codes/add', offer_id=locked.id, days=365, code='')
+        post(env, '/admin/payments/codes/add', offer_id=locked.id, periods=12, code='')
         assert PromoCode.query.count() == 0
 
     @pytest.mark.parametrize('offer', ['tier', 'any'])
@@ -220,21 +220,21 @@ class TestATierGivingAPowerIsAdmins:
         assert PromoCode.query.count() == 1
 
     def test_an_existing_code_cannot_be_turned_to_it(self, env, treasurer, locked):
-        code = PromoCode(code='gift-for-tips', kind='gift', offer_id=env.tip.id, days=30)
+        code = PromoCode(code='gift-for-tips', kind='gift', offer_id=env.tip.id, periods=1)
         db.session.add(code)
         db.session.commit()
-        post(env, f'/admin/payments/codes/{code.id}', offer_id=locked.id, days=365, active='y')
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=locked.id, periods=12, active='y')
         assert db.session.get(PromoCode, code.id).offer_id == env.tip.id
 
     def test_nor_one_for_it_changed(self, env, treasurer, locked):
-        code = PromoCode(code='gift-for-knights', kind='gift', offer_id=locked.id, days=30, active=False)
+        code = PromoCode(code='gift-for-knights', kind='gift', offer_id=locked.id, periods=1, active=False)
         db.session.add(code)
         db.session.commit()
-        post(env, f'/admin/payments/codes/{code.id}', offer_id=locked.id, days=30, active='y')
+        post(env, f'/admin/payments/codes/{code.id}', offer_id=locked.id, periods=1, active='y')
         assert db.session.get(PromoCode, code.id).active is False
 
     def test_it_is_not_made_the_referral_default(self, env, treasurer, locked):
-        post(env, '/admin/payments/codes/default', benefit=f'gift:{locked.id}', days=365)
+        post(env, '/admin/payments/codes/default', benefit=f'gift:{locked.id}', periods=12)
         assert not get_setting(REFERRAL_BENEFIT_SETTING)
 
     def test_nor_is_the_automatic_default_which_may_choose_it(self, env, treasurer, locked):
@@ -251,7 +251,7 @@ class TestATierGivingAPowerIsAdmins:
         assert MemberSubscription.query.filter_by(user_id=member.id).count() == 0
 
     def test_an_admin_may_do_all_of_it(self, env, admin, locked):
-        post(env, '/admin/payments/codes/add', offer_id=locked.id, days=365, code='')
+        post(env, '/admin/payments/codes/add', offer_id=locked.id, periods=12, code='')
         assert PromoCode.query.count() == 1
 
 
@@ -260,17 +260,17 @@ def test_a_referral_code_cannot_be_turned_to_a_tier_giving_a_power(env, treasure
     set_offer_roles(from_admin, env.knight, [env.helper])
     member = somebody(env, 'referrer')
     row = PromoCode(code='referral-row-1', kind='gift', owner_id=member.id, benefit='gift', offer_id=env.tip.id,
-                    days=30)
+                    periods=1)
     db.session.add(row)
     db.session.commit()
-    post(env, f'/admin/payments/codes/{row.id}', benefit=f'gift:{env.knight.id}', days=365, active='y')
+    post(env, f'/admin/payments/codes/{row.id}', benefit=f'gift:{env.knight.id}', periods=12, active='y')
     assert db.session.get(PromoCode, row.id).offer_id != env.knight.id
     assert 'Only an admin can do this for Furcas' in env.client.get('/admin/payments/codes').get_data(as_text=True)
 
 
 def test_the_roles_page_says_how_many_codes_it_turned_off(env, admin):
     treasurer = somebody(env, 'treasurer', 'manage monetization')
-    db.session.add(PromoCode(code='treasurers-gift', kind='gift', offer_id=env.knight.id, days=30,
+    db.session.add(PromoCode(code='treasurers-gift', kind='gift', offer_id=env.knight.id, periods=1,
                              created_by=treasurer.id))
     db.session.commit()
     post(env, roles_path(env.knight), role=[env.helper.id])

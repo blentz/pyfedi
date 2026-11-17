@@ -10,7 +10,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.models import CmsPage, MemberSubscription, Offer, PromoCode, PromoCodeUse, Referral, Site, SiteDomain, User, utcnow
-from app.payments.gifts import DEFAULT_GIFT_DAYS_SETTING, DEFAULT_GIFT_OFFER_SETTING, REFERRAL_BENEFIT_SETTING, \
+from app.payments.gifts import REFERRAL_BENEFIT_SETTING, \
     referral_benefit, referral_gift_code
 from app.utils import markdown_to_html
 from app.auth.oauth_util import refuse_new_oauth_account
@@ -425,9 +425,8 @@ def gift_of(user):
     return MemberSubscription.query.filter_by(user_id=user.id, provider_kind='gift').first()
 
 
-def default_gift(env, days=30, offer=None):
-    set_setting(DEFAULT_GIFT_OFFER_SETTING, (offer or env.knight).id)
-    set_setting(DEFAULT_GIFT_DAYS_SETTING, days)
+def default_gift(env, periods=1, offer=None):
+    set_setting(REFERRAL_BENEFIT_SETTING, {'kind': 'gift', 'offer_id': (offer or env.knight).id, 'periods': periods})
 
 
 class TestReferralCodesCarryGifts:
@@ -442,26 +441,26 @@ class TestReferralCodesCarryGifts:
 
     def test_a_new_code_gives_the_default_gift(self, env):
         """Read when it is used, not copied onto the code (plan 2026-11-16 R3)."""
-        default_gift(env, offer=env.duke, days=30)
+        default_gift(env, offer=env.duke, periods=1)
         user = self.referrer(env)
         generate_code(user)
         db.session.commit()
         row = referral_gift_code(user)
         assert (row.code, row.kind, row.owner_id) == (user.referral_code, 'gift', user.id)
-        assert (row.benefit, row.offer_id, row.days) == ('gift', env.duke.id, 30)   # its own (plan 2026-11-16 X1)
+        assert (row.benefit, row.offer_id, row.periods) == ('gift', env.duke.id, 1)   # its own (plan 2026-11-16 X1)
 
     def test_regenerating_keeps_the_gift_and_changes_the_code(self, env):
-        default_gift(env, days=30)
+        default_gift(env, periods=1)
         user = self.referrer(env)
         generate_code(user)
         db.session.commit()
         row = referral_gift_code(user)
-        row.benefit, row.offer_id, row.days = 'gift', env.knight.id, 365   # an admin gave this member's code a year
+        row.benefit, row.offer_id, row.periods = 'gift', env.knight.id, 12   # an admin gave this member's code a year
         db.session.commit()
         generate_code(user)
         db.session.commit()
         again = referral_gift_code(user)
-        assert again.id == row.id and again.days == 365 and again.code == user.referral_code
+        assert again.id == row.id and again.periods == 12 and again.code == user.referral_code
         assert PromoCode.query.filter_by(owner_id=user.id).count() == 1
 
     def test_a_code_made_before_gifts_gets_the_default_when_first_used(self, env):
@@ -470,15 +469,15 @@ class TestReferralCodesCarryGifts:
         db.session.commit()
         PromoCode.query.filter_by(owner_id=user.id).delete()
         db.session.commit()
-        default_gift(env, days=60)
-        assert referral_benefit(referral_gift_code(user), env.home).days == 60
+        default_gift(env, periods=2)
+        assert referral_benefit(referral_gift_code(user), env.home).periods == 2
 
     def test_with_no_default_chosen_it_is_the_cheapest_tier_for_a_period(self, env):
         user = self.referrer(env)
         generate_code(user)
         db.session.commit()
         benefit = referral_benefit(referral_gift_code(user), env.home)
-        assert (benefit.offer.id, benefit.days) == (env.knight.id, 30)
+        assert (benefit.offer.id, benefit.periods) == (env.knight.id, 1)
 
 
 class TestJoiningWithACode:
@@ -500,7 +499,7 @@ class TestJoiningWithACode:
         return referrer
 
     def test_a_referral_code_starts_its_gift(self, env, referral, provider):
-        default_gift(env, days=30)
+        default_gift(env, periods=1)
         self.register(env, question=referral.referral_code, tier=env.duke.id)
         user = joiner()
         assert user.registration_pending_since is None and not provider.called
@@ -517,7 +516,7 @@ class TestJoiningWithACode:
         assert gift_of(joiner()).offer_id == env.knight.id and not provider.called
 
     def test_a_gift_code_admits_with_referral_codes_off(self, env, provider):
-        db.session.add(PromoCode(code='gift-year', kind='gift', offer_id=env.duke.id, days=365))
+        db.session.add(PromoCode(code='gift-year', kind='gift', offer_id=env.duke.id, periods=12))
         db.session.commit()
         self.register(env, question='GIFT-YEAR')
         user = joiner()
@@ -553,7 +552,7 @@ class TestRedeeming:
     def test_a_member_redeems_a_gift_code(self, env):
         user = member(env, 'redeemer')
         login(env.client, user)
-        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, days=30))
+        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, periods=1))
         db.session.commit()
         assert self.redeem(env, 'GIFT-MONTH').status_code == 302
         assert gift_of(user) is not None
@@ -563,7 +562,7 @@ class TestRedeeming:
         user = lapsed_since(member(env, 'redeemer'), days=30)
         db.session.add(MemberSubscription(user_id=user.id, offer_id=env.knight.id, provider_kind='stripe',
                                           provider_reference='sub_old', status='ended', ended_at=user.access_lapsed_at))
-        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, days=30))
+        db.session.add(PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, periods=1))
         db.session.commit()
         login(env.client, user)
         assert user.access_has_lapsed()
@@ -650,7 +649,7 @@ class TestCodesAreRateLimited:
 
 class TestACodeThatRanOutMeanwhile:
     def test_makes_no_account_rather_than_a_free_one(self, env, provider):
-        db.session.add(PromoCode(code='gift-last', kind='gift', offer_id=env.knight.id, days=30))
+        db.session.add(PromoCode(code='gift-last', kind='gift', offer_id=env.knight.id, periods=1))
         db.session.commit()
         with patch('app.auth.util.start_gift', return_value=None):
             env.client.post('/auth/register', data={**FORM, 'question': 'gift-last'}, base_url=env.base)
@@ -827,19 +826,19 @@ def join_with(env, **values):
 class TestReferralDefault:
     def test_it_is_one_billing_period_of_the_cheapest_tier(self, env, referrer):
         benefit = referral_benefit(row_of(referrer), env.home)
-        assert (benefit.offer.id, benefit.days, benefit.discount) == (env.knight.id, 30, None)
+        assert (benefit.offer.id, benefit.periods, benefit.discount) == (env.knight.id, 1, None)
 
     def test_a_yearly_cheapest_tier_gives_a_year(self, env, referrer):
         env.knight.interval, env.knight.amount_minor = 'year', 100
         db.session.commit()
-        assert referral_benefit(fresh_row(referrer), env.home).days == 365
+        assert referral_benefit(fresh_row(referrer), env.home).periods == 1   # one year
 
     def test_a_code_keeps_what_it_was_made_with_when_the_default_changes(self, env, referrer):
         """Each code stores its own (plan 2026-11-16 X1); a code made after the change takes the new default."""
         row = row_of(referrer)
-        set_setting(REFERRAL_BENEFIT_SETTING, {'kind': 'gift', 'offer_id': env.duke.id, 'days': 60})
+        set_setting(REFERRAL_BENEFIT_SETTING, {'kind': 'gift', 'offer_id': env.duke.id, 'periods': 2})
         benefit = referral_benefit(row, env.home)
-        assert (benefit.offer.id, benefit.days) == (env.knight.id, 30)
+        assert (benefit.offer.id, benefit.periods) == (env.knight.id, 1)
         generate_code(referrer)   # a new code: the same row, its benefit kept
         db.session.commit()
         assert referral_benefit(row_of(referrer), env.home).offer.id == env.knight.id
@@ -847,7 +846,7 @@ class TestReferralDefault:
         other.verified = True
         generate_code(other)
         db.session.commit()
-        assert (row_of(other).benefit, row_of(other).offer_id, row_of(other).days) == ('gift', env.duke.id, 60)
+        assert (row_of(other).benefit, row_of(other).offer_id, row_of(other).periods) == ('gift', env.duke.id, 2)
 
     def test_it_can_be_a_discount(self, env, referrer):
         discount = a_discount(env)
@@ -860,7 +859,7 @@ class TestReferralDefault:
         PromoCode.query.filter_by(owner_id=referrer.id).delete()
         db.session.commit()
         benefit = referral_benefit(row_of(referrer), env.home)
-        assert (benefit.offer.id, benefit.days) == (env.knight.id, 30)
+        assert (benefit.offer.id, benefit.periods) == (env.knight.id, 1)
 
     def test_a_domain_with_no_tiers_gives_nothing_by_default(self, env, referrer):
         Offer.query.filter_by(kind='subscription').update({Offer.active: False})
@@ -871,16 +870,16 @@ class TestReferralDefault:
 class TestReferralCodesOwn:
     def test_a_gift_of_its_own(self, env, referrer):
         row = row_of(referrer)
-        row.benefit, row.offer_id, row.days = 'gift', env.duke.id, 365
+        row.benefit, row.offer_id, row.periods = 'gift', env.duke.id, 12
         db.session.commit()
         benefit = referral_benefit(row, env.home)
-        assert (benefit.offer.id, benefit.days, benefit.discount) == (env.duke.id, 365, None)
+        assert (benefit.offer.id, benefit.periods, benefit.discount) == (env.duke.id, 12, None)
 
-    def test_a_gift_with_no_days_is_one_billing_period(self, env, referrer):
+    def test_a_gift_with_no_units_is_one_billing_period(self, env, referrer):
         row = row_of(referrer)
-        row.benefit, row.offer_id, row.days = 'gift', env.duke.id, None
+        row.benefit, row.offer_id, row.periods = 'gift', env.duke.id, None
         db.session.commit()
-        assert referral_benefit(row, env.home).days == 30
+        assert referral_benefit(row, env.home).periods == 1
 
     def test_a_discount_of_its_own(self, env, referrer):
         discount = a_discount(env)
@@ -893,11 +892,11 @@ class TestReferralCodesOwn:
     @pytest.mark.parametrize('stored', [None, 'none'], ids=['made_before', 'once_nothing'])
     def test_one_without_its_own_takes_the_default_and_keeps_it(self, env, referrer, stored):
         row = row_of(referrer)
-        row.benefit, row.offer_id, row.days = stored, None, None
+        row.benefit, row.offer_id, row.periods = stored, None, None
         db.session.commit()
         benefit = referral_benefit(row, env.home)
-        assert (benefit.offer.id, benefit.days) == (env.knight.id, 30)
-        assert (row.benefit, row.offer_id, row.days) == ('gift', env.knight.id, 30)
+        assert (benefit.offer.id, benefit.periods) == (env.knight.id, 1)
+        assert (row.benefit, row.offer_id, row.periods) == ('gift', env.knight.id, 1)
 
     @pytest.mark.parametrize('broken', ['gone_offer', 'gone_discount', 'not_a_discount'])
     def test_a_choice_that_is_gone_falls_back_to_the_default(self, env, referrer, broken):
@@ -908,14 +907,14 @@ class TestReferralCodesOwn:
         elif broken == 'gone_discount':
             row.benefit, row.discount_code_id = 'discount', None
         else:
-            gift_code = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, days=30)
+            gift_code = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, periods=1)
             db.session.add(gift_code)
             db.session.flush()
             row.benefit, row.discount_code_id = 'discount', gift_code.id
-        set_setting(REFERRAL_BENEFIT_SETTING, {'kind': 'gift', 'offer_id': env.duke.id, 'days': 7})
+        set_setting(REFERRAL_BENEFIT_SETTING, {'kind': 'gift', 'offer_id': env.duke.id, 'periods': 7})
         db.session.commit()
         benefit = referral_benefit(row, env.home)
-        assert (benefit.offer.id, benefit.days) == (env.duke.id, 7)
+        assert (benefit.offer.id, benefit.periods) == (env.duke.id, 7)
 
     @pytest.mark.parametrize('default', [{'kind': 'gift', 'offer_id': 999999}, {'kind': 'discount', 'discount_id': 999999},
                                          {'kind': 'nonsense'}, 'not a dict'],
@@ -923,11 +922,11 @@ class TestReferralCodesOwn:
     def test_a_default_that_is_gone_or_garbled_is_automatic(self, env, referrer, default):
         set_setting(REFERRAL_BENEFIT_SETTING, default)
         benefit = referral_benefit(row_of(referrer), env.home)
-        assert (benefit.offer.id, benefit.days) == (env.knight.id, 30)
+        assert (benefit.offer.id, benefit.periods) == (env.knight.id, 1)
 
     def test_a_new_code_stores_the_default_as_its_own(self, env, referrer):
         row = row_of(referrer)
-        assert (row.benefit, row.offer_id, row.days, row.discount_code_id) == ('gift', env.knight.id, 30, None)
+        assert (row.benefit, row.offer_id, row.periods, row.discount_code_id) == ('gift', env.knight.id, 1, None)
 
     def test_where_nothing_can_be_given_it_stores_nothing(self, env, referrer):
         Offer.query.filter_by(kind='subscription').update({Offer.active: False})
@@ -1109,9 +1108,9 @@ class TestReferralBenefitAdmin:
         row = row_of(referrer)
         row.benefit, row.discount_code_id = 'discount', discount.id
         db.session.commit()
-        admin_post(env, f'/admin/payments/codes/{row.id}', benefit=f'gift:{env.duke.id}', days='60', active='y')
+        admin_post(env, f'/admin/payments/codes/{row.id}', benefit=f'gift:{env.duke.id}', periods='2', active='y')
         row = db.session.get(PromoCode, row.id)
-        assert (row.benefit, row.offer_id, row.days, row.discount_code_id) == ('gift', env.duke.id, 60, None)
+        assert (row.benefit, row.offer_id, row.periods, row.discount_code_id) == ('gift', env.duke.id, 2, None)
 
     @pytest.mark.parametrize('choice', ['gift-one-off', 'none', 'default'])
     def test_a_choice_not_offered_is_refused(self, env, referrer, treasurer, choice):
@@ -1125,8 +1124,8 @@ class TestReferralBenefitAdmin:
         discount = a_discount(env)
         admin_post(env, '/admin/payments/codes/default', benefit=f'discount:{discount.id}')
         assert get_setting(REFERRAL_BENEFIT_SETTING) == {'kind': 'discount', 'discount_id': discount.id}
-        admin_post(env, '/admin/payments/codes/default', benefit=f'gift:{env.duke.id}', days='')
-        assert get_setting(REFERRAL_BENEFIT_SETTING) == {'kind': 'gift', 'offer_id': env.duke.id, 'days': None}
+        admin_post(env, '/admin/payments/codes/default', benefit=f'gift:{env.duke.id}', periods='')
+        assert get_setting(REFERRAL_BENEFIT_SETTING) == {'kind': 'gift', 'offer_id': env.duke.id, 'periods': None}
         admin_post(env, '/admin/payments/codes/default', benefit='auto')
         assert get_setting(REFERRAL_BENEFIT_SETTING) == {'kind': 'auto'}
         admin_post(env, '/admin/payments/codes/default', benefit='none')   # never nothing (X1)
@@ -1143,7 +1142,7 @@ class TestReferralBenefitAdmin:
         db.session.commit()
         cell = BeautifulSoup(env.client.get('/admin/payments/codes', base_url=env.base).get_data(as_text=True),
                              'html.parser').find('tr', id=f'code-{row.id}').get_text()
-        assert 'Furcas for 30 days' in cell
+        assert 'Furcas for 1 month' in cell
         page = env.client.get(f'/admin/payments/codes/{row.id}', base_url=env.base).get_data(as_text=True)
         assert row.expires_at.strftime('%Y-%m-%d') in page
 
@@ -1167,7 +1166,7 @@ class TestTheReferralPageSaysWhatTheCodeGives:
 
     def test_a_gift(self, env, referrer):
         body = self.page(env, referrer)
-        assert 'joining with your code gives them 30 days of Furcas, free.' in body
+        assert 'joining with your code gives them 1 month of Furcas, free.' in body
         assert 'approved straight away' not in body
 
     @pytest.mark.parametrize('for_tier', [True, False], ids=['one_tier', 'any_plan'])
@@ -1193,7 +1192,7 @@ class TestTheReferralPageSaysWhatTheCodeGives:
         PromoCode.query.filter_by(owner_id=referrer.id).delete()
         referrer.referral_code = None
         db.session.commit()
-        assert '30 days of Furcas, free' in self.page(env, referrer)
+        assert '1 month of Furcas, free' in self.page(env, referrer)
 
     def test_nothing_to_give_says_it_cannot_be_used(self, env, referrer):
         with patch('app.user.referrals.referral_benefit', return_value=None):

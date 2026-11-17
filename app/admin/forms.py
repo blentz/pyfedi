@@ -657,8 +657,9 @@ class MembershipForm(FlaskForm):
 class ReferralBenefitForm(FlaskForm):
     """What a member's referral code gives (plan 2026-11-16 R1-R3): its choices are made by the route."""
     benefit = SelectField(_l('Joining with it gives'), choices=[], render_kw={'class': 'form-select'})
-    days = IntegerField(_l('Days of a gift (blank for one billing period)'),
-                        validators=[Optional(), NumberRange(min=1, max=3650)])
+    periods = IntegerField(_l('Number of units of a gift (blank for one)'),
+                           description=_l("Each unit is one billing period of the tier: a month, or a year."),
+                           validators=[Optional(), NumberRange(min=1, max=120)])
 
 
 class DefaultBenefitForm(ReferralBenefitForm):
@@ -685,7 +686,9 @@ class GiftCodeForm(FlaskForm):
                                                ('amount', _l('An amount off a first payment'))]))
     offer_id = SelectField(_l('Tier (for a discount: the one offer it is for, or any)'), coerce=int, choices=[],
                            render_kw={'class': 'form-select'})
-    days = IntegerField(_l('Days of a gift'), default=30, validators=[Optional(), NumberRange(min=1, max=3650)])
+    periods = IntegerField(_l('Number of units of a gift'), default=1,
+                           description=_l("Each unit is one billing period of the tier: a month, or a year."),
+                           validators=[Optional(), NumberRange(min=1, max=120)])
     percent = IntegerField(_l('Percent off'), validators=[Optional(), NumberRange(min=1, max=99)])
     amount = DecimalField(_l('Amount off'), places=None, validators=[Optional(), NumberRange(min=0.01, max=1000000)])
     max_uses = IntegerField(_l('How many may use it (blank for any number)'),

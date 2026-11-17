@@ -230,7 +230,7 @@ class TestGiftsAndComplimentary:
     def test_a_gift_of_the_tier_gives_them(self, env):
         set_offer_roles(env.admin, env.knight, [env.supporter])
         user = member(env)
-        code = PromoCode(code='gift-for-you', kind='gift', offer_id=env.knight.id, days=30)
+        code = PromoCode(code='gift-for-you', kind='gift', offer_id=env.knight.id, periods=1)
         db.session.add(code)
         db.session.commit()
         start_gift(user, code)
@@ -381,7 +381,7 @@ class TestCodesMadeBeforeAPowerWasAdded:
 
     def code(self, creator, **values):
         row = PromoCode(code=f'code-{len(PromoCode.query.all())}-made', created_by=creator.id,
-                        **({'kind': 'gift', 'days': 30} | values))
+                        **({'kind': 'gift', 'periods': 1} | values))
         db.session.add(row)
         db.session.commit()
         return row
@@ -392,7 +392,7 @@ class TestCodesMadeBeforeAPowerWasAdded:
         assert db.session.get(PromoCode, row.id).active is False
 
     def test_so_is_their_discount_for_any_offer(self, env, treasurer):
-        row = self.code(treasurer, kind='percent', percent=50, days=None)
+        row = self.code(treasurer, kind='percent', percent=50, periods=None)
         set_offer_roles(env.admin, env.knight, [env.helper])
         assert db.session.get(PromoCode, row.id).active is False
 
@@ -412,7 +412,7 @@ class TestCodesMadeBeforeAPowerWasAdded:
         assert db.session.get(PromoCode, row.id).active is True
 
     def test_a_code_nobody_made_is_turned_off(self, env):
-        row = PromoCode(code='orphan-code-1', kind='gift', offer_id=env.knight.id, days=30)
+        row = PromoCode(code='orphan-code-1', kind='gift', offer_id=env.knight.id, periods=1)
         db.session.add(row)
         db.session.commit()
         assert set_offer_roles(env.admin, env.knight, [env.helper]) == 1
