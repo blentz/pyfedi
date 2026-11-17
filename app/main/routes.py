@@ -424,6 +424,13 @@ def add_quick_post():
                                       'timezone': current_user.timezone, 'visibility': 'public'})
     del form.flair
     try:
+        # as community.add_post and the API: plugins may rewrite the title and content (a content filter, say), but
+        # not who is posting, where, or what type of post
+        post_data = plugins.fire_hook('before_post_create', {
+            'title': form.title.data, 'content': form.body.data, 'community': microblogs.name,
+            'community_id': microblogs.id, 'post_type': POST_TYPE_ARTICLE, 'user_id': current_user.id})
+        form.title.data = post_data.get('title', form.title.data)
+        form.body.data = post_data.get('content', form.body.data)
         post = shared_post.make_post(form, microblogs, POST_TYPE_ARTICLE, SRC_WEB)
     except Exception:
         # as community.add_post: logged, not flashed, since the text can name internals

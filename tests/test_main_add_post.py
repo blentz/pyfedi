@@ -293,6 +293,24 @@ class TestQuickPost:
         content = note_content(Post.query.one())
         assert '[Microblog]' not in content and 'Hi' in content
 
+    def test_a_before_post_create_plugin_sees_and_can_rewrite_it(self, app, poster):
+        """The quick post fires the hook community.add_post and the API fire, so a content-filter plugin is not
+        bypassed by posting through the box."""
+        client, joined, microblogs = poster
+        seen = []
+
+        def rewrite(hook_name, data=None, **kwargs):
+            if hook_name != 'before_post_create':
+                return data
+            seen.append(data)
+            return {**data, 'content': 'filtered text'}
+
+        with patch('app.plugins.fire_hook', side_effect=rewrite):
+            quick_post(app, client, 'original text')
+
+        assert seen and seen[0]['content'] == 'original text' and seen[0]['community_id'] == microblogs.id
+        assert Post.query.one().body == 'filtered text'
+
     @pytest.mark.parametrize('body', ['   ', 'x' * 251])
     def test_an_empty_or_overlong_post_is_refused_on_the_chooser(self, app, poster, body):
         client, joined, microblogs = poster
