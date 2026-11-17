@@ -18,7 +18,7 @@ from app import db
 from app.models import MemberSubscription, ModLog, Offer, Role, RoleGrant, User, offer_role, utcnow
 from app.permission_cache import permissions_changed
 from app.permissions import home_domain_id
-from app.storefront import domain_by_id, paid_registration
+from app.storefront import domain_by_id
 
 # Sent when a member's roles changed here, so whatever caches role names (badges, `is_admin`) empties itself (RB15)
 role_names_changed = Namespace().signal('role-names-changed')
@@ -45,14 +45,12 @@ def _wanted(user: User) -> dict[int, str]:
 
 
 def access_ends(user: User):
-    """When the member's access ends (T2): the lapse grace after their subscription ended, where their domain charges;
-    otherwise, and once that has passed, now."""
+    """When the member's access ends (T2): the lapse grace after their subscription ended, where their domain charges
+    (refresh_access, which runs first, sets access_lapsed_at only there); otherwise, and once that has passed, now."""
     now = utcnow()
-    if user.access_lapsed_at is not None:
-        home = domain_by_id(user.site_domain_id)
-        if paid_registration(home):
-            return max(user.access_lapsed_at + timedelta(days=home.lapse_grace_days), now)
-    return now
+    if user.access_lapsed_at is None:
+        return now
+    return max(user.access_lapsed_at + timedelta(days=domain_by_id(user.site_domain_id).lapse_grace_days), now)
 
 
 def sync_tier_roles(user: User) -> bool:

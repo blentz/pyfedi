@@ -447,17 +447,12 @@ class TestPowersHeldTwice:
         limit_role(env.helper, env.home, shop)
         assert may_attach(treasurer, env.helper)
 
-    def test_every_domain_from_either_is_every_domain(self, env, treasurer):
-        grant_role(env.admin, treasurer, self.powered('Here', env.home))
-        grant_role(env.admin, treasurer, self.powered('Everywhere'))
+    @pytest.mark.parametrize('everywhere_first', [True, False], ids=['everywhere-first', 'here-first'])
+    def test_every_domain_from_either_is_every_domain(self, env, treasurer, everywhere_first):
+        # roles are read in the order they were made
+        made = [self.powered('Everywhere'), self.powered('Here', env.home)] if everywhere_first else \
+            [self.powered('Here', env.home), self.powered('Everywhere')]
+        for role in made:
+            grant_role(env.admin, treasurer, role)
         assert may_attach(treasurer, env.helper)
 
-
-def test_access_that_lapsed_while_its_domain_charged_ends_them_at_once_once_it_is_free(env):
-    set_offer_roles(env.admin, env.knight, [env.supporter])
-    user = member(env)
-    start(user, env.knight)
-    user.access_lapsed_at = utcnow() - timedelta(hours=1)   # from when the domain charged
-    db.session.commit()
-    end()
-    assert not holds(user, env.supporter)

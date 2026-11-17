@@ -327,7 +327,8 @@ def _held_scopes(actor: User) -> dict[str, set[int] | None]:
     (security review 2026-11-16)."""
     held: dict[str, set[int] | None] = {}
     roles = Role.query.join(RoleGrant, RoleGrant.role_id == Role.id) \
-        .filter(RoleGrant.user_id == actor.id, RoleGrant.expires_at.is_(None), RoleGrant.via_tier.is_(False)).all()
+        .filter(RoleGrant.user_id == actor.id, RoleGrant.expires_at.is_(None), RoleGrant.via_tier.is_(False)) \
+        .order_by(Role.id).all()
     for role in roles:
         for permission, domains in permission_scopes(role).items():
             if permission not in held:
