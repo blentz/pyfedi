@@ -43,3 +43,6 @@ Owner, 2026-11-16: "we need to be able to assign roles to subscription tiers."
   A tier gaining a role turns off gift and discount codes reaching it whose maker may not manage it now.
 - **T7** Referral benefits already pointing at a tier when an admin gives it a role with permissions are left as they
   are, and the automatic default may fall onto such a tier: the admin giving the role checks the referral settings.
+- **T8** (owner, 2026-11-17) While any subscription (or complimentary membership) carries a role a monetization
+  manager could not attach, changing the payment providers (Stripe, BTCPay, PayPal credentials and webhook secrets,
+  Stripe's price import) is Admin's: with them a manager could forge payments, and so the role.
