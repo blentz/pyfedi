@@ -82,7 +82,7 @@ import app.post.routes as post_routes
 from app.visibility import OPEN_VISIBILITIES, followers_only_addressing, is_open, listable_clause, post_title_for, \
     post_withheld_from_peers, visible_to_clause
 from app.shared.tasks import task_selector
-from app.shared.user import move_account_followers
+import app.shared.user as shared_user   # the module: app.shared.user reaches this one through app.user (cycle)
 # The module, not the names: app.shared.tasks.pages reaches this file through
 # app.activitypub.signature before they are defined (import cycle: shared.tasks.pages)
 import app.shared.tasks.pages as shared_pages
@@ -3323,7 +3323,7 @@ def process_account_move(user: User, move_json: dict, id, saved_json):
         log_incoming_ap(id, APLOG_MOVE, APLOG_FAILURE, saved_json,
                         'Account Move refused: the target does not name the old account in alsoKnownAs')
         return
-    moved = move_account_followers(user, target)
+    moved = shared_user.move_account_followers(user, target)
     log_incoming_ap(id, APLOG_MOVE, APLOG_SUCCESS, saved_json,
                     f'{user.ap_id} moved to {target.ap_id or target.user_name}: {moved} local follows moved')
 
