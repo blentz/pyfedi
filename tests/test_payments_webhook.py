@@ -19,7 +19,7 @@ from app.models import MemberSubscription, Offer, Payment, PaymentEvent, Payment
 from tests.factories import make_user
 
 SECRET = 'whsec_test'
-PERIOD_END = 1795000000
+PERIOD_END = 4102444800   # 2100-01-01T00:00:00Z: a paid-through date always in the future (it was today, once)
 
 
 @pytest.fixture(autouse=True)

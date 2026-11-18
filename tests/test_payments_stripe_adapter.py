@@ -59,7 +59,7 @@ def parse(adapter, event_type, obj):
 SESSION = {'id': 'cs_1', 'payment_status': 'paid', 'client_reference_id': '7', 'customer': 'cus_1', 'invoice': 'in_1',
            'payment_intent': None, 'subscription': 'sub_1', 'amount_subtotal': 500, 'currency': 'usd',
            'metadata': {'offer_id': '3'}}
-PERIOD_END = 1795000000   # 2026-11-18T09:46:40Z
+PERIOD_END = 4102444800   # 2100-01-01T00:00:00Z
 PERIOD_END_AT = datetime.fromtimestamp(PERIOD_END, timezone.utc).replace(tzinfo=None)
 
 
