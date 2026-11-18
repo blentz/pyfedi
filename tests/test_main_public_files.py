@@ -15,6 +15,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import httpx
+
 import pytest
 from flask import current_app, g
 
@@ -165,6 +166,13 @@ class TestWhatABrowserIsGiven:
         manifest = env.client.get('/manifest.json').get_json()
         assert manifest['name'] == 'PieFed'
         assert manifest['description'] == ''
+
+    def test_media_on_s3_is_in_the_manifests_scope(self, env, monkeypatch):
+        """An installed app opens the media bucket's links as its own: the bucket is a scope extension."""
+        monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', 'https://media.example.org')
+        with patch('app.main.routes.store_files_in_s3', return_value=True):
+            manifest = env.client.get('/manifest.json').get_json()
+        assert manifest['scope_extensions'] == [{'type': 'origin', 'origin': 'https://media.example.org'}]
 
     def test_it_is_not_cached_by_anything_shared(self, env):
         """The user agent decides which one is served, so a shared cache

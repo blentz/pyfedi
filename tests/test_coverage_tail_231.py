@@ -100,6 +100,11 @@ class TestAPrivateCommunityInTheSiteFeed:
         assert 'anyone-may-read-this' in response.text
         assert 'members-only-secret' not in response.text
 
+    def test_lang_keeps_the_posts_in_that_language(self, seeded):
+        """`?lang=` filters the feed's posts by language code; a post with no language counts as English."""
+        assert 'anyone-may-read-this' in seeded.client.get('/index/feed/local?lang=en').text
+        assert 'anyone-may-read-this' not in seeded.client.get('/index/feed/local?lang=fr').text
+
     def test_a_token_holder_who_is_not_a_member_is_not_shown_it_either(self, seeded):
         """The authenticated arm with an EMPTY membership list. Holding a token widens
         nothing by itself."""

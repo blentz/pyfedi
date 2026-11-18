@@ -243,6 +243,31 @@ class TestAMoveReceived:
         assert move_account_followers(old, new) == 0
         assert follows(fan, new) is None and follows(fan, old) is not None
 
+    def test_the_new_account_itself_is_not_made_to_follow_itself(self, app, accounts):
+        """The new account followed the old one: it is skipped, not made to follow itself, and still follows old."""
+        from app.shared.user import move_account_followers
+        old, new, fan = accounts
+        db.session.add(UserFollower(local_user_id=new.id, remote_user_id=old.id, is_accepted=True, is_inward=False))
+        db.session.commit()
+
+        assert move_account_followers(old, new) == 1   # fan alone
+        assert follows(new, new) is None and follows(new, old) is not None
+
+    def test_a_refused_follow_still_drops_the_old_one(self, app, accounts, monkeypatch, caplog):
+        """Following the new account is refused (it refuses contact from the follower's server, say): the follower
+        keeps neither follow, and the refusal is logged."""
+        import logging
+        from app.shared import user as shared_user
+        old, new, fan = accounts
+
+        def refuse(follower, followed):
+            raise Exception('refused')
+        monkeypatch.setattr(shared_user, 'follow_user_as', refuse)
+        with caplog.at_level(logging.INFO):
+            assert shared_user.move_account_followers(old, new) == 0
+        assert follows(fan, new) is None and follows(fan, old) is None
+        assert 'not moved' in caplog.text
+
     def test_a_remote_target_is_checked_against_its_fetched_document(self, app, accounts, monkeypatch):
         old, new, fan = accounts
         elsewhere = make_user(old.instance, 'wakko2')

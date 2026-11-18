@@ -331,6 +331,38 @@ class TestQuickPost:
         assert Post.query.count() == 0
 
 
+class TestAQuickPostRefused:
+    """The quick post's own refusals, past the decorators: a banned poster, one who may not post in microblogs, and a
+    post that fails to be made."""
+
+    def test_a_banned_poster_gets_the_ban_message(self, app, poster):
+        client, joined, microblogs = poster
+        with patch('app.main.routes.user_ip_banned', return_value=True), \
+                patch('app.main.routes.show_ban_message', return_value='banned') as ban:
+            response = quick_post(app, client, 'hello')
+        assert ban.called and response.get_data(as_text=True) == 'banned'
+        assert Post.query.count() == 0
+
+    def test_one_who_may_not_post_in_microblogs_is_forbidden(self, app, poster):
+        client, joined, microblogs = poster
+        with patch('app.main.routes.can_create_post', return_value=False):
+            response = quick_post(app, client, 'hello')
+        assert response.status_code == 403
+        assert Post.query.count() == 0
+
+    def test_a_post_that_cannot_be_made_is_logged_not_shown(self, app, poster, caplog):
+        """As community.add_post: the error text can name internals, so it goes to the log and the chooser says only
+        that the post was not accepted."""
+        client, joined, microblogs = poster
+        with patch('app.shared.post.make_post', side_effect=RuntimeError('internal detail')):
+            response = quick_post(app, client, 'hello')
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200 and 'id="quick_post"' in html
+        assert 'was not accepted' in html and 'internal detail' not in html
+        assert 'quick post failed' in caplog.text
+        assert Post.query.count() == 0
+
+
 class TestTheMicroblogsComposeForm:
     """`/community/microblogs/submit`, the "Additional Microblogging Options": the title is optional there, and a
     post without one is a microblog post, as the quick post is."""
