@@ -476,6 +476,9 @@ def create_app(config_class=Config):
 
     app.register_blueprint(onion_media_bp)   # imported at the end of this module, below
 
+    from app.custom_themes_routes import bp as custom_themes_bp  # cycle: blueprint modules import db from this package
+    app.register_blueprint(custom_themes_bp)
+
     from app.api.alpha import bp as app_api_bp  # cycle: blueprint modules import db and the other extensions from this package
     app.register_blueprint(app_api_bp)
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timedelta
 
 from app import db
 import app.models as models
@@ -37,13 +38,7 @@ def is_shipped(name: str | None) -> bool:
 def theme_counts(identifier: str | None, domain) -> bool:
     """Whether `identifier` is a theme a page on `domain` (a `DomainInfo`) can render in: `piefed`, a shipped theme,
     or a custom theme `domain` owns, retired or not (CT3, CT9)."""
-    if identifier == 'piefed' or is_shipped(identifier):
-        return True
-    theme_id = custom_theme_id(identifier)
-    if theme_id is None:
-        return False
-    theme = db.session.get(models.CustomTheme, theme_id)
-    return theme is not None and theme.site_domain_id == domain.id
+    return identifier == 'piefed' or is_shipped(identifier) or custom_theme_here(identifier, domain) is not None
 
 
 def custom_themes_for(domain_id: int, include_retired: bool) -> list:
@@ -52,3 +47,16 @@ def custom_themes_for(domain_id: int, include_retired: bool) -> list:
     if not include_retired:
         query = query.filter(models.CustomTheme.retired.is_(False))
     return query.order_by(db.func.lower(models.CustomTheme.name), models.CustomTheme.id).all()
+
+
+def theme_version(theme) -> int:
+    """The stylesheet URL's `v`: the theme's last save in microseconds since 1970, so every save changes every page's
+    link (the stylesheet is cached as immutable)."""
+    return (theme.updated_at - datetime(1970, 1, 1)) // timedelta(microseconds=1)
+
+
+def custom_theme_here(identifier: str | None, domain):
+    """The `CustomTheme` `identifier` names when it counts on `domain`, else None."""
+    theme_id = custom_theme_id(identifier)
+    theme = db.session.get(models.CustomTheme, theme_id) if theme_id is not None else None
+    return theme if theme is not None and theme.site_domain_id == domain.id else None

@@ -86,6 +86,7 @@ from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, DomainInfo
     act_in_this_request, acting_as_default, acting_domain, domain_authority, \
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_hosted_uri, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from app.branding import branding_for
+from app.custom_themes import custom_theme_here, custom_theme_id, is_shipped, theme_counts, theme_version
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -98,7 +99,7 @@ def render_template(template_name: str, skip_protocol_replacement: bool = False,
     # R219: on a private instance a page's RSS link carries the member's token, which is what opens the feed
     if isinstance(context.get('rss_feed'), str) and login_required_here() and current_user.is_authenticated:
         context['rss_feed'] += f"?token={ensure_rss_token(current_user)}"
-    theme = current_theme()
+    theme = template_theme()
     if theme != '' and os.path.exists(f'app/templates/themes/{theme}/{template_name}'):
         content = flask.render_template(f'themes/{theme}/{template_name}', **context)
     else:
@@ -5245,17 +5246,54 @@ def current_theme():
     """The theme a page is shown in (per-domain branding, spec 3.2): the user's own theme if they set one, else the
     domain's default theme, else the site's, else piefed. A stored default theme no longer shipped is passed over, so
     the page renders in the next one. piefed has no theme directory, so it is never shipped, but it is a theme a domain
-    or the site can choose."""
-    if current_user.is_authenticated and current_user.theme:
+    or the site can choose. A custom theme (`custom:<id>`) counts only on the domain that owns it (custom themes
+    spec §3.4); a user's pick of one is passed over elsewhere and kept for its own domain."""
+    domain = current_storefront()
+    if current_user.is_authenticated and current_user.theme and \
+            (custom_theme_id(current_user.theme) is None or theme_counts(current_user.theme, domain)):
         return current_user.theme
     if hasattr(g, 'site'):
         site = g.site
     else:
         site = db.session.get(Site, 1)
-    domain = current_storefront()
     domain_theme = '' if domain.is_default else branding_for(domain).default_theme   # the default's is the site's
-    return next((theme for theme in (domain_theme, site.default_theme) if theme == 'piefed' or is_shipped_theme(theme)),
-                'piefed')
+    return next((theme for theme in (domain_theme, site.default_theme) if theme_counts(theme, domain)), 'piefed')
+
+
+def template_theme() -> str:
+    """The shipped theme whose templates and scripts.js a page renders with: `current_theme()`, or for a custom theme
+    its base theme, `piefed` once that no longer ships. This is the Jinja global `theme`."""
+    theme = current_theme()
+    custom = custom_theme_here(theme, current_storefront())
+    if custom is None:
+        return theme
+    return custom.base_theme if is_shipped(custom.base_theme) else 'piefed'
+
+
+def custom_stylesheet_url(identifier: str | None) -> str | None:
+    """The stylesheet URL of the custom theme `identifier` when it counts on this request's domain, else None."""
+    custom = custom_theme_here(identifier, current_storefront())
+    if custom is None:
+        return None
+    return url_for('custom_themes.stylesheet', theme_id=custom.id, v=theme_version(custom))
+
+
+def theme_stylesheet_url(identifier: str | None) -> str | None:
+    """The stylesheet a page in theme `identifier` links: a custom theme's (`custom_stylesheet_url`), a shipped theme's
+    styles.css, or None (piefed, a theme with no styles.css, or one that does not count here)."""
+    custom = custom_stylesheet_url(identifier)
+    if custom is not None:
+        return custom
+    if is_shipped(identifier) and os.path.exists(f'app/templates/themes/{identifier}/styles.css'):
+        return url_for('static', filename=f'themes/{identifier}/styles.css',
+                       changed=getmtime(f'themes/{identifier}/styles.css'))
+    return None
+
+
+def theme_label(identifier: str) -> str:
+    """How a page names theme `identifier`: a custom theme that counts here by its name, anything else as stored."""
+    custom = custom_theme_here(identifier, current_storefront())
+    return custom.name if custom is not None else identifier
 
 
 def is_shipped_theme(name: str | None) -> bool:

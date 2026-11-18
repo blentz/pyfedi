@@ -327,3 +327,14 @@ def onion_safe(branding: Branding, own_host: str) -> Branding:
 # branding once, not at every page (macros ask once per post teaser), and logs its removals once
 _onion_safe = lru_cache(maxsize=16)(onion_safe)
 
+
+
+def onion_safe_css(css: str, own_host: str, what: str) -> str:
+    """`css` with each off-site `url()` and `@import` target emptied, each logged at info as dropped from `what`: a
+    stylesheet served on the onion as a file of its own (a custom theme's), so it cannot close a style element."""
+    host = storefront.normalise_host(own_host)
+    kept, offsite = _scan_css(css, host)
+    for url in dict.fromkeys(offsite):
+        current_app.logger.info('branding: %s dropped from %s on %s: off-site on the onion', url, what, host,
+                                extra=ONION_SAFE)
+    return kept

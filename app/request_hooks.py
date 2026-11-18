@@ -38,6 +38,7 @@ from app.storefront import adopt_host_storefront, check_default_domain, current_
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
 from app.utils import can_moderate, getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
     can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
+    custom_stylesheet_url, template_theme, theme_label, theme_stylesheet_url, \
     in_sorted_list, role_access, first_paragraph, person_link_to_href, feed_membership, html_to_text, remove_images, \
     notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, can_upload_audio, \
     debug_checkpoint, compaction_level, humanize_number, round_invisible_digits, get_site_as_dict, localize_datetime, \
@@ -171,7 +172,11 @@ def register_request_hooks(app):
     app.jinja_env.globals['media_of'] = media_of
     app.jinja_env.globals['show_explore'] = show_explore
     app.jinja_env.globals['in_sorted_list'] = in_sorted_list
-    app.jinja_env.globals['theme'] = current_theme
+    app.jinja_env.globals['theme'] = template_theme          # the shipped theme whose templates render
+    app.jinja_env.globals['theme_in_effect'] = current_theme  # what the page is in: a shipped theme or custom:<id>
+    app.jinja_env.globals['theme_stylesheet_url'] = theme_stylesheet_url
+    app.jinja_env.globals['custom_stylesheet_url'] = custom_stylesheet_url
+    app.jinja_env.globals['theme_label'] = theme_label
     app.jinja_env.globals['current_branding'] = current_branding   # for macro files, which see no context values
     app.jinja_env.globals['file_exists'] = os.path.exists
     app.jinja_env.globals['first_paragraph'] = first_paragraph
