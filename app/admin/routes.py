@@ -74,7 +74,7 @@ from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
 from app.utils import canonical_host, captcha_enabled, render_template, permission_required, permission_held_anywhere, admin_required, set_setting, get_setting, gibberish, markdown_to_html, \
     max_album_images, \
-    moderating_communities, joined_communities, finalize_user_setup, theme_list, blocked_phrases, blocked_referrers, \
+    moderating_communities, joined_communities, finalize_user_setup, theme_choices, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
     LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, PAGE_MAX_BYTES, \
     download_defeds, instance_banned, login_required, referrer, \
@@ -615,7 +615,8 @@ def admin_domain_branding(domain_id):
         return redirect(url_for('admin.admin_site'))
     branding = db.session.get(DomainBranding, row.id)
     form = DomainBrandingForm()
-    form.default_theme.choices = select_choices([('', _('The site default'))] + theme_list())
+    form.default_theme.choices = select_choices([('', _('The site default'))] +
+                                                theme_choices(row.id, branding.default_theme if branding else ''))
     if form.validate_on_submit():
         # A field the post leaves out is blank, as an emptied one is: it inherits
         values = {field: getattr(form, field).data or '' for field in BRANDING_TEXT_FIELDS}
@@ -693,7 +694,7 @@ def admin_misc():
     site = db.session.get(Site, 1)
     if site is None:
         site = Site()
-    form.default_theme.choices = select_choices(theme_list())
+    form.default_theme.choices = select_choices(theme_choices(default_domain().id, site.default_theme))
     form.language_id.choices = select_choices(languages_for_form(all_languages=True))
     form.oauth_admin_role.choices = select_choices([(0, ADMIN_SCOPE_ROLE_DEFAULT)] +
                                                    [(role.id, role.name) for role in Role.query.order_by(Role.name)])

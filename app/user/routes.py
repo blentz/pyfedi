@@ -59,7 +59,7 @@ from urllib.parse import urlsplit
 from app.utils import etag_stamp, feed_open_to_clause
 from app.utils import render_template, markdown_to_html, user_access, markdown_to_text, shorten_string, back, user_banned_from_community, \
     gibberish, community_membership, user_filters_home, \
-    user_filters_posts, user_filters_replies, theme_list, \
+    user_filters_posts, user_filters_replies, theme_choices, \
     blocked_users, add_to_modlog, \
     blocked_communities, piefed_markdown_to_lemmy_markdown, \
     read_language_choices, request_etag_matches, return_304, notif_id_to_string, \
@@ -685,7 +685,7 @@ def user_settings():
     if user is None:
         abort(404)
     form = SettingsForm()
-    form.theme.choices = select_choices(theme_list())
+    form.theme.choices = select_choices(theme_choices(current_storefront().id, user.theme))
     form.interface_language.choices = select_choices([
         ('', _l('Auto-detect')),
         ('eu', _l('Basque')),

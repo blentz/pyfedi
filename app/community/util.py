@@ -34,7 +34,7 @@ from app.models import Community, File, PostReply, Post, utcnow, CommunityMember
 from app.local_names import local_named, named_by_actor
 from app.storefront import domain_for_host, is_hosted_server
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
-    store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_list, \
+    store_files_in_s3, guess_mime_type, patch_db_session, instance_allowed, get_setting, scale_gif, theme_choices, \
     add_to_modlog, recipients_for, sanitize_svg, can_create_post, can_create_post_reply, save_image_without_metadata
 from sqlalchemy import desc, text
 import os
@@ -1340,8 +1340,9 @@ def is_bad_name(community_name: str) -> bool:
     ]
     return any(badword in name_lower for badword in seven_things_plus)
 
-def community_theme_list():
-    community_themes = theme_list()
+def community_theme_list(domain_id: int | None = None, current: str | None = ''):
+    """A community's theme picker: Disabled, then `theme_choices` for the community's home domain `domain_id`."""
+    community_themes = theme_choices(domain_id, current)
     community_themes.insert(0,('disabled', _l('Disabled')))
     return community_themes
 

@@ -376,9 +376,9 @@ COMMUNITY_SETTINGS = ('private', 'topic_id', 'theme', 'posting_warning', 'nsfl',
                       'post_url_type')
 
 
-def _refuse_community_settings_the_form_would_not_offer(settings):
+def _refuse_community_settings_the_form_would_not_offer(settings, community):
     """An API caller is held to the choices the web edit form offers."""
-    choices = {'theme': community_theme_list(), 'invitations': EditCommunityForm.joining_options,
+    choices = {'theme': community_theme_list(community.home_domain().id, community.theme), 'invitations': EditCommunityForm.joining_options,
                'default_layout': EditCommunityForm.layouts, 'default_post_type': EditCommunityForm.post_types,
                'downvote_accept_mode': EditCommunityForm.downvote_accept_modes,
                'post_url_type': EditCommunityForm.url_types}
@@ -437,7 +437,7 @@ def edit_community(input, community, src, auth=None, uploaded_icon_file=None, up
             if value and _as_url(value) is None:
                 raise Exception(f'{field} must be an http:// or https:// url')
         settings = {key: input[key] for key in COMMUNITY_SETTINGS if key in input}
-        _refuse_community_settings_the_form_would_not_offer(settings)
+        _refuse_community_settings_the_form_would_not_offer(settings, community)
 
         description_html = markdown_to_html(description, link_base=link_base)
 

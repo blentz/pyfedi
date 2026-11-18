@@ -86,7 +86,8 @@ from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, DomainInfo
     act_in_this_request, acting_as_default, acting_domain, domain_authority, \
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_hosted_uri, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from app.branding import branding_for
-from app.custom_themes import custom_theme_here, custom_theme_id, is_shipped, theme_counts, theme_version
+from app.custom_themes import custom_identifier, custom_theme_here, custom_theme_id, custom_themes_for, is_shipped, \
+    theme_counts, theme_version
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -5310,6 +5311,18 @@ def theme_list():
                 theme_settings = json.loads(file_get_contents(f'app/templates/themes/{dir}/{dir}.json'))
                 result.append((dir, theme_settings['name']))
     return [('piefed', 'PieFed')] + sorted(result)
+
+
+def theme_choices(domain_id: int | None, current: str | None = '') -> list[tuple[str, str]]:
+    """What a theme picker for something on domain `domain_id` offers (custom themes spec §3.4): `theme_list()`, then
+    that domain's custom themes that are not retired. A retired one is added only when it is `current`, the field's
+    saved value, so a form saved unchanged keeps it (CT9)."""
+    custom = [(custom_identifier(theme.id), _('%(name)s (custom)', name=theme.name))
+              for theme in custom_themes_for(domain_id, include_retired=False)] if domain_id is not None else []
+    retired = custom_theme_here(current, domain_by_id(domain_id)) if domain_id is not None else None
+    if retired is not None and retired.retired:
+        custom.append((current, _('%(name)s (retired)', name=retired.name)))
+    return theme_list() + custom
 
 
 def sha256_digest(input_string):

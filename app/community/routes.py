@@ -132,7 +132,7 @@ def add_local():
         form.nsfl.render_kw = {'disabled': True}
 
     form.languages.choices = select_choices(languages_for_form(all_languages=True))
-    form.theme.choices = select_choices(community_theme_list())
+    form.theme.choices = select_choices(community_theme_list(current_user.home_domain().id))   # where it will live
 
     if form.validate_on_submit():
         # No slugify here any more: AddCommunityForm.validate normalises before
@@ -1698,7 +1698,7 @@ def community_edit(community_id: int):
     if can_moderate(community, current_user):
         form = EditCommunityForm()
         form.topic.choices = select_choices(topics_for_form(0))
-        form.theme.choices = select_choices(community_theme_list())
+        form.theme.choices = select_choices(community_theme_list(community.home_domain().id, community.theme))
         form.languages.choices = select_choices(languages_for_form(all_languages=True))
         if g.site.enable_nsfw is False:
             form.nsfw.render_kw = {'disabled': True}
