@@ -6350,6 +6350,40 @@ class DomainBranding(db.Model):
     community_sidebar = db.Column(db.Text)
 
 
+class CustomTheme(db.Model):
+    """A theme a domain's theme holders made by copying another: CSS plus uploaded files (custom themes spec §3.1).
+    Theme columns name it `custom:<id>` (app.custom_themes). It counts only on its own domain."""
+    __tablename__ = 'custom_theme'
+    __table_args__ = (
+        Index('ix_custom_theme_domain_name', 'site_domain_id', func.lower(text('name')), unique=True),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_custom_theme_site_domain_id',
+                                                         ondelete='CASCADE'), nullable=False, index=True)
+    name = db.Column(db.String(100), nullable=False)
+    base_theme = db.Column(db.String(20), nullable=False)   # the shipped theme whose templates and scripts.js render
+    css = db.Column(db.Text, nullable=False, default='', server_default='')
+    retired = db.Column(db.Boolean, nullable=False, default=False, server_default='false')   # offered in no picker
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    updated_by = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_custom_theme_updated_by', ondelete='SET NULL'))
+    files = db.relationship('CustomThemeFile', backref='theme', cascade='all, delete-orphan', passive_deletes=True,
+                            order_by='CustomThemeFile.filename')
+
+
+class CustomThemeFile(db.Model):
+    """An image or font a custom theme's CSS names as `url(files/<filename>)`; stored at `path`."""
+    __tablename__ = 'custom_theme_file'
+    __table_args__ = (db.UniqueConstraint('custom_theme_id', 'filename', name='uq_custom_theme_file_name'),)
+    id = db.Column(db.Integer, primary_key=True)
+    custom_theme_id = db.Column(db.Integer, db.ForeignKey('custom_theme.id', name='fk_custom_theme_file_theme_id',
+                                                          ondelete='CASCADE'), nullable=False, index=True)
+    filename = db.Column(db.String(100), nullable=False)
+    path = db.Column(db.String(255), nullable=False)
+    mime_type = db.Column(db.String(64), nullable=False)
+    size = db.Column(db.Integer, nullable=False)
+
+
 class InstanceInUse(ValueError):
     """A new domain would take over an instance row that is not ours to take."""
 

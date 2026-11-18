@@ -216,6 +216,12 @@ class Config(object):
     # Largest request body accepted, in bytes; anything bigger is refused with 413 before it is read
     MAX_CONTENT_LENGTH = int(os.environ.get('MAX_CONTENT_LENGTH') or 100 * 1024 * 1024)
 
+    # Custom themes' limits, in bytes and files (custom themes spec CT8)
+    CUSTOM_THEME_MAX_FILE_BYTES = int(os.environ.get('CUSTOM_THEME_MAX_FILE_BYTES') or 2 * 1024 * 1024)
+    CUSTOM_THEME_MAX_BYTES = int(os.environ.get('CUSTOM_THEME_MAX_BYTES') or 10 * 1024 * 1024)
+    CUSTOM_THEME_MAX_FILES = int(os.environ.get('CUSTOM_THEME_MAX_FILES') or 50)
+    CUSTOM_THEME_MAX_CSS_BYTES = int(os.environ.get('CUSTOM_THEME_MAX_CSS_BYTES') or 512 * 1024)
+
     # Where the onion remote-media proxy caches fetched files; never inside media/
     MEDIA_PROXY_DIR = os.environ.get('MEDIA_PROXY_DIR') or os.path.join(basedir, 'media_proxy')
     # Free bytes a fill leaves on the cache's disk; unset means 20 GiB (DISK_RESERVE in app/onion_media_fill.py),
