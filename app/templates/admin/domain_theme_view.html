@@ -1,0 +1,23 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_domains' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h1>{{ display_name }}</h1>
+        <p>{{ _('This theme ships with PieFed and cannot be changed. Copy it to make a version of your own.') }}</p>
+        <p><a href="{{ url_for('admin.admin_domain_themes', domain_id=row.id) }}">{{ _('Back to themes') }}</a></p>
+        {% if css %}
+        <pre class="border p-2"><code>{{ css }}</code></pre>
+        {% else %}
+        <p>{{ _('This theme has no CSS of its own: it is PieFed\'s standard look.') }}</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

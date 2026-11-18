@@ -46,6 +46,9 @@
                         <td>{{ _('Yes') if row.federates else _('No') }}</td>
                         <td>{{ row.registration }}</td>
                         <td>
+                            {% if row.id in theme_rows %}
+                            <a href="{{ url_for('admin.admin_domain_themes', domain_id=row.id) }}">{{ _('Themes') }}</a>{% if not row.is_default %} |{% endif %}
+                            {% endif %}
                             {% if not row.is_default %}
                             <a href="{{ url_for('admin.admin_domain_branding', domain_id=row.id) }}">{{ _('Branding') }}</a> |
                             <a href="{{ url_for('admin.admin_domain_sidebar', domain_id=row.id) }}">{{ _('Sidebar') }}</a>

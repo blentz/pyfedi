@@ -25,6 +25,8 @@ from wtforms import Label
 from app import db, celery, cache
 from app.cms import cms_nav_links_changed
 from app.branding import ends_inside_markup, offsite_references
+from app.custom_themes import ThemeNameError, check_name, copy_theme, custom_themes_for, in_use, is_shipped, \
+    shipped_css, shipped_name, shipped_themes, uses
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.local_only import accounts_shown_here_sql, domain_has_owners, user_local_only, without_local_only, without_local_only_actors
@@ -63,7 +65,7 @@ from app.complimentary import complimentary_of
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, Domain, \
-    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding, Referral
+    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding, Referral, CustomTheme
 from app.referral import DEFAULT_GENERATORS, GENERATOR_CHOICES, GENERATORS_SETTING, MAX_PER_CODE_SETTING, MAX_PER_USER_SETTING
 from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
 from app.onion_media import DEFAULT_CACHE_BYTES
@@ -531,7 +533,8 @@ def admin_domains():
     rows = db.session.query(SiteDomain).filter(true() if can_manage else scope.clause(SiteDomain.id)) \
         .order_by(SiteDomain.id).all()
     return render_template('admin/domains.html', title=_('Domains'), form=form, rows=rows, can_manage=can_manage,
-                           implicit_default=default_domain() if not rows and can_manage else None)
+                           implicit_default=default_domain() if not rows and can_manage else None,
+                           theme_rows={row.id for row in rows if may_manage_themes(row)})
 
 
 @bp.route('/domains/<int:domain_id>/delete', methods=['POST'])
@@ -602,6 +605,130 @@ def domain_settings_refusal(row: SiteDomain, form: DomainSettingsForm, usable_of
         return _('A paid domain needs a subscription that is on offer on that domain. On an onion domain that means one from '
                  'BTCPay Server with an .onion address of its own.')
     return None
+
+
+def may_manage_themes(row: SiteDomain) -> bool:
+    """Whether the current user manages domain `row`'s custom themes (custom themes spec CT4): `edit domain branding`
+    on it, or for the first domain, whose branding is the site settings, `change instance settings`."""
+    if row.is_default:
+        return user_access('change instance settings', current_user.get_id())
+    return user_access('edit domain branding', current_user.get_id(), on=row)
+
+
+def _themes_domain(domain_id: int) -> SiteDomain:
+    """The domain whose themes a request is about; 404 when there is none, 403 unless the user manages its themes."""
+    row = db.session.get(SiteDomain, domain_id) or abort(404)
+    if not may_manage_themes(row):
+        abort(403)
+    return row
+
+
+def _domain_theme(row: SiteDomain, theme_id: int) -> CustomTheme:
+    """Domain `row`'s custom theme `theme_id`; 404 for one it does not own, so another domain's is never reached."""
+    theme = db.session.get(CustomTheme, theme_id)
+    if theme is None or theme.site_domain_id != row.id:
+        abort(404)
+    return theme
+
+
+def _log_theme(action: str, row: SiteDomain, name: str, reason: str = '') -> None:
+    add_to_modlog(action, actor=current_user, reason=reason, link_text=name,
+                  link=url_for('admin.admin_domain_themes', domain_id=row.id), site_domain_id=row.id)
+
+
+def _describe_uses(found: dict) -> str:
+    parts = []
+    if found['domain_default']:
+        parts.append(_('the domain\'s default theme'))
+    if found['users']:
+        parts.append(ngettext('%(num)d person\'s own theme', '%(num)d people\'s own theme', found['users']))
+    if found['communities']:
+        parts.append(ngettext('%(num)d community\'s theme', '%(num)d communities\' theme', found['communities']))
+    return ', '.join(parts)
+
+
+@bp.route('/domains/<int:domain_id>/themes', methods=['GET'])
+@login_required
+def admin_domain_themes(domain_id):
+    """A domain's themes (custom themes spec §3.5): the shipped ones, to view and copy, and its own."""
+    row = _themes_domain(domain_id)
+    shipped = [(name, shipped_name(name)) for name in shipped_themes()]
+    custom = [(theme, uses(theme)) for theme in custom_themes_for(row.id, include_retired=True)]
+    return render_template('admin/domain_themes.html', title=_('Themes: %(domain)s', domain=row.domain), row=row,
+                           shipped=shipped, custom=custom, describe_uses=_describe_uses)
+
+
+@bp.route('/domains/<int:domain_id>/themes/shipped/<name>', methods=['GET'])
+@login_required
+def admin_domain_shipped_theme(domain_id, name):
+    """A shipped theme's CSS, read-only (CT1)."""
+    row = _themes_domain(domain_id)
+    if name != 'piefed' and not is_shipped(name):
+        abort(404)
+    return render_template('admin/domain_theme_view.html', title=shipped_name(name), row=row, name=name,
+                           display_name=shipped_name(name), css=shipped_css(name))
+
+
+@bp.route('/domains/<int:domain_id>/themes/copy', methods=['POST'])
+@login_required
+def admin_domain_theme_copy(domain_id):
+    """Copy a shipped theme, or one of this domain's own, into a new custom theme of this domain."""
+    row = _themes_domain(domain_id)
+    try:
+        theme = copy_theme(request.form.get('source', ''), row.id, current_user.id)
+    except ValueError:
+        abort(400)
+    _log_theme('create_theme', row, theme.name)
+    flash(_('Theme "%(name)s" created.', name=theme.name))
+    return redirect(url_for('admin.admin_domain_themes', domain_id=row.id))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/rename', methods=['POST'])
+@login_required
+def admin_domain_theme_rename(domain_id, theme_id):
+    row = _themes_domain(domain_id)
+    theme = _domain_theme(row, theme_id)
+    try:
+        name = check_name(request.form.get('name', ''), row.id, theme.id)
+    except ThemeNameError as error:
+        flash(_('The theme was not renamed: %(why)s', why=str(error)), 'error')
+    else:
+        old, theme.name, theme.updated_by = theme.name, name, current_user.id
+        db.session.commit()
+        _log_theme('rename_theme', row, name, reason=old)
+        flash(_('Theme renamed.'))
+    return redirect(url_for('admin.admin_domain_themes', domain_id=row.id))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/<any(retire, unretire):change>', methods=['POST'])
+@login_required
+def admin_domain_theme_retire(domain_id, theme_id, change):
+    """Retire a theme (offered in no picker, still shown where chosen: CT9), or offer it again."""
+    row = _themes_domain(domain_id)
+    theme = _domain_theme(row, theme_id)
+    theme.retired, theme.updated_by = change == 'retire', current_user.id
+    db.session.commit()
+    _log_theme(f'{change}_theme', row, theme.name)
+    flash(_('Theme retired.') if theme.retired else _('Theme offered again.'))
+    return redirect(url_for('admin.admin_domain_themes', domain_id=row.id))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/delete', methods=['POST'])
+@login_required
+def admin_domain_theme_delete(domain_id, theme_id):
+    """Delete a theme nobody uses (CT7). One in use stays, and the message says where it is used."""
+    row = _themes_domain(domain_id)
+    theme = _domain_theme(row, theme_id)
+    if in_use(theme):
+        flash(_('"%(name)s" is in use as %(uses)s, so it was not deleted. Retire it to stop offering it.',
+                name=theme.name, uses=_describe_uses(uses(theme))), 'error')
+    else:
+        name = theme.name
+        db.session.delete(theme)
+        db.session.commit()
+        _log_theme('delete_theme', row, name)
+        flash(_('Theme deleted.'))
+    return redirect(url_for('admin.admin_domain_themes', domain_id=row.id))
 
 
 @bp.route('/domains/<int:domain_id>/branding', methods=['GET', 'POST'])

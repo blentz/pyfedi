@@ -1,0 +1,83 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_domains' %}
+
+{% macro copy_button(source) -%}
+<form method="post" action="{{ url_for('admin.admin_domain_theme_copy', domain_id=row.id) }}" class="d-inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="source" value="{{ source }}">
+    <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Copy') }}</button>
+</form>
+{%- endmacro %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Themes: %(domain)s', domain=row.domain) }}</h1>
+        <p>{{ _('The themes that ship with PieFed cannot be changed, but any of them can be copied. A copy belongs to this domain: rename it, change its CSS and add images and fonts to it, then choose it as the domain\'s default theme. People and communities on this domain can choose it too.') }}</p>
+
+        <h2>{{ _('This domain\'s themes') }}</h2>
+        {% if custom %}
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr><th>{{ _('Name') }}</th><th>{{ _('Copied from') }}</th><th>{{ _('In use as') }}</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for theme, found in custom %}
+                    <tr>
+                        <td>
+                            <form method="post" action="{{ url_for('admin.admin_domain_theme_rename', domain_id=row.id, theme_id=theme.id) }}" class="d-flex gap-1">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="text" name="name" value="{{ theme.name }}" maxlength="100" class="form-control form-control-sm" aria-label="{{ _('Name') }}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Rename') }}</button>
+                            </form>
+                            {% if theme.retired %}<span class="badge bg-secondary">{{ _('retired') }}</span>{% endif %}
+                        </td>
+                        <td>{{ theme.base_theme }}</td>
+                        <td>{{ describe_uses(found) or _('Not in use') }}</td>
+                        <td class="text-nowrap">
+                            {{ copy_button('custom:' ~ theme.id) }}
+                            <form method="post" action="{{ url_for('admin.admin_domain_theme_retire', domain_id=row.id, theme_id=theme.id, change='unretire' if theme.retired else 'retire') }}" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Offer again') if theme.retired else _('Retire') }}</button>
+                            </form>
+                            <form method="post" action="{{ url_for('admin.admin_domain_theme_delete', domain_id=row.id, theme_id=theme.id) }}" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-outline-danger confirm_first">{{ _('Delete') }}</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="text-muted">{{ _('A retired theme is offered to nobody new, but still shows for everyone who already chose it. A theme in use cannot be deleted.') }}</p>
+        {% else %}
+        <p>{{ _('None yet. Copy one of the themes below to start.') }}</p>
+        {% endif %}
+
+        <h2>{{ _('Themes that ship with PieFed') }}</h2>
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <tbody>
+                    {% for name, display_name in shipped %}
+                    <tr>
+                        <td>{{ display_name }}</td>
+                        <td class="text-nowrap">
+                            <a href="{{ url_for('admin.admin_domain_shipped_theme', domain_id=row.id, name=name) }}" class="btn btn-sm btn-outline-secondary">{{ _('View CSS') }}</a>
+                            {{ copy_button(name) }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -6110,12 +6110,19 @@ class ModLog(db.Model):
         'revoke_role': _l('Revoked role'),
         'grant_expired': _l('Role expired'),
         'edit_offer_roles': _l("Changed a subscription's roles"),
+        'create_theme': _l('Created theme'),
+        'rename_theme': _l('Renamed theme'),
+        'edit_theme': _l('Edited theme'),
+        'retire_theme': _l('Retired theme'),
+        'unretire_theme': _l('Un-retired theme'),
+        'delete_theme': _l('Deleted theme'),
     }
 
     # Actions recorded for admins only, whatever the public_modlog setting (D942). Role changes are among them: a
     # grant of a role that is not listed publicly is not public either.
     admin_only_actions = {'masquerade', 'create_role', 'edit_role', 'delete_role', 'grant_role', 'change_grant_expiry',
-                          'revoke_role', 'grant_expired', 'edit_offer_roles'}
+                          'revoke_role', 'grant_expired', 'edit_offer_roles', 'create_theme', 'rename_theme',
+                          'edit_theme', 'retire_theme', 'unretire_theme', 'delete_theme'}
 
     def action_to_str(self):
         if self.action in self.action_map:

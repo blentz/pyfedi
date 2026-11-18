@@ -1,0 +1,356 @@
+"""The admin Themes page: list, copy, rename, retire, delete (custom themes plan, Task 5; spec §3.2, §3.5, §3.6).
+
+Theme holders of a domain are `edit domain branding` holders on it, or for the first domain `change instance
+settings` holders (CT4). Every route checks that, and a theme is reached only through the domain that owns it."""
+import hashlib
+import os
+
+import pytest
+from flask import g, session as flask_session
+from flask_wtf.csrf import generate_csrf
+from markupsafe import escape
+
+from app import db
+from app.custom_themes import (THEMES_DIR, copy_theme, custom_identifier, rewrite_relative_urls, shipped_css,
+                               shipped_name, shipped_themes, storefront)
+from app.models import CustomTheme, DomainBranding, ModLog, Role, RolePermission, Site, User
+from app.storefront import clear_domain_cache
+from tests.factories import grant_permission, grant_role, limit_role
+from tests.conftest import forget_login
+from tests.two_domains import FIRST, two_domains  # noqa: F401  (a fixture)
+
+pytestmark = pytest.mark.usefixtures('site')
+BASE = f'https://{FIRST}'
+
+
+def client_for(app, user):
+    client = app.test_client()
+    with client.session_transaction(base_url=BASE) as session:
+        session['_user_id'] = str(user.id)
+        session['_fresh'] = True
+    return client
+
+
+def csrf(app, client):
+    """A CSRF token for `client`'s session. The test app context outlives each request, so `g` still holds the token
+    made for the last caller: it is dropped first."""
+    g.pop('csrf_token', None)
+    with app.test_request_context():
+        token = generate_csrf()
+        raw = flask_session['csrf_token']
+    g.pop('csrf_token', None)
+    with client.session_transaction(base_url=BASE) as session:
+        session['csrf_token'] = raw
+    return token
+
+
+class Actor:
+    """A logged-in client that posts with a CSRF token. Each request forgets the last caller's login, which
+    Flask-Login keeps in the shared `g`."""
+    def __init__(self, app, user):
+        self.app, self.user, self.client = app, user, client_for(app, user)
+
+    def get(self, path):
+        forget_login()
+        return self.client.get(path, base_url=BASE)
+
+    def post(self, path, **data):
+        token = csrf(self.app, self.client)
+        forget_login()
+        return self.client.post(path, data={'csrf_token': token, **data}, base_url=BASE)
+
+
+@pytest.fixture
+def world(app, two_domains):
+    default, onion = two_domains.domains
+    two_domains.local_user('founder', default)   # user 1 holds every permission: no actor here may be it
+    holder = two_domains.local_user('holder', default)       # edit domain branding on the onion only
+    role = Role(name='onion branding')
+    db.session.add(role)
+    db.session.commit()
+    db.session.add(RolePermission(role_id=role.id, permission='edit domain branding'))
+    db.session.commit()
+    limit_role(role, onion)
+    grant_role(holder, role)
+    admin = two_domains.local_user('siteadmin', default)     # every domain, the first included
+    grant_permission(admin, 'change instance settings')
+    grant_permission(admin, 'edit domain branding')
+    db.session.add_all([CustomTheme(site_domain_id=default.id, name='Daylight', base_theme='forest', css='.day{}'),
+                        CustomTheme(site_domain_id=onion.id, name='Night', base_theme='forest', css='.night{}')])
+    db.session.commit()
+    clear_domain_cache()
+    themes = {t.name: t for t in db.session.query(CustomTheme)}
+    return dict(default=default, onion=onion, holder=Actor(app, holder), admin=Actor(app, admin),
+                day=themes['Daylight'], night=themes['Night'], two_domains=two_domains)
+
+
+def themes_url(domain, rest=''):
+    return f'/admin/domains/{domain.id}/themes{rest}'
+
+
+# --- Who may reach what (Review Focus 1) ---
+
+def test_a_holder_sees_the_themes_link_only_for_their_domain(world):
+    page = world['holder'].get('/admin/domains').get_data(as_text=True)
+    assert themes_url(world['onion']) in page
+    assert themes_url(world['default']) not in page
+
+
+def test_the_site_admin_sees_every_domains_themes_link(world):
+    page = world['admin'].get('/admin/domains').get_data(as_text=True)
+    assert themes_url(world['onion']) in page and themes_url(world['default']) in page
+
+
+def test_the_list_shows_shipped_themes_and_the_domains_own(world):
+    response = world['holder'].get(themes_url(world['onion']))
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert 'Night' in page and 'Daylight' not in page
+    assert 'Forest' in page and 'PieFed' in page
+
+
+def test_a_holder_cannot_reach_another_domains_themes(world):
+    holder, default, day = world['holder'], world['default'], world['day']
+    before = (day.name, day.retired, day.css)
+    assert holder.get(themes_url(default)).status_code == 403
+    assert holder.get(themes_url(default, '/shipped/forest')).status_code == 403
+    assert holder.post(themes_url(default, '/copy'), source='forest').status_code == 403
+    for action in ('rename', 'retire', 'unretire', 'delete'):
+        assert holder.post(themes_url(default, f'/{day.id}/{action}'), name='Taken').status_code == 403
+        # through the domain they do hold: the theme is not that domain's, so it is not found
+        assert holder.post(themes_url(world['onion'], f'/{day.id}/{action}'), name='Taken').status_code == 404
+    assert holder.post(themes_url(world['onion'], '/copy'), source=custom_identifier(day.id)).status_code == 400
+    db.session.expire_all()
+    still = db.session.get(CustomTheme, day.id)
+    assert (still.name, still.retired, still.css) == before
+    assert db.session.query(CustomTheme).count() == 2
+
+
+def test_the_first_domains_themes_need_change_instance_settings(app, world):
+    branding_only = world['two_domains'].local_user('brandingonly', world['default'])
+    grant_permission(branding_only, 'edit domain branding')
+    actor = Actor(app, branding_only)
+    assert actor.get(themes_url(world['default'])).status_code == 403
+    assert actor.get(themes_url(world['onion'])).status_code == 200
+    assert world['admin'].get(themes_url(world['default'])).status_code == 200
+
+
+def test_an_unknown_domain_or_theme_is_not_found(world):
+    admin = world['admin']
+    assert admin.get('/admin/domains/999999/themes').status_code == 404
+    assert admin.post(themes_url(world['onion'], '/999999/retire')).status_code == 404
+    assert admin.get(themes_url(world['onion'], '/shipped/nope')).status_code == 404
+    assert admin.get(themes_url(world['onion'], '/shipped/hacker_bbs_shared')).status_code == 404
+
+
+def test_a_post_without_a_csrf_token_is_refused(world):
+    forget_login()
+    response = world['holder'].client.post(themes_url(world['onion'], '/copy'), data={'source': 'forest'},
+                                           base_url=BASE)
+    assert response.status_code == 400
+
+
+# --- Viewing and copying ---
+
+def test_viewing_a_shipped_themes_css(world):
+    page = world['holder'].get(themes_url(world['onion'], '/shipped/forest')).get_data(as_text=True)
+    assert 'Forest' in page
+    assert str(escape(shipped_css('forest')))[:300] in page
+    page = world['holder'].get(themes_url(world['onion'], '/shipped/piefed')).get_data(as_text=True)
+    assert 'standard look' in page
+
+
+def test_copying_a_shipped_theme(world):
+    """Review Focus 5: the copy's relative @import resolves where the shipped theme's did."""
+    response = world['holder'].post(themes_url(world['onion'], '/copy'), source='hacker_bbs_amber')
+    assert response.status_code == 302
+    copy = db.session.query(CustomTheme).filter_by(site_domain_id=world['onion'].id,
+                                                   base_theme='hacker_bbs_amber').one()
+    assert copy.name == f'Copy of {shipped_name("hacker_bbs_amber")}'
+    assert '@import url("/static/themes/hacker_bbs_shared/base.css?v=4")' in copy.css
+    assert '../' not in copy.css
+    assert copy.retired is False and copy.updated_by == world['holder'].user.id
+    log = db.session.query(ModLog).filter_by(action='create_theme').one()
+    assert log.site_domain_id == world['onion'].id and log.link_text == copy.name
+
+
+def test_copying_piefed_gives_an_empty_stylesheet(world):
+    world['holder'].post(themes_url(world['onion'], '/copy'), source='piefed')
+    copy = db.session.query(CustomTheme).filter_by(base_theme='piefed').one()
+    assert copy.css == '' and copy.name == 'Copy of PieFed'
+
+
+def test_copying_an_own_custom_theme_and_names_stay_unique(world):
+    night = world['night']
+    for _ in range(2):
+        world['holder'].post(themes_url(world['onion'], '/copy'), source=custom_identifier(night.id))
+    names = sorted(t.name for t in db.session.query(CustomTheme).filter_by(site_domain_id=world['onion'].id))
+    assert names == ['Copy of Night', 'Copy of Night (2)', 'Night']
+    copy = db.session.query(CustomTheme).filter_by(name='Copy of Night').one()
+    assert copy.css == '.night{}' and copy.base_theme == 'forest'
+
+
+@pytest.mark.parametrize('source', ['', 'nope', 'custom:999999', '../forest', 'hacker_bbs_shared'])
+def test_copying_nothing_copyable_is_a_400(world, source):
+    assert world['holder'].post(themes_url(world['onion'], '/copy'), source=source).status_code == 400
+
+
+@pytest.mark.parametrize('name', shipped_themes())
+def test_every_shipped_copy_has_no_relative_reference_left(app, name):
+    css = rewrite_relative_urls(shipped_css(name), name)
+    text, spans = storefront._css_url_spans(css)
+    for start, _end, url in spans:
+        quoted = start > 0 and text[start - 1] in '"\''
+        before = text[:start - 1].rstrip().lower()
+        if quoted and not (before.endswith('url(') or before.endswith('@import')):
+            continue
+        assert url.startswith(('/', 'data:', '#', 'http:', 'https:')), (name, url)
+
+
+@pytest.mark.parametrize('css, expected', [
+    ('a{background:url(img/x.png)}', 'a{background:url(/static/themes/base/img/x.png)}'),
+    ('a{background:url("./x.png")}', 'a{background:url("/static/themes/base/x.png")}'),
+    ("@import '../shared/a.css?v=2';", "@import '/static/themes/shared/a.css?v=2';"),
+    ('@import url(../shared/a.css#top);', '@import url(/static/themes/shared/a.css#top);'),
+    ('a{font-family:"My Font"; content:"x.png"}', 'a{font-family:"My Font"; content:"x.png"}'),
+    ('a{background:url(/static/images/x.gif)}', 'a{background:url(/static/images/x.gif)}'),
+    ('a{background:url(data:image/png;base64,AAAA)}', 'a{background:url(data:image/png;base64,AAAA)}'),
+    ('a{background:url(https://example.org/x.png)}', 'a{background:url(https://example.org/x.png)}'),
+    ('a{mask:url(#m)}', 'a{mask:url(#m)}'),
+    ('a{background:url("my image.png")}', 'a{background:url("/static/themes/base/my%20image.png")}'),
+    ('/* url(x.png) */ a{}', '/* url(x.png) */ a{}'),
+    ('a{background:url()}', 'a{background:url()}'),
+])
+def test_rewrite_relative_urls(css, expected):
+    assert rewrite_relative_urls(css, 'base') == expected
+
+
+def test_copy_theme_refuses_another_domains_theme(world):
+    with pytest.raises(ValueError):
+        copy_theme(custom_identifier(world['day'].id), world['onion'].id, None)
+
+
+# --- Rename, retire ---
+
+def test_renaming(world):
+    night = world['night']
+    world['holder'].post(themes_url(world['onion'], f'/{night.id}/rename'), name='  Midnight  ')
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, night.id).name == 'Midnight'
+    log = db.session.query(ModLog).filter_by(action='rename_theme').one()
+    assert log.reason == 'Night' and log.link_text == 'Midnight'
+
+
+@pytest.mark.parametrize('name', ['', '   ', 'x' * 101, 'Forest', 'forest', 'PieFed', 'NIGHT2'])
+def test_a_name_that_cannot_be_used_is_refused(world, name):
+    onion = world['onion']
+    db.session.add(CustomTheme(site_domain_id=onion.id, name='Night2', base_theme='forest'))
+    db.session.commit()
+    night = world['night']
+    response = world['holder'].post(themes_url(onion, f'/{night.id}/rename'), name=name)
+    assert response.status_code == 302
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, night.id).name == 'Night'
+
+
+def test_renaming_to_its_own_name_in_another_case_is_allowed(world):
+    night = world['night']
+    world['holder'].post(themes_url(world['onion'], f'/{night.id}/rename'), name='NIGHT')
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, night.id).name == 'NIGHT'
+
+
+def test_retiring_and_offering_again(world):
+    night, onion = world['night'], world['onion']
+    world['holder'].post(themes_url(onion, f'/{night.id}/retire'))
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, night.id).retired is True
+    assert 'retired' in world['holder'].get(themes_url(onion)).get_data(as_text=True)
+    world['holder'].post(themes_url(onion, f'/{night.id}/unretire'))
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, night.id).retired is False
+    assert [log.action for log in db.session.query(ModLog).order_by(ModLog.id)] == ['retire_theme', 'unretire_theme']
+
+
+def test_theme_actions_are_admin_only_in_the_modlog(world):
+    world['holder'].post(themes_url(world['onion'], f'/{world["night"].id}/retire'))
+    assert db.session.query(ModLog).filter_by(action='retire_theme').one().public is False
+
+
+# --- Delete (CT7, Review Focus 6) ---
+
+def use_as_domain_default(world, theme):
+    db.session.add(DomainBranding(site_domain_id=world['onion'].id, default_theme=custom_identifier(theme.id)))
+
+
+def use_by_a_user(world, theme):
+    world['two_domains'].local_user('picker', world['onion']).theme = custom_identifier(theme.id)
+
+
+def use_by_a_community(world, theme):
+    world['two_domains'].local_community('themed', world['onion']).theme = custom_identifier(theme.id)
+
+
+@pytest.mark.parametrize('use, said', [(use_as_domain_default, "domain's default theme"),
+                                       (use_by_a_user, "1 person's own theme"),
+                                       (use_by_a_community, "1 community's theme")])
+def test_a_theme_in_use_is_not_deleted(app, world, use, said):
+    night = world['night']
+    use(world, night)
+    db.session.commit()
+    clear_domain_cache()
+    response = world['holder'].post(themes_url(world['onion'], f'/{night.id}/delete'))
+    assert response.status_code == 302
+    assert db.session.get(CustomTheme, night.id) is not None
+    page = world['holder'].get(themes_url(world['onion'])).get_data(as_text=True)
+    assert said in page.replace('&#39;', "'")
+
+
+def test_the_site_default_counts_as_a_use_of_a_first_domain_theme(world):
+    day = world['day']
+    db.session.get(Site, 1).default_theme = custom_identifier(day.id)
+    db.session.commit()
+    world['admin'].post(themes_url(world['default'], f'/{day.id}/delete'))
+    assert db.session.get(CustomTheme, day.id) is not None
+
+
+def test_an_unused_theme_is_deleted(world):
+    night = world['night']
+    world['holder'].post(themes_url(world['onion'], f'/{night.id}/delete'))
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, night.id) is None
+    assert db.session.query(ModLog).filter_by(action='delete_theme').one().link_text == 'Night'
+
+
+def test_a_retired_theme_still_held_by_a_user_is_not_deleted(world):
+    night = world['night']
+    use_by_a_user(world, night)
+    night.retired = True
+    db.session.commit()
+    world['holder'].post(themes_url(world['onion'], f'/{night.id}/delete'))
+    assert db.session.get(CustomTheme, night.id) is not None
+    assert db.session.query(User).filter_by(theme=custom_identifier(night.id)).count() == 1
+
+
+# --- Shipped themes never change (CT1) ---
+
+def fingerprint():
+    found = {}
+    for root, _dirs, files in os.walk(THEMES_DIR):
+        for name in files:
+            path = os.path.join(root, name)
+            with open(path, 'rb') as file:
+                found[path] = (hashlib.sha256(file.read()).hexdigest(), os.path.getmtime(path))
+    return found
+
+
+def test_no_action_writes_under_the_shipped_themes(world):
+    before = fingerprint()
+    holder, onion = world['holder'], world['onion']
+    for name in shipped_themes():
+        holder.post(themes_url(onion, '/copy'), source=name)
+    for theme in db.session.query(CustomTheme).filter_by(site_domain_id=onion.id).all():
+        holder.post(themes_url(onion, f'/{theme.id}/rename'), name=f'Renamed {theme.id}')
+        holder.post(themes_url(onion, f'/{theme.id}/retire'))
+        holder.post(themes_url(onion, f'/{theme.id}/delete'))
+    assert fingerprint() == before
