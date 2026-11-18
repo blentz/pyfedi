@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import object_session as sa_object_session
 
 from app import db, cache, celery, plugins
+from app.custom_themes import federated_theme, received_theme
 from app.activitypub.signature import signed_get_capped, signed_get_request, send_post_request, default_context, RsaKeys
 from app.branding import own_value
 from app.constants import *
@@ -1124,8 +1125,8 @@ def community_actor_data(community: Community) -> dict:
     if community.description_html:
         actor_data["summary"] = community.description_html
         actor_data['source'] = {'content': community.description, 'mediaType': 'text/markdown'}
-    if community.theme:
-        actor_data["theme"] = community.theme
+    if federated_theme(community.theme):
+        actor_data["theme"] = federated_theme(community.theme)   # a custom theme as its base theme (custom themes §3.9)
     if community.icon_id is not None:
         icon_image = community.icon_image()
         if icon_image.startswith('http'):
@@ -1776,8 +1777,8 @@ def refresh_community_profile_task(community_id, activity_json=None):
                         else:
                             community.description = html_to_text(community.description_html)
                    
-                    if remote and 'theme' in activity_json and activity_json['theme']:
-                        community.theme = activity_json['theme']
+                    if remote and received_theme(activity_json.get('theme')):
+                        community.theme = received_theme(activity_json.get('theme'))   # shipped names only (§3.9)
                     icon_changed = cover_changed = False
                     pending_uploads = []
                     if 'icon' in activity_json:
@@ -2582,8 +2583,8 @@ def actor_json_to_model(activity_json, address, server):
             else:
                 community.description = html_to_text(community.description_html)
 
-        if 'theme' in activity_json and activity_json['theme']:
-            community.theme = activity_json['theme']
+        if received_theme(activity_json.get('theme')):
+            community.theme = received_theme(activity_json.get('theme'))   # shipped names only (custom themes §3.9)
 
         icon_entry = image_url_from(activity_json.get('icon'), prefer_last=True)
         if icon_entry:

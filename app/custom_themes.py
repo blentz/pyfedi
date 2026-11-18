@@ -60,3 +60,25 @@ def custom_theme_here(identifier: str | None, domain):
     theme_id = custom_theme_id(identifier)
     theme = db.session.get(models.CustomTheme, theme_id) if theme_id is not None else None
     return theme if theme is not None and theme.site_domain_id == domain.id else None
+
+
+# Theme values a peer's Group may carry that mean "no theme of its own": PieFed's own, and the community picker's off
+_PLAIN_THEMES = ('piefed', 'disabled')
+
+
+def federated_theme(identifier: str | None) -> str | None:
+    """What a local community's `theme` federates as (spec §3.9): a custom theme as its base theme, or nothing when
+    that is `piefed` or no longer ships; any other value as stored. Never `custom:<id>`."""
+    theme_id = custom_theme_id(identifier)
+    if theme_id is None:
+        return identifier or None
+    theme = db.session.get(models.CustomTheme, theme_id)
+    return theme.base_theme if theme is not None and is_shipped(theme.base_theme) else None
+
+
+def received_theme(value) -> str | None:
+    """A remote Group's `theme`, if it is one to store: a shipped theme's name, `piefed` or `disabled`. Anything else
+    (a custom theme's identifier, an unknown name, a non-string) is None and is not stored (spec §3.9)."""
+    if isinstance(value, str) and (value in _PLAIN_THEMES or is_shipped(value)):
+        return value
+    return None
