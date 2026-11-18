@@ -1,7 +1,12 @@
 # syntax=docker/dockerfile:1.4
 FROM python:3.14-slim AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt runs as root throughout (APT::Sandbox::User), and the base image's _apt-owned partial directories become root's,
+# so no build step needs CAP_DAC_OVERRIDE: root never has to write files another user owns. Hosts that withhold that
+# capability from containers (for example SELinux with virt_sandbox_use_all_caps off) can then build this image.
+RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-sandbox-root \
+    && chown root:root /var/lib/apt/lists/partial /var/cache/apt/archives/partial \
+    && apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     gcc \
     libc6-dev \
@@ -47,8 +52,13 @@ ARG TARGETARCH
 ARG SUPERCRONIC_VERSION=v0.2.49
 
 
-RUN adduser --disabled-password --gecos "" python && \
-    apt-get update && apt-get install -y --no-install-recommends \
+# apt as root, as in builder above, and the python user made without copying skeleton files into a home it already
+# owns (that copy, too, needs CAP_DAC_OVERRIDE): same uid/gid 1000, same /home/python, mode 700.
+RUN adduser --disabled-password --gecos "" --no-create-home python && \
+    install -d -m 700 -o python -g python /home/python && \
+    echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-sandbox-root \
+    && chown root:root /var/lib/apt/lists/partial /var/cache/apt/archives/partial \
+    && apt-get update && apt-get install -y --no-install-recommends \
     tini \
     ffmpeg \
     curl \
@@ -74,10 +84,11 @@ COPY --chown=python:python . /app
 
 WORKDIR /app
 
+# As the owner of /app: root writing into files python owns would need CAP_DAC_OVERRIDE (see builder above).
+USER python
 RUN (pybabel compile -d app/translations || true) && \
     chmod u+x ./entrypoint.sh ./entrypoint_celery.sh ./entrypoint_async.sh
 
-USER python
 EXPOSE 5000
 ENV CRON="false"
 
