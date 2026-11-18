@@ -335,6 +335,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 46 | `e5a8c2f7b4d1` sidebar_box_order | Adds `home_sidebar` and `community_sidebar` to `site` (default empty: the boxes in their usual order) and to `domain_branding` (NULL: the site's order). (`5c424327`) | No |
 | 47 | `f2b6d8a4c9e1` project_links | Adds `source_url`, `bug_report_url` and `get_involved_url` to `site`, each empty by default, which means upstream PieFed's. (`b65b4fd6`) | No |
 | 48 | `d7a2c5e9f3b1` user_also_known_as | Adds `also_known_as` (account aliases, NULL by default) to `user`. | No |
+| 49 | `e8b3d6a1f4c7` custom_themes | Creates `custom_theme` (a domain's own copy of a theme: name, base theme, CSS, retired) and `custom_theme_file` (its images and fonts). Both go with their domain. (`cfa0caf5`) | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -358,6 +359,7 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `require_signed_fetch` (admin Federation page) | off | Secure mode. ActivityPub GETs must be signed by an actor this instance already knows. Unsigned fetches of user, community and feed actors get a minimal document (inbox and key only); everything else is refused. Signed answers are kept out of shared caches. (`89cad496`, `fafdac03`, `7705d2f1`) |
 | `cross_origin_delete_delay` (admin Federation page) | 90 seconds | How long a moderator's Announced Delete of a post from another server waits before it is applied, unless the origin confirms the deletion first (`59a6cbec`). |
 | `relay_retention_days` (admin Relays page) | 7 | Relayed posts that nobody here engaged with are purged after this many days (`18ee6657`). |
+| `CUSTOM_THEME_MAX_FILE_BYTES`, `CUSTOM_THEME_MAX_BYTES`, `CUSTOM_THEME_MAX_FILES`, `CUSTOM_THEME_MAX_CSS_BYTES` | 2 MB, 10 MB, 50, 512 KB | Limits on a custom theme: each uploaded file, all of a theme's files together, how many files, and its stylesheet. Theme files are stored under `app/static/media/themes/`, with the other local media, so a backup of the media directory covers them. (`92f08764`, `b2d6c651`) |
 | `discovery_sync_per_host` (admin Discovery tab) | 0 (off) | How many of each host's top PeerTube channels and Castopod podcasts the instance actor follows and polls. Proactive sync does nothing until it is set (`cdc0ab1c`, `819fb1b4`). |
 | `discovery_external_search` (admin Discovery tab) | on | Lets search include PeerTube videos from the wider network through SepiaSearch. Each viewer must still tick the option (`35b61d6c`). |
 | `remote_image_cache_days` (admin Misc page) | 30 | **Now enforced.** Local copies of a remote post's images are deleted once the post arrived this many days ago, and pages load the image from its origin instead. 0 or empty keeps them forever. The column existed before but nothing read it, so an instance holding the old default of 30 starts evicting once `expire_old_media.sh` runs (see 2.2.1). (`f2182a54`) |
@@ -1197,6 +1199,12 @@ Also: the unread private-message count counts messages, notified or not
 
 **Activities this instance accepts**
 
+- **A community's `theme` is stored only when it names a shipped theme** (or
+  `piefed` or `disabled`). Any other value, including a non-string, is
+  ignored and the stored theme kept. Previously any string was stored and
+  later used to build a stylesheet path. A local community in a custom theme
+  federates its base theme's name, never the `custom:<id>` it stores
+  (`d400bb62`).
 - Followers-only and direct content is refused at ingest rather than stored
   as if public (`65c524b1`). Direct messages are unaffected.
 - An inbound Announce of a list refuses nested lists and processes at most
@@ -1936,6 +1944,7 @@ is described in 2.3 to 2.5:
 | Lemmy (W3) | `2026-11-10-lemmy-v3-design.md` | `/api/v3` for Jerboa, member endpoints |
 | gpodder (W4) | `2026-11-12-gpodder-sync-design.md` | App passwords, devices, subscriptions that join communities, episode actions that mark posts read |
 | Sidebar | | Box order and hiding per site and domain (`5c424327`) |
+| Custom themes | `2026-11-18-custom-themes-design.md` | A domain's theme holders copy a shipped theme, rename it, edit its CSS, add images and fonts, preview it and retire it; it is offered in every theme picker on that domain only. Shipped themes stay read-only (`cfa0caf5`..`1d59b744`) |
 | Project links | | Source, bug-report and get-involved URLs; nodeinfo and Mastodon source (`b65b4fd6`) |
 | HLS | | Optional HLS copies, backfill and delete, PeerTube streaming playlists (`8e94a322`) |
 | PeerTube for P2Play | | My videos, video reports (`c9683362`) |
