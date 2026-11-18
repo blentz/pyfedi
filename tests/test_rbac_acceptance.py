@@ -13,7 +13,7 @@ import pytest
 from flask import g
 
 from app import db
-from app.models import Community, Role, RoleGrant, SiteDomain, User, UserRegistration
+from app.models import Community, CustomTheme, Role, RoleGrant, SiteDomain, User, UserRegistration
 from app.permissions import shown_as_admin_ids
 from app.storefront import clear_domain_cache
 from tests.factories import admin_role, grant_role, make_community, make_instance, make_post, make_user
@@ -135,6 +135,29 @@ def test_a_holder_runs_x_and_nothing_else(world):
                  '/admin/topics', '/admin/media', '/admin/instances'):
         assert not opens(client, path), f'should be refused: {path}'
     assert world.grantee.id in shown_as_admin_ids(world.x.id) and world.grantee.id not in shown_as_admin_ids(world.y.id)
+
+
+def test_the_holder_manages_xs_themes_and_not_ys(world):
+    """Custom themes spec CT4: theme holders are `edit domain branding` holders, so the composed domain admin manages
+    X's custom themes, and Y's and the first domain's stay out of reach."""
+    build_and_grant(world)
+    client = as_grantee(world)
+    y_theme = CustomTheme(site_domain_id=world.y.id, name='Why', base_theme='forest')
+    db.session.add(y_theme)
+    db.session.commit()
+    assert opens(client, f'/admin/domains/{world.x.id}/themes')
+    first = SiteDomain.query.filter_by(is_default=True).first()
+    for path in [f'/admin/domains/{world.y.id}/themes'] + ([f'/admin/domains/{first.id}/themes'] if first else []):
+        assert not opens(client, path), f'should be refused: {path}'
+    token = csrf(world.app, client)
+    g.pop('_login_user', None)
+    assert client.post(f'/admin/domains/{world.x.id}/themes/copy',
+                       data={'csrf_token': token, 'source': 'forest'}).status_code == 302
+    assert CustomTheme.query.filter_by(site_domain_id=world.x.id).count() == 1
+    g.pop('_login_user', None)
+    assert client.post(f'/admin/domains/{world.y.id}/themes/{y_theme.id}/retire',
+                       data={'csrf_token': token}).status_code == 403
+    assert db.session.get(CustomTheme, y_theme.id).retired is False
 
 
 def test_the_holders_actions_land_on_x_and_are_refused_on_y(world):

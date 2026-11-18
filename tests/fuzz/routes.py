@@ -48,7 +48,7 @@ FAMILIES: dict[str, frozenset[str]] = {
     'oauth': frozenset({'oauth_server'}),
     'gpodder': frozenset({'gpodder'}),
     'activitypub': frozenset({'activitypub'}),
-    'static': frozenset({'static', 'bootstrap', 'onion_media'}),
+    'static': frozenset({'static', 'bootstrap', 'onion_media', 'custom_themes'}),
     'alpha': frozenset({'api_alpha', 'Admin', 'Comment', 'Community', 'Feed', 'Misc', 'Post', 'Private Message', 'Site',
                         'Topic', 'Upload', 'User'}),
     'mastodon': frozenset({'mastodon'}),
