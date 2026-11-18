@@ -158,9 +158,9 @@ class TestTheSettingsTheirServerSends:
         assert community.ap_featured_url == f'https://{PEER}/c/memes/featured'
 
     def test_a_theme_is_recorded(self, env):
-        community = refresh(env, {'theme': 'high-contrast'})
+        community = refresh(env, {'theme': 'high_contrast'})
 
-        assert community.theme == 'high-contrast'
+        assert community.theme == 'high_contrast'
 
     def test_a_document_with_none_of_them_changes_none_of_them(self, env):
         """Every one of these keys is optional, and most Group documents carry none. The

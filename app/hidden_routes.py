@@ -144,7 +144,9 @@ NON_OBJECT_ARGUMENTS = {
     # an activity: the result of one sent here, for its sender, and this storefront's own logged outbound ones, which
     # never name local-only content (it is never sent)
     'id': ('/activity_result/', '/activities/'),
-    'filename': ('/static/', '/bootstrap/static/'),
+    'filename': ('/static/', '/bootstrap/static/', '/theme/'),   # a static file, or a custom theme's image or font
+    # a domain's custom themes (custom themes spec): a theme, a shipped theme's name and what to do to one
+    'theme_id': ('/admin/domains/', '/theme/'), 'name': ('/admin/domains/',), 'change': ('/admin/domains/',),
 }
 
 # Routes that answer every id alike, so they tell nothing, and that an onion account must still reach wherever the link

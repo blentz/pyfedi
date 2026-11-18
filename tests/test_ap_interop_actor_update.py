@@ -443,7 +443,7 @@ def _hostile_group_document(community_id):
             'publicKey': {'publicKeyPem': ATTACKER_KEY},
             'followers': ATTACKER_FOLLOWERS, 'featured': ATTACKER_FEATURED, 'attributedTo': ATTACKER_MODERATORS,
             'inbox': ATTACKER_INBOX, 'endpoints': {'sharedInbox': ATTACKER_INBOX},
-            'postingWarning': 'attacker warning', 'theme': 'attacker', 'nsfl': True, 'genAI': True,
+            'postingWarning': 'attacker warning', 'theme': 'forest', 'nsfl': True, 'genAI': True,
             'postUrlType': 'ap',
             'tag': [{'type': 'lemmy:CommunityTag', 'id': f'{community_id}/tag/x', 'display_name': 'x'}]}
 
@@ -606,7 +606,7 @@ def test_the_same_document_for_a_remote_community_still_replaces_its_key(app, db
     assert community.ap_featured_url == ATTACKER_FEATURED
     assert community.ap_moderators_url == ATTACKER_MODERATORS
     assert community.posting_warning == 'attacker warning'
-    assert community.theme == 'attacker'
+    assert community.theme == 'forest'   # a shipped theme: the only kind a peer may set
     assert community.nsfl is True
     assert community.ai_generated is True
     assert community.post_url_type == 'ap'
