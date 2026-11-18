@@ -22,6 +22,37 @@
             {{ render_field(form.css) }}
             {{ render_field(form.submit) }}
         </form>
+
+        <h2 class="mt-4">{{ _('Images and fonts') }}</h2>
+        <p>{{ _('PNG, JPEG, GIF, WebP, AVIF and SVG images, and WOFF2, WOFF, TTF and OTF fonts, up to %(size)s each. Name a file in the CSS as shown.', size=file_limit) }}</p>
+        {% if custom_theme.files %}
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead><tr><th>{{ _('In the CSS') }}</th><th>{{ _('Type') }}</th><th>{{ _('Size') }}</th><th></th></tr></thead>
+                <tbody>
+                    {% for file in custom_theme.files %}
+                    <tr>
+                        <td><code>url(files/{{ file.filename }})</code></td>
+                        <td>{{ file.mime_type }}</td>
+                        <td>{{ file.size | human_filesize }}</td>
+                        <td>
+                            <form method="post" action="{{ url_for('admin.admin_domain_theme_file_delete', domain_id=row.id, theme_id=custom_theme.id, file_id=file.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">{{ _('Remove') }}</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('admin.admin_domain_theme_upload', domain_id=row.id, theme_id=custom_theme.id) }}" class="d-flex flex-wrap gap-2 align-items-center">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="file" name="file" class="form-control w-auto" accept="image/*,.woff2,.woff,.ttf,.otf" aria-label="{{ _('File') }}" required>
+            <label class="form-check-label"><input type="checkbox" name="replace" value="1" class="form-check-input"> {{ _('Replace a file of the same name') }}</label>
+            <button type="submit" class="btn btn-primary">{{ _('Upload') }}</button>
+        </form>
     </div>
 </div>
 {% endblock %}

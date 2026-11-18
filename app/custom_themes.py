@@ -5,12 +5,18 @@ theme's directory name, `piefed`, or `custom:<id>` for a `CustomTheme`. A custom
 owns it (CT3); a shipped theme or `piefed` counts everywhere."""
 from __future__ import annotations
 
+import io
 import json
 import os
 import posixpath
 import re
+import secrets
 from datetime import datetime, timedelta
 from urllib.parse import quote
+from xml.etree import ElementTree
+
+from flask import current_app
+from PIL import Image
 
 from app import db
 import app.models as models
@@ -187,7 +193,7 @@ def unique_copy_name(name: str, domain_id: int) -> str:
 
 def copy_theme(source: str, domain_id: int, user_id: int | None):
     """A new custom theme of domain `domain_id`, copied from `source`: a shipped theme or piefed (its styles.css with
-    relative URLs made absolute), or a custom theme of the same domain (its CSS). The copy is not retired.
+    relative URLs made absolute), or a custom theme of the same domain (its CSS, and a copy of each of its files). The copy is not retired.
     `source` names nothing the domain may copy: ValueError."""
     custom = owned_theme(source, domain_id)
     if custom is not None:
@@ -200,6 +206,15 @@ def copy_theme(source: str, domain_id: int, user_id: int | None):
     theme = models.CustomTheme(site_domain_id=domain_id, name=unique_copy_name(name, domain_id), base_theme=base,
                                css=css, retired=False, created_at=now, updated_at=now, updated_by=user_id)
     db.session.add(theme)
+    db.session.flush()
+    for file in custom.files if custom is not None else ():   # the copy's own stored files, not shared ones
+        try:
+            data = read_stored(file.path)
+        except OSError:
+            current_app.logger.warning('custom themes: %s of theme %s is missing: not copied', file.path, custom.id)
+            continue
+        db.session.add(models.CustomThemeFile(custom_theme_id=theme.id, filename=file.filename, path=_store(data),
+                                              mime_type=file.mime_type, size=file.size))
     db.session.commit()
     return theme
 
@@ -221,3 +236,135 @@ def uses(theme) -> dict:
 def in_use(theme) -> bool:
     found = uses(theme)
     return found['domain_default'] or found['users'] > 0 or found['communities'] > 0
+
+
+# --- A custom theme's files (spec §3.7) ---
+
+# Stored with the other local media, each as a random name with `.bin`: fetched straight from /static it is
+# application/octet-stream and renders as nothing. Only `/theme/<id>/files/<name>` serves it, with its checked type.
+THEME_MEDIA = 'app/static/media/themes'
+_STORED = re.compile(r'/static/media/themes/[0-9a-f]{32}\.bin')
+_FILENAME_UNSAFE = re.compile(r'[^A-Za-z0-9._-]+')
+SVG = 'image/svg+xml'
+_SVG_ROOTS = ('svg', '{http://www.w3.org/2000/svg}svg')
+# (MIME type, extension) by leading bytes; WebP and AVIF are checked further below
+_MAGIC = [(b'\x89PNG\r\n\x1a\n', ('image/png', 'png')), (b'\xff\xd8\xff', ('image/jpeg', 'jpg')),
+          (b'GIF87a', ('image/gif', 'gif')), (b'GIF89a', ('image/gif', 'gif')),
+          (b'wOF2', ('font/woff2', 'woff2')), (b'wOFF', ('font/woff', 'woff')),
+          (b'\x00\x01\x00\x00', ('font/ttf', 'ttf')), (b'true', ('font/ttf', 'ttf')), (b'OTTO', ('font/otf', 'otf'))]
+_PILLOW_CHECKED = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
+
+
+class ThemeFileError(ValueError):
+    """An upload a theme cannot take: the message says why."""
+
+
+def sniff_type(data: bytes) -> tuple[str, str] | None:
+    """The (MIME type, extension) `data` is, by its content alone, if it is one a theme may hold: PNG, JPEG, GIF,
+    WebP, AVIF, SVG, WOFF2, WOFF, TTF or OTF. A raster image must also open in Pillow. Anything else is None."""
+    found = next((kind for magic, kind in _MAGIC if data.startswith(magic)), None)
+    if found is None and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        found = ('image/webp', 'webp')
+    if found is None and data[4:8] == b'ftyp' and data[8:12] in (b'avif', b'avis'):
+        found = ('image/avif', 'avif')
+    if found is None:
+        return (SVG, 'svg') if _is_svg(data) else None
+    if found[0] in _PILLOW_CHECKED:
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                image.verify()
+        except Exception:
+            return None
+    return found
+
+
+def _is_svg(data: bytes) -> bool:
+    """Whether `data` is an XML document whose root is `<svg>`, with no DTD (no entities to expand)."""
+    try:
+        text = data.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        return False
+    if '<!DOCTYPE' in text.upper() or '<!ENTITY' in text.upper():
+        return False
+    try:
+        root = ElementTree.fromstring(text)
+    except ElementTree.ParseError:
+        return False
+    return root.tag in _SVG_ROOTS
+
+
+def clean_filename(name: str, extension: str) -> str:
+    """`name` as a theme file's name: its last path part, reduced to letters, digits, `.`, `_` and `-`, no leading
+    dot, ending in `extension` (the checked type's), at most `NAME_MAX` characters."""
+    stem = (name or '').replace('\\', '/').rsplit('/', 1)[-1]
+    stem = stem.rsplit('.', 1)[0] if '.' in stem else stem
+    stem = _FILENAME_UNSAFE.sub('-', stem).lstrip('.-') or 'file'
+    return f'{stem[:NAME_MAX - len(extension) - 1]}.{extension}'
+
+
+def _store(data: bytes) -> str:
+    """Write `data` to a new stored file; its path as a theme file row keeps it."""
+    os.makedirs(THEME_MEDIA, exist_ok=True)
+    name = f'{secrets.token_hex(16)}.bin'
+    with open(os.path.join(THEME_MEDIA, name), 'xb') as file:
+        file.write(data)
+    return f'/static/media/themes/{name}'
+
+
+def read_stored(path: str) -> bytes:
+    with open(f'app{path}', 'rb') as file:
+        return file.read()
+
+
+def add_theme_file(theme, upload_name: str, data: bytes, replace: bool, limits: dict):
+    """Store `data` as one of `theme`'s files, named from `upload_name`, and return its row (committed). Refused with
+    ThemeFileError: a type a theme may not hold, a name already taken unless `replace`, or any of `limits`
+    (`file_bytes`, `theme_bytes`, `files`). A replaced file's stored copy is removed once the row no longer names it."""
+    if len(data) > limits['file_bytes']:
+        raise ThemeFileError('That file is too big.')
+    kind = sniff_type(data)
+    if kind is None:
+        raise ThemeFileError('That is not a PNG, JPEG, GIF, WebP, AVIF or SVG image, or a WOFF2, WOFF, TTF or OTF font.')
+    filename = clean_filename(upload_name, kind[1])
+    existing = next((file for file in theme.files if file.filename == filename), None)
+    if existing is not None and not replace:
+        raise ThemeFileError(f'This theme already has a file named {filename}.')
+    others = [file for file in theme.files if file is not existing]
+    if len(others) + 1 > limits['files']:
+        raise ThemeFileError('This theme has as many files as a theme may hold.')
+    if sum(file.size for file in others) + len(data) > limits['theme_bytes']:
+        raise ThemeFileError('This theme\'s files would be over the size a theme may hold.')
+    path = _store(data)
+    replaced = existing.path if existing is not None else None
+    if existing is not None:
+        existing.path, existing.mime_type, existing.size = path, kind[0], len(data)
+        row = existing
+    else:
+        row = models.CustomThemeFile(custom_theme_id=theme.id, filename=filename, path=path, mime_type=kind[0],
+                                     size=len(data))
+        db.session.add(row)
+    theme.updated_at = models.utcnow()
+    db.session.commit()
+    if replaced:
+        remove_theme_files([replaced])
+    return row
+
+
+def remove_theme_files(paths) -> None:
+    """Unlink the stored files `paths` named, once no theme file row names them. A path goes only when it is one
+    `_store` gives, is not a symlink, and with every symlink and `..` resolved is that same name directly inside
+    `THEME_MEDIA`. Anything else is left where it is, and logged. `paths` are rows' stored values, never form input."""
+    media = os.path.realpath(THEME_MEDIA)
+    named = {path for (path,) in db.session.query(models.CustomThemeFile.path)}
+    for path in paths:
+        stored = f'app{path}'
+        if not _STORED.fullmatch(path or '') or os.path.islink(stored) or path in named or \
+                os.path.realpath(stored) != os.path.join(media, os.path.basename(path)):
+            current_app.logger.info('custom themes: %s not removed: not a theme file no row names', path)
+        elif os.path.isfile(stored):
+            os.unlink(stored)
+
+
+def theme_file_paths(themes) -> list[str]:
+    """Every stored path the files of `themes` name: what to pass `remove_theme_files` once they are deleted."""
+    return [file.path for theme in themes for file in theme.files]

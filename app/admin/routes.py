@@ -25,8 +25,9 @@ from wtforms import Label
 from app import db, celery, cache
 from app.cms import cms_nav_links_changed
 from app.branding import ends_inside_markup, offsite_references
-from app.custom_themes import ThemeNameError, check_name, copy_theme, custom_themes_for, in_use, is_shipped, \
-    shipped_css, shipped_name, shipped_themes, uses
+from app.custom_themes import ThemeFileError, ThemeNameError, add_theme_file, check_name, copy_theme, \
+    custom_themes_for, in_use, is_shipped, remove_theme_files, shipped_css, shipped_name, shipped_themes, \
+    theme_file_paths, uses
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.local_only import accounts_shown_here_sql, domain_has_owners, user_local_only, without_local_only, without_local_only_actors
@@ -555,12 +556,14 @@ def admin_domains_delete(domain_id):
         # Its branding row goes with it: the files its logo upload wrote go once nothing names them
         branding = db.session.get(DomainBranding, row.id)
         logos = [getattr(branding, field) for field in LOGO_FIELDS + DARK_LOGO_FIELDS] if branding is not None else []
+        theme_files = theme_file_paths(custom_themes_for(row.id, include_retired=True))   # its themes go with it
         db.session.delete(row)
         db.session.flush()
         db.session.query(Instance).filter(Instance.id == instance_id).delete(synchronize_session='fetch')
         db.session.commit()
         clear_domain_cache()
         remove_superseded_logos(logos)
+        remove_theme_files(theme_files)
         flash(_('Domain deleted.'))
     return redirect(url_for('admin.admin_domains'))
 
@@ -710,7 +713,53 @@ def admin_domain_theme_edit(domain_id, theme_id):
         form.css.data = theme.css
     # not `theme`: that is the Jinja global the page's layout calls
     return render_template('admin/domain_theme_edit.html', title=_('Theme: %(name)s', name=theme.name), row=row,
-                           custom_theme=theme, form=form)
+                           custom_theme=theme, form=form,
+                           file_limit=human_filesize(current_app.config['CUSTOM_THEME_MAX_FILE_BYTES']))
+
+
+def theme_file_limits() -> dict:
+    config = current_app.config
+    return {'file_bytes': config['CUSTOM_THEME_MAX_FILE_BYTES'], 'theme_bytes': config['CUSTOM_THEME_MAX_BYTES'],
+            'files': config['CUSTOM_THEME_MAX_FILES']}
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/files', methods=['POST'])
+@login_required
+def admin_domain_theme_upload(domain_id, theme_id):
+    """Add an image or font to a theme, or replace one of the same name (spec §3.7)."""
+    row = _themes_domain(domain_id)
+    theme = _domain_theme(row, theme_id)
+    upload = request.files.get('file')
+    if upload is None or not upload.filename:
+        abort(400)
+    limit = current_app.config['CUSTOM_THEME_MAX_FILE_BYTES']
+    data = upload.stream.read(limit + 1)   # one byte over is enough to know it is too big
+    try:
+        added = add_theme_file(theme, upload.filename, data, bool(request.form.get('replace')), theme_file_limits())
+    except ThemeFileError as error:
+        flash(_('The file was not added: %(why)s', why=str(error)), 'error')
+    else:
+        theme.updated_by = current_user.id
+        db.session.commit()
+        _log_theme('add_theme_file', row, theme.name, reason=added.filename)
+        flash(_('Added %(name)s. Use it in the CSS as url(files/%(name)s).', name=added.filename))
+    return redirect(url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=theme.id))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/files/<int:file_id>/delete', methods=['POST'])
+@login_required
+def admin_domain_theme_file_delete(domain_id, theme_id, file_id):
+    row = _themes_domain(domain_id)
+    theme = _domain_theme(row, theme_id)
+    file = next((file for file in theme.files if file.id == file_id), None) or abort(404)
+    filename, path = file.filename, file.path
+    db.session.delete(file)
+    theme.updated_at, theme.updated_by = utcnow(), current_user.id
+    db.session.commit()
+    remove_theme_files([path])
+    _log_theme('remove_theme_file', row, theme.name, reason=filename)
+    flash(_('Removed %(name)s.', name=filename))
+    return redirect(url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=theme.id))
 
 
 @bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/rename', methods=['POST'])
@@ -753,9 +802,10 @@ def admin_domain_theme_delete(domain_id, theme_id):
         flash(_('"%(name)s" is in use as %(uses)s, so it was not deleted. Retire it to stop offering it.',
                 name=theme.name, uses=_describe_uses(uses(theme))), 'error')
     else:
-        name = theme.name
+        name, paths = theme.name, theme_file_paths([theme])
         db.session.delete(theme)
         db.session.commit()
+        remove_theme_files(paths)
         _log_theme('delete_theme', row, name)
         flash(_('Theme deleted.'))
     return redirect(url_for('admin.admin_domain_themes', domain_id=row.id))
