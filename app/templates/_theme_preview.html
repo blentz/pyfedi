@@ -1,0 +1,7 @@
+<div class="alert alert-info d-flex flex-wrap align-items-center gap-2" role="status">
+    <span>{{ _('You are previewing the theme %(name)s. Nobody else sees it.', name=theme_preview_name()) }}</span>
+    <form method="post" action="{{ url_for('admin.admin_theme_preview_stop') }}" class="d-inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Stop previewing') }}</button>
+    </form>
+</div>

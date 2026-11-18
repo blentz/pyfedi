@@ -86,8 +86,8 @@ from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, DomainInfo
     act_in_this_request, acting_as_default, acting_domain, domain_authority, \
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_hosted_uri, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from app.branding import branding_for
-from app.custom_themes import custom_identifier, custom_theme_here, custom_theme_id, custom_themes_for, is_shipped, \
-    theme_counts, theme_version
+from app.custom_themes import THEME_PREVIEW, custom_identifier, custom_theme_here, custom_theme_id, custom_themes_for, \
+    is_shipped, manages_themes, theme_counts, theme_version
 from collections import Counter
 from flask import has_request_context
 import app as app_pkg
@@ -5250,6 +5250,9 @@ def current_theme():
     or the site can choose. A custom theme (`custom:<id>`) counts only on the domain that owns it (custom themes
     spec §3.4); a user's pick of one is passed over elsewhere and kept for its own domain."""
     domain = current_storefront()
+    previewed = theme_preview(domain)
+    if previewed is not None:
+        return previewed
     if current_user.is_authenticated and current_user.theme and \
             (custom_theme_id(current_user.theme) is None or theme_counts(current_user.theme, domain)):
         return current_user.theme
@@ -5259,6 +5262,25 @@ def current_theme():
         site = db.session.get(Site, 1)
     domain_theme = '' if domain.is_default else branding_for(domain).default_theme   # the default's is the site's
     return next((theme for theme in (domain_theme, site.default_theme) if theme_counts(theme, domain)), 'piefed')
+
+
+def theme_preview(domain) -> str | None:
+    """The theme the logged-in theme holder is previewing on `domain` (custom themes spec §3.5), or None. A preview
+    of a theme that no longer counts here, or by someone who no longer manages the domain's themes, is ended."""
+    preview = flask.session.get(THEME_PREVIEW) if has_request_context() else None
+    if not isinstance(preview, dict) or preview.get('domain_id') != domain.id:
+        return None
+    if current_user.is_authenticated and theme_counts(preview.get('theme'), domain) and \
+            manages_themes(current_user.id, domain):
+        return preview['theme']
+    flask.session.pop(THEME_PREVIEW, None)
+    return None
+
+
+def theme_preview_name() -> str | None:
+    """The name of the theme being previewed on this request's domain, for the page's banner; None when there is none."""
+    previewed = theme_preview(current_storefront()) if has_request_context() else None
+    return theme_label(previewed) if previewed is not None else None
 
 
 def template_theme() -> str:

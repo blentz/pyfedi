@@ -322,7 +322,7 @@
                 <div class="alert alert-{{ category }}" role="alert">{{ message }}</div>
                 {% endfor %}
             {% endif %}
-            {% endwith %}
+            {% endwith %}{% if theme_preview_name() %}{% include '_theme_preview.html' %}{% endif %}
 
             {# application content needs to be provided in the app_content block #}
             {% block app_content %}{% endblock %}

@@ -44,6 +44,12 @@
                         <td class="text-nowrap">
                             <a href="{{ url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=own.id) }}" class="btn btn-sm btn-outline-primary">{{ _('Edit CSS') }}</a>
                             {{ copy_button('custom:' ~ own.id) }}
+                            {% if on_this_domain %}
+                            <form method="post" action="{{ url_for('admin.admin_domain_theme_preview', domain_id=row.id, theme_id=own.id) }}" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Preview') }}</button>
+                            </form>
+                            {% endif %}
                             <form method="post" action="{{ url_for('admin.admin_domain_theme_retire', domain_id=row.id, theme_id=own.id, change='unretire' if own.retired else 'retire') }}" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Offer again') if own.retired else _('Retire') }}</button>
@@ -59,6 +65,9 @@
             </table>
         </div>
         <p class="text-muted">{{ _('A retired theme is offered to nobody new, but still shows for everyone who already chose it. A theme in use cannot be deleted.') }}</p>
+        {% if not on_this_domain %}
+        <p class="text-muted">{{ _('To preview a theme, open this page on %(domain)s.', domain=row.domain) }}</p>
+        {% endif %}
         {% else %}
         <p>{{ _('None yet. Copy one of the themes below to start.') }}</p>
         {% endif %}

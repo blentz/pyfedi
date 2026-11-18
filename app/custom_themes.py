@@ -19,10 +19,12 @@ from flask import current_app
 from PIL import Image
 
 from app import db
+from app.permissions import user_access
 import app.models as models
 import app.storefront as storefront
 
 CUSTOM_PREFIX = 'custom:'
+THEME_PREVIEW = 'theme_preview'   # the session key of a theme holder's preview: {'domain_id', 'theme'}
 THEMES_DIR = 'app/templates/themes'
 _CUSTOM = re.compile(r'custom:([1-9][0-9]{0,11})')       # at most 19 characters: a theme column is String(20)
 _SHIPPED_NAME = re.compile(r'[A-Za-z0-9_-]+')
@@ -49,6 +51,15 @@ def theme_counts(identifier: str | None, domain) -> bool:
     """Whether `identifier` is a theme a page on `domain` (a `DomainInfo`) can render in: `piefed`, a shipped theme,
     or a custom theme `domain` owns, retired or not (CT3, CT9)."""
     return identifier == 'piefed' or is_shipped(identifier) or custom_theme_here(identifier, domain) is not None
+
+
+def manages_themes(user_id, domain) -> bool:
+    """Whether user `user_id` manages domain `domain`'s custom themes (CT4): `edit domain branding` on it, or for the
+    first domain, whose branding is the site settings, `change instance settings`. `domain` is a `DomainInfo` or a
+    `SiteDomain` row."""
+    if domain.is_default:
+        return user_access('change instance settings', user_id)
+    return user_access('edit domain branding', user_id, on=domain)
 
 
 def custom_themes_for(domain_id: int, include_retired: bool) -> list:

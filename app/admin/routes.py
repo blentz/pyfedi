@@ -7,7 +7,7 @@ from io import BytesIO
 import orjson
 import shutil
 
-from flask import request, flash, json, url_for, current_app, redirect, g, abort, send_file, make_response
+from flask import request, flash, json, url_for, current_app, redirect, g, abort, send_file, make_response, session
 from werkzeug.exceptions import HTTPException
 from markupsafe import Markup
 from flask_login import current_user, login_user
@@ -25,8 +25,8 @@ from wtforms import Label
 from app import db, celery, cache
 from app.cms import cms_nav_links_changed
 from app.branding import ends_inside_markup, offsite_references
-from app.custom_themes import ThemeFileError, ThemeNameError, add_theme_file, check_name, copy_theme, \
-    custom_themes_for, in_use, is_shipped, remove_theme_files, shipped_css, shipped_name, shipped_themes, \
+from app.custom_themes import THEME_PREVIEW, ThemeFileError, ThemeNameError, add_theme_file, check_name, copy_theme, \
+    custom_identifier, custom_themes_for, in_use, is_shipped, manages_themes, remove_theme_files, shipped_css, shipped_name, shipped_themes, \
     theme_file_paths, uses
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
@@ -68,7 +68,7 @@ from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJo
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding, Referral, CustomTheme
 from app.referral import DEFAULT_GENERATORS, GENERATOR_CHOICES, GENERATORS_SETTING, MAX_PER_CODE_SETTING, MAX_PER_USER_SETTING
-from app.storefront import clear_domain_cache, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
+from app.storefront import clear_domain_cache, current_storefront, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
 from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.community import hold_community_text
@@ -611,11 +611,8 @@ def domain_settings_refusal(row: SiteDomain, form: DomainSettingsForm, usable_of
 
 
 def may_manage_themes(row: SiteDomain) -> bool:
-    """Whether the current user manages domain `row`'s custom themes (custom themes spec CT4): `edit domain branding`
-    on it, or for the first domain, whose branding is the site settings, `change instance settings`."""
-    if row.is_default:
-        return user_access('change instance settings', current_user.get_id())
-    return user_access('edit domain branding', current_user.get_id(), on=row)
+    """Whether the current user manages domain `row`'s custom themes (custom themes spec CT4)."""
+    return manages_themes(current_user.get_id(), row)
 
 
 def _themes_domain(domain_id: int) -> SiteDomain:
@@ -658,7 +655,8 @@ def admin_domain_themes(domain_id):
     shipped = [(name, shipped_name(name)) for name in shipped_themes()]
     custom = [(theme, uses(theme)) for theme in custom_themes_for(row.id, include_retired=True)]
     return render_template('admin/domain_themes.html', title=_('Themes: %(domain)s', domain=row.domain), row=row,
-                           shipped=shipped, custom=custom, describe_uses=_describe_uses)
+                           shipped=shipped, custom=custom, describe_uses=_describe_uses,
+                           on_this_domain=current_storefront().id == row.id)
 
 
 @bp.route('/domains/<int:domain_id>/themes/shipped/<name>', methods=['GET'])
@@ -760,6 +758,26 @@ def admin_domain_theme_file_delete(domain_id, theme_id, file_id):
     _log_theme('remove_theme_file', row, theme.name, reason=filename)
     flash(_('Removed %(name)s.', name=filename))
     return redirect(url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=theme.id))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/preview', methods=['POST'])
+@login_required
+def admin_domain_theme_preview(domain_id, theme_id):
+    """Show this domain's pages in a theme for the theme holder alone, changing no default (spec §3.5). The session
+    is per host, so it is started from the domain itself."""
+    row = _themes_domain(domain_id)
+    theme = _domain_theme(row, theme_id)
+    if current_storefront().id != row.id:
+        abort(400)
+    session[THEME_PREVIEW] = {'domain_id': row.id, 'theme': custom_identifier(theme.id)}
+    return redirect('/')
+
+
+@bp.route('/theme-preview/stop', methods=['POST'])
+@login_required
+def admin_theme_preview_stop():
+    session.pop(THEME_PREVIEW, None)
+    return redirect(referrer('/'))
 
 
 @bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/rename', methods=['POST'])
