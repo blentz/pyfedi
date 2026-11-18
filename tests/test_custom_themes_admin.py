@@ -12,11 +12,12 @@ from markupsafe import escape
 
 from app import db
 from app.custom_themes import (THEMES_DIR, copy_theme, custom_identifier, rewrite_relative_urls, shipped_css,
-                               shipped_name, shipped_themes, storefront)
+                               shipped_name, shipped_themes, storefront, theme_version)
 from app.models import CustomTheme, DomainBranding, ModLog, Role, RolePermission, Site, User
 from app.storefront import clear_domain_cache
 from tests.factories import grant_permission, grant_role, limit_role
 from tests.conftest import forget_login
+from tests.test_branding_pages import PROXY, page, visit
 from tests.two_domains import FIRST, two_domains  # noqa: F401  (a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -61,7 +62,11 @@ class Actor:
 
 
 @pytest.fixture
-def world(app, two_domains):
+def world(app, two_domains, monkeypatch):
+    monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)   # onion pages come through the onion proxy
+    site = db.session.get(Site, 1)
+    site.private_instance = False
+    db.session.commit()
     default, onion = two_domains.domains
     two_domains.local_user('founder', default)   # user 1 holds every permission: no actor here may be it
     holder = two_domains.local_user('holder', default)       # edit domain branding on the onion only
@@ -354,3 +359,87 @@ def test_no_action_writes_under_the_shipped_themes(world):
         holder.post(themes_url(onion, f'/{theme.id}/retire'))
         holder.post(themes_url(onion, f'/{theme.id}/delete'))
     assert fingerprint() == before
+
+
+# --- Editing the CSS (Task 6, spec §3.8) ---
+
+def edit_url(domain, theme):
+    return themes_url(domain, f'/{theme.id}/edit')
+
+
+def test_the_edit_page_shows_the_css(world):
+    page = world['holder'].get(edit_url(world['onion'], world['night'])).get_data(as_text=True)
+    assert '.night{}' in page and 'onion' in page
+
+
+def test_saving_changes_the_served_stylesheet_and_its_version(app, world):
+    night, onion = world['night'], world['onion']
+    old_version = theme_version(night)
+    response = world['holder'].post(edit_url(onion, night), css='.night { color: black; }\r\n')
+    assert response.status_code == 302
+    db.session.expire_all()
+    saved = db.session.get(CustomTheme, night.id)
+    assert saved.css == '.night { color: black; }\n'
+    assert theme_version(saved) != old_version and saved.updated_by == world['holder'].user.id
+    assert db.session.query(ModLog).filter_by(action='edit_theme').one().site_domain_id == onion.id
+    served = visit(app, f'/theme/{night.id}/styles.css?v={theme_version(saved)}', onion=True)
+    assert served.get_data(as_text=True) == '.night { color: black; }\n'
+
+
+def test_css_over_the_cap_is_refused(app, world, monkeypatch):
+    monkeypatch.setitem(app.config, 'CUSTOM_THEME_MAX_CSS_BYTES', 10)
+    night = world['night']
+    response = world['holder'].post(edit_url(world['onion'], night), css='.x{color:red}')
+    assert response.status_code == 200
+    assert 'over 10' in response.get_data(as_text=True)
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, night.id).css == '.night{}'
+
+
+def test_the_onion_refuses_an_off_site_reference(world):
+    night = world['night']
+    response = world['holder'].post(edit_url(world['onion'], night),
+                                    css='a{background:url(https://elsewhere.example/x.png)}')
+    assert response.status_code == 200
+    assert 'Off the onion: https://elsewhere.example/x.png' in response.get_data(as_text=True)
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, night.id).css == '.night{}'
+
+
+def test_elsewhere_an_off_site_reference_is_saved_with_a_warning(world):
+    day, default, admin = world['day'], world['default'], world['admin']
+    admin.post(edit_url(default, day), css='a{background:url(https://elsewhere.example/x.png)}')
+    db.session.expire_all()
+    assert 'elsewhere.example' in db.session.get(CustomTheme, day.id).css
+    with admin.client.session_transaction(base_url=BASE) as session:
+        flashes = [message for _category, message in session.get('_flashes', [])]
+    assert any('https://elsewhere.example/x.png' in message for message in flashes)
+
+
+def test_markup_in_css_is_served_as_css_and_never_put_in_a_page(app, world):
+    night, onion = world['night'], world['onion']
+    world['holder'].post(edit_url(onion, night), css='</style><script>alert(1)</script>')
+    db.session.expire_all()
+    saved = db.session.get(CustomTheme, night.id)
+    served = visit(app, f'/theme/{night.id}/styles.css?v={theme_version(saved)}', onion=True)
+    assert served.mimetype == 'text/css'
+    db.session.add(DomainBranding(site_domain_id=onion.id, default_theme=custom_identifier(night.id)))
+    db.session.commit()
+    clear_domain_cache()
+    assert '<script>alert(1)</script>' not in page(app, '/', onion=True)
+
+
+def test_editing_another_domains_theme_is_refused(world):
+    day = world['day']
+    assert world['holder'].get(edit_url(world['default'], day)).status_code == 403
+    assert world['holder'].post(edit_url(world['onion'], day), css='x').status_code == 404
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, day.id).css == '.day{}'
+
+
+def test_css_the_form_refuses_is_not_saved(world):
+    night = world['night']
+    response = world['holder'].post(edit_url(world['onion'], night), css='a{}\x00')
+    assert response.status_code == 200
+    db.session.expire_all()
+    assert db.session.get(CustomTheme, night.id).css == '.night{}'

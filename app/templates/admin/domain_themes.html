@@ -29,25 +29,26 @@
                     <tr><th>{{ _('Name') }}</th><th>{{ _('Copied from') }}</th><th>{{ _('In use as') }}</th><th></th></tr>
                 </thead>
                 <tbody>
-                    {% for theme, found in custom %}
+                    {% for own, found in custom %}
                     <tr>
                         <td>
-                            <form method="post" action="{{ url_for('admin.admin_domain_theme_rename', domain_id=row.id, theme_id=theme.id) }}" class="d-flex gap-1">
+                            <form method="post" action="{{ url_for('admin.admin_domain_theme_rename', domain_id=row.id, theme_id=own.id) }}" class="d-flex gap-1">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <input type="text" name="name" value="{{ theme.name }}" maxlength="100" class="form-control form-control-sm" aria-label="{{ _('Name') }}">
+                                <input type="text" name="name" value="{{ own.name }}" maxlength="100" class="form-control form-control-sm" aria-label="{{ _('Name') }}">
                                 <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Rename') }}</button>
                             </form>
-                            {% if theme.retired %}<span class="badge bg-secondary">{{ _('retired') }}</span>{% endif %}
+                            {% if own.retired %}<span class="badge bg-secondary">{{ _('retired') }}</span>{% endif %}
                         </td>
-                        <td>{{ theme.base_theme }}</td>
+                        <td>{{ own.base_theme }}</td>
                         <td>{{ describe_uses(found) or _('Not in use') }}</td>
                         <td class="text-nowrap">
-                            {{ copy_button('custom:' ~ theme.id) }}
-                            <form method="post" action="{{ url_for('admin.admin_domain_theme_retire', domain_id=row.id, theme_id=theme.id, change='unretire' if theme.retired else 'retire') }}" class="d-inline">
+                            <a href="{{ url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=own.id) }}" class="btn btn-sm btn-outline-primary">{{ _('Edit CSS') }}</a>
+                            {{ copy_button('custom:' ~ own.id) }}
+                            <form method="post" action="{{ url_for('admin.admin_domain_theme_retire', domain_id=row.id, theme_id=own.id, change='unretire' if own.retired else 'retire') }}" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Offer again') if theme.retired else _('Retire') }}</button>
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Offer again') if own.retired else _('Retire') }}</button>
                             </form>
-                            <form method="post" action="{{ url_for('admin.admin_domain_theme_delete', domain_id=row.id, theme_id=theme.id) }}" class="d-inline">
+                            <form method="post" action="{{ url_for('admin.admin_domain_theme_delete', domain_id=row.id, theme_id=own.id) }}" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-sm btn-outline-danger confirm_first">{{ _('Delete') }}</button>
                             </form>

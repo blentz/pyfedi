@@ -42,7 +42,7 @@ from app.admin.forms import ADMIN_SCOPE_ROLE_DEFAULT, FederationForm, SiteMiscFo
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
     CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
-    EmojiFilterForm, ContactInstanceForm, MastodonDirectoryScanForm, SiteDomainForm, DomainBrandingForm, DomainSettingsForm, \
+    EmojiFilterForm, ContactInstanceForm, MastodonDirectoryScanForm, SiteDomainForm, DomainBrandingForm, CustomThemeForm, DomainSettingsForm, \
     ComplimentaryForm
 from flask_wtf import FlaskForm
 from app.admin.util import ban_list_entries, unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
@@ -76,7 +76,7 @@ from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
 from app.utils import canonical_host, captcha_enabled, render_template, permission_required, permission_held_anywhere, admin_required, set_setting, get_setting, gibberish, markdown_to_html, \
     max_album_images, \
-    moderating_communities, joined_communities, finalize_user_setup, theme_choices, blocked_phrases, blocked_referrers, \
+    moderating_communities, joined_communities, finalize_user_setup, theme_choices, human_filesize, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
     LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, PAGE_MAX_BYTES, \
     download_defeds, instance_banned, login_required, referrer, \
@@ -681,6 +681,36 @@ def admin_domain_theme_copy(domain_id):
     _log_theme('create_theme', row, theme.name)
     flash(_('Theme "%(name)s" created.', name=theme.name))
     return redirect(url_for('admin.admin_domain_themes', domain_id=row.id))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/edit', methods=['GET', 'POST'])
+@login_required
+def admin_domain_theme_edit(domain_id, theme_id):
+    """A custom theme's CSS (spec §3.2, §3.8). Over the size cap is a form error. An off-site reference is refused on
+    the onion and advised elsewhere, as branding's are."""
+    row = _themes_domain(domain_id)
+    theme = _domain_theme(row, theme_id)
+    form = CustomThemeForm()
+    if form.validate_on_submit():
+        css = (form.css.data or '').replace('\r\n', '\n')
+        limit = current_app.config['CUSTOM_THEME_MAX_CSS_BYTES']
+        offsite = offsite_references(css=css, own_host=row.domain)
+        if len(css.encode('utf-8')) > limit:
+            form.css.errors.append(_('The CSS is over %(size)s.', size=human_filesize(limit)))
+        elif offsite and row.is_onion:
+            form.css.errors.append(_('Off the onion: %(references)s', references=', '.join(offsite)))
+        else:
+            theme.css, theme.updated_at, theme.updated_by = css, utcnow(), current_user.id
+            db.session.commit()
+            _log_theme('edit_theme', row, theme.name)
+            flash(_('Theme saved.'))
+            flash_offsite_warning({'css': offsite} if offsite else {})
+            return redirect(url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=theme.id))
+    elif request.method == 'GET':
+        form.css.data = theme.css
+    # not `theme`: that is the Jinja global the page's layout calls
+    return render_template('admin/domain_theme_edit.html', title=_('Theme: %(name)s', name=theme.name), row=row,
+                           custom_theme=theme, form=form)
 
 
 @bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/rename', methods=['POST'])

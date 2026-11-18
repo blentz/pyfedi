@@ -64,6 +64,13 @@ class SiteProfileForm(FlaskForm):
     submit = SubmitField(_l('Save'))
 
 
+class CustomThemeForm(FlaskForm):
+    """A custom theme's stylesheet (custom themes spec §3.2). Its size cap is config, checked by the route."""
+    css = TextAreaField(_l('CSS'), validators=[no_nul], render_kw={'rows': 30, 'class': 'font-monospace',
+                                                                  'spellcheck': 'false'})
+    submit = SubmitField(_l('Save'))
+
+
 class DomainBrandingForm(FlaskForm):
     """A sister domain's own branding. A blank field inherits the first domain's value (app/branding.py). The logo has no
     FileAllowed: an upload the route will not take is a 400 (`save_logo_upload`), not a form error."""

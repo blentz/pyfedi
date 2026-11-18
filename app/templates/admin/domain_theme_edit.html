@@ -1,0 +1,27 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
+{% set active_child = 'admin_domains' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Theme: %(name)s', name=custom_theme.name) }}</h1>
+        <p><a href="{{ url_for('admin.admin_domain_themes', domain_id=row.id) }}">{{ _('Back to themes') }}</a></p>
+        <p>{{ _('Copied from %(base)s, whose page layout this theme keeps. This CSS replaces %(base)s\'s own stylesheet.', base=custom_theme.base_theme) }}</p>
+        {% if row.is_onion %}
+        <p class="alert alert-info">{{ _('This is an onion: a theme\'s CSS may load nothing from another site. A save that would is refused.') }}</p>
+        {% endif %}
+        <form method="post">
+            {% if form.csrf_token %}{{ form.csrf_token() }}{% endif %}
+            {{ render_field(form.css) }}
+            {{ render_field(form.submit) }}
+        </form>
+    </div>
+</div>
+{% endblock %}
