@@ -17,6 +17,7 @@ from app.utils import authorise_api_user, is_activitypub_request, login_redirect
 # reader at all (a provider's webhook, a health check, a signed media URL, an inbox's signed POST).
 OPEN = frozenset({
     'static', 'bootstrap.static', 'onion_media.onion_media',
+    'custom_themes.stylesheet', 'custom_themes.theme_file',   # the login page's own theme, as static files are
     'auth.login', 'auth.logout', 'auth.register', 'auth.resend_email', 'auth.reset_password_request', 'auth.reset_password',
     'auth.verify_email', 'auth.check_email', 'auth.please_wait', 'auth.not_trustworthy', 'auth.onion_wait',
     'auth.validation_required', 'auth.permission_denied', 'auth.passkey_options', 'auth.passkey_verification',
@@ -59,7 +60,7 @@ AP_DOCUMENTS = frozenset({'main.index', 'main.list_feeds'})   # pages that answe
 
 # What a member whose subscription has lapsed may still do: renew, take their settings, leave (M12, plan S20)
 LAPSED_OPEN = frozenset({
-    'static', 'bootstrap.static', 'auth.logout', 'user.user_settings_import_export', 'user.delete_account',
+    'static', 'bootstrap.static', 'custom_themes.stylesheet', 'custom_themes.theme_file', 'auth.logout', 'user.user_settings_import_export', 'user.delete_account',
     'payments.donations', 'payments.subscription', 'payments.checkout', 'payments.redeem', 'payments.clear_code', 'payments.cancel',
     'payments.billing', 'payments.result',
     'payments.result_before_this_release', 'payments.payment_webhook', 'payments.stripe_webhook',

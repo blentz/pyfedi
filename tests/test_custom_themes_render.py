@@ -10,7 +10,8 @@ from flask import g
 
 from app import db
 from app.custom_themes import custom_identifier, theme_version
-from app.models import Community, CustomTheme, Site
+from app.login_gate import LAPSED_OPEN
+from app.models import Community, CustomTheme, CustomThemeFile, Site
 from app.storefront import clear_domain_cache
 from app.utils import current_theme, template_theme, theme_label, theme_stylesheet_url
 from tests.test_branding_pages import branded, onion_branding, page, visit  # noqa: F401  (branded is a fixture)
@@ -175,3 +176,20 @@ def test_the_onion_never_serves_an_off_site_reference(app, branded):
     assert '.a { color: red; }' in body
     default_theme = make_theme(branded.domains[0], css='body { background: url(https://elsewhere.example/x.png); }')
     assert 'elsewhere.example' in visit(app, stylesheet_path(default_theme)).get_data(as_text=True)
+
+
+def test_a_private_domains_theme_reaches_its_login_page(app, branded):
+    """The login gate keeps a logged-out visitor to a short list of pages on a private domain. The login page is on
+    it, so its theme's stylesheet and files are too, as /static is; so are a lapsed member's."""
+    default = branded.domains[0]
+    theme = make_theme(default, css='.private { color: navy; }')
+    db.session.add(CustomThemeFile(custom_theme_id=theme.id, filename='a.png', path='/static/media/themes/x.bin',
+                                   mime_type='image/png', size=1))
+    site = db.session.get(Site, 1)
+    site.private_instance = True
+    db.session.commit()
+    clear_domain_cache()
+    assert visit(app, '/c/goldart').status_code != 200            # the gate is up
+    assert visit(app, stylesheet_path(theme)).status_code == 200
+    assert visit(app, f'/theme/{theme.id}/files/a.png').status_code == 404   # past the gate; no such stored file
+    assert {'custom_themes.stylesheet', 'custom_themes.theme_file'} <= LAPSED_OPEN
