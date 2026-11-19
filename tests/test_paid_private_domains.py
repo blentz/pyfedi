@@ -590,6 +590,20 @@ class TestDomainSettings:
         assert (env.public.registration, env.public.registration_offer_id, env.public.login_required,
                 env.public.lapse_grace_days) == ('paid', env.offer.id, True, 14)
 
+    def test_referral_codes_can_be_turned_off(self, env, admin):
+        """RC11a: the settings page sets whether a referral code opens the domain while it is closed."""
+        assert env.public.referral_codes is True   # the default keeps RC11
+        self.save(env, env.public, registration='closed')
+        db.session.refresh(env.public)
+        assert env.public.referral_codes is False   # an unticked box
+
+    def test_referral_codes_can_be_turned_on(self, env, admin):
+        env.public.referral_codes = False
+        db.session.commit()
+        self.save(env, env.public, registration='closed', referral_codes='y')
+        db.session.refresh(env.public)
+        assert env.public.referral_codes is True
+
     def test_the_form_opens(self, env, admin, monkeypatch):
         monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
         assert 'Who may register' in env.client.get(f'/admin/domains/{env.public.id}/settings').get_data(as_text=True)

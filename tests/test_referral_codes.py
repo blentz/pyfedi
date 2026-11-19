@@ -406,6 +406,60 @@ def test_a_referral_opens_a_staff_only_domain(app, people, no_captcha):
     assert Referral.query.filter_by(referred_id=user.id).one().referrer_id == admin.id
 
 
+def _shop_refusing_codes():
+    shop = _shop('closed')
+    shop.referral_codes = False
+    db.session.commit()
+    clear_domain_cache()
+    return shop
+
+
+def test_a_closed_domain_that_refuses_codes_refuses_a_valid_one(app, people, no_captcha):
+    """RC11a: with the domain's referral_codes off, its own member's code does not open it."""
+    shop = _shop_refusing_codes()
+    admin = people['admin']
+    admin.site_domain_id = shop.id
+    code = _code(admin)
+    data = {'user_name': 'shopper', 'hp_field': '', 'real_email': 'shopper@example.com',
+            'password': 'a-good-password', 'password2': 'a-good-password', 'timezone': 'UTC', 'question': code,
+            'submit': 'Register'}
+    with patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'):
+        app.test_client().post('/auth/register', data=data, base_url='https://shop.example')
+    assert User.query.filter_by(user_name='shopper').count() == 0
+
+
+def test_a_closed_domain_that_refuses_codes_says_it_is_closed(app, people, monkeypatch):
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
+    _shop_refusing_codes()
+    text = app.test_client().get('/auth/register', base_url='https://shop.example').get_data(as_text=True)
+    assert 'Registration is closed' in text
+    assert 'name="user_name"' not in text
+
+
+def test_codes_still_show_the_form_on_a_closed_domain_that_allows_them(app, people, monkeypatch):
+    """RC11 is the default: a closed domain offers the form, for a code."""
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
+    _shop('closed')
+    text = app.test_client().get('/auth/register', base_url='https://shop.example').get_data(as_text=True)
+    assert 'Registration is closed' not in text
+
+
+@pytest.mark.parametrize('registration, codes_allowed, referral_mode, expected', [
+    ('anyone', False, False, True),    # public: codes have no say
+    ('anyone', False, True, True),
+    ('closed', True, False, False),    # no referral mode, nothing opens it
+    ('closed', True, True, True),      # RC11
+    ('closed', False, True, False),    # RC11a
+])
+def test_signup_open_to(people, registration, codes_allowed, referral_mode, expected):
+    from app.storefront import signup_open_to
+    shop = _shop(registration)
+    shop.referral_codes = codes_allowed
+    db.session.commit()
+    clear_domain_cache()
+    assert signup_open_to(domain_by_id(shop.id), referral_mode) is expected
+
+
 def test_a_staff_only_domain_stays_closed_without_a_code(app, people, no_captcha):
     _shop('closed')
     client = app.test_client()

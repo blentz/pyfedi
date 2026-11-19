@@ -54,6 +54,7 @@ class DomainInfo(NamedTuple):
     registration_offer_id: int | None = None
     lapse_grace_days: int = 7
     paid_since: datetime | None = None   # accounts made before it never lapse (plan M2)
+    referral_codes: bool = True   # in referral-code mode, whether a code opens signup here while closed (RC11a)
 
 
 # Made by `flask init-db` as the local instance, row 1 is the default domain's. Each other domain has a row of its own.
@@ -69,6 +70,12 @@ def public_registration_open(storefront: DomainInfo) -> bool:
     only when it is 'anyone', and then `Site.registration_mode` applies as well. A 'closed' domain's accounts are made
     by the admin add-user form alone, and a paid one's by /register, which leads to the provider."""
     return not paid_registration(storefront) and (storefront.is_default or storefront.registration == 'anyone')
+
+
+def signup_open_to(storefront: DomainInfo, referral_codes: bool) -> bool:
+    """Whether `storefront` takes sign-ups at all, given whether the site is in referral-code mode: open to the public,
+    or closed but opened by a valid code (spec 2026-10-31 RC11), which each domain may refuse (RC11a)."""
+    return public_registration_open(storefront) or (referral_codes and storefront.referral_codes)
 
 
 def paid_registration(storefront: DomainInfo) -> bool:
@@ -144,7 +151,8 @@ def domain_rows() -> tuple[DomainInfo, ...]:
     if not rows:
         return (_synthesised_default(),)
     return tuple(DomainInfo(r.domain, r.scheme, r.federates, r.registration, r.is_default, r.is_onion, r.id,
-                            r.instance_id, r.login_required, r.registration_offer_id, r.lapse_grace_days, r.paid_since)
+                            r.instance_id, r.login_required, r.registration_offer_id, r.lapse_grace_days, r.paid_since,
+                            r.referral_codes)
                  for r in rows)
 
 

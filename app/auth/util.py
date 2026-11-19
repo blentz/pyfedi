@@ -25,7 +25,7 @@ from app.email import send_verification_email
 from app.ldap_utils import sync_user_to_ldap, login_with_ldap
 from app.local_names import local_named
 from app.storefront import (DomainInfo, paid_registration, current_storefront, default_domain, domain_base_url, domain_for_host, home_storefront,
-                            instance_id_of, public_registration_open)
+                            instance_id_of, signup_open_to)
 from app.permission_cache import permissions_changed
 from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow, Role, dummy_password_hash, \
     verify_password_hash
@@ -573,7 +573,7 @@ def register_from_api(data: dict) -> dict:
         raise Exception('registration_closed')
     referral = referral_mode_on(g.site)
     mode = g.site.registration_mode
-    if mode == 'Closed' or (not referral and not public_registration_open(storefront)) or \
+    if mode == 'Closed' or not signup_open_to(storefront, referral) or \
             (mode == 'RequireApplication' and not g.site.application_question):
         raise Exception('registration_closed')
     handle_abandoned_open_instance()
@@ -637,7 +637,7 @@ def oauth_client_id(provider):
 def render_registration_form(form, paid_offer=None, tiers=()):
     paid = paid_registration(current_storefront())
     registration_open = paid_offer is not None if paid \
-        else public_registration_open(current_storefront()) or referral_mode_on(g.site)
+        else signup_open_to(current_storefront(), referral_mode_on(g.site))
     if not paid and g.site.registration_mode in ("RequireApplication", REFERRAL_MODE) and g.site.application_question:
         form.question.label = Label("question", markdown_to_html(g.site.application_question))
     if not paid and (g.site.tos_url is None or not g.site.tos_url.strip()):

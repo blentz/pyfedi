@@ -6299,6 +6299,8 @@ class SiteDomain(db.Model):
     registration = db.Column(db.String(10), nullable=False, default='anyone', server_default='anyone')  # anyone, closed, paid: whether the public may sign up, and whether it costs
     registration_offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', name='fk_site_domain_registration_offer'))   # paid: what the first fee is for
     login_required = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())   # the default domain's is Site.private_instance
+    # In referral-code mode, whether a valid code opens signup here while `registration` is 'closed' (spec RC11, RC11a)
+    referral_codes = db.Column(db.Boolean, nullable=False, default=True, server_default=db.true())
     lapse_grace_days = db.Column(db.Integer, nullable=False, default=7, server_default='7')   # paid: how long access outlasts a member's subscription
     paid_since = db.Column(db.DateTime)   # when it began charging: accounts made before it are grandfathered (plan M2)
     is_default = db.Column(db.Boolean, nullable=False, default=False, server_default='false')

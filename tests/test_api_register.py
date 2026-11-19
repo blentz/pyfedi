@@ -303,3 +303,16 @@ def test_a_code_opens_its_referrers_staff_only_domain(app, api, referrer):
                                   base_url='https://shop.example')
     assert response.status_code == 200
     assert User.query.filter_by(user_name='appuser').one().site_domain_id == shop.id
+
+
+def test_a_closed_domain_that_refuses_codes_refuses_a_valid_one(app, api, referrer):
+    """RC11a: with the domain's referral_codes off, its own member's code does not open it."""
+    shop = _shop('closed')
+    shop.referral_codes = False
+    referrer.site_domain_id = shop.id
+    generate_code(referrer)
+    db.session.commit()
+    clear_domain_cache()
+    response = api['client'].post('/api/alpha/user/register', json=_body(answer=referrer.referral_code),
+                                  base_url='https://shop.example')
+    _refused(response, 'registration_closed')

@@ -814,6 +814,10 @@ class DomainSettingsForm(FlaskForm):
     registration = SelectField(_l('Who may register'), render_kw={'class': 'form-select'},
                                choices=select_choices([('anyone', _l('Anyone')), ('closed', _l('Closed')),
                                                        ('paid', _l('Anyone who pays a first subscription fee'))]))
+    referral_codes = BooleanField(_l('Referral codes open a closed domain'),
+                                  description=_l("While registration is by referral code, a valid code from one of this "
+                                                 "domain's members lets someone sign up here even when registration "
+                                                 "is closed. Turn it off to keep a closed domain closed to everyone."))
     registration_offer_id = SelectField(_l('Subscription that registration pays for'), coerce=int, choices=[],
                                         validators=[Optional()], render_kw={'class': 'form-select'})
     lapse_grace_days = IntegerField(_l('Days of access after a subscription ends'), default=7,

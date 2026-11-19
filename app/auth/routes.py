@@ -18,7 +18,7 @@ from app.auth.oauth_util import (
     refuse_new_oauth_account,
     refuse_banned_visitor,
 )
-from app.storefront import current_storefront, paid_registration, public_registration_open
+from app.storefront import current_storefront, paid_registration, signup_open_to
 from app.referral import normalise_code, referral_mode_on
 from app.auth.util import (
     handle_abandoned_open_instance,
@@ -104,8 +104,8 @@ def register():
     if referral and request.method == 'GET' and normalise_code(request.args.get('ref')):
         # A referral link: the code fills the answer, and is kept for an OAuth signup started from this page (RC5)
         session['referral_code'] = form.question.data = normalise_code(request.args.get('ref'))
-    # this domain's accounts are made by staff, not by sign-up -- unless a referral code opens it (RC11)
-    if not referral and not public_registration_open(current_storefront()):
+    # this domain's accounts are made by staff, not by sign-up -- unless a referral code opens it (RC11, RC11a)
+    if not signup_open_to(current_storefront(), referral):
         return render_registration_form(form)
     if g.site.registration_mode == 'Closed':
         return render_registration_form(form)   # the template hides the form; a direct POST gets the same refusal

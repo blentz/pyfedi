@@ -23,6 +23,7 @@ Codes are generated in the user's settings, shown as a link and a QR code, and e
 | RC9 | Link/QR URL = `domain_base_url(referrer.home_domain()) + /auth/register?ref=<code>`. |
 | RC10 | A code is valid only on its referrer's home storefront, so the new account gets the referrer's `site_domain_id`. Used on any other domain it reads as invalid. |
 | RC11 | A valid code opens signup on a domain whose public registration is off ('staff'/'admin' storefronts). |
+| RC11a | (2026-11-19) Each non-default domain chooses whether RC11 applies to it: `site_domain.referral_codes`, on by default, set on the domain's settings page. Off, a closed domain shows "Registration is closed" and refuses every signup, by form or API, code or not. |
 | RC12 | The QR code is an inline SVG rendered server-side with `segno` (pure Python, unpinned per the latest-versions policy), plus a PNG download. No JavaScript is needed (onion). |
 | RC13 | Who-referred-whom is visible only to admins, on an admin referral list (referrer → referred, date, code; filterable by referrer with `?by=`). There is no user-facing list and no public "invited by". |
 

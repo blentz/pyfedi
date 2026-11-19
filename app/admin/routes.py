@@ -591,6 +591,7 @@ def admin_domain_settings(domain_id):
             flash(refusal, 'error')
         else:
             row.registration = form.registration.data
+            row.referral_codes = form.referral_codes.data
             row.registration_offer_id = form.registration_offer_id.data or None
             row.lapse_grace_days = form.lapse_grace_days.data
             row.login_required = form.login_required.data
