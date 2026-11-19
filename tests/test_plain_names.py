@@ -10,9 +10,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from flask import render_template_string
 from flask_login import login_user
 
-from app import db
-from app.models import Community, CommunityMember, Site
-from app.plain_names import HIDE_DOMAINS_FLAG, community_href, community_label, instance_details_shown, plain_choices, \
+from app import cache, db, utils
+from app.models import Community, CommunityMember, InstanceBlock, Site
+from app.plain_names import HIDE_DOMAINS_FLAG, community_href, community_links, community_label, instance_details_shown, plain_choices, \
     plain_communities, plain_community_mentions, plain_rendering, resolve_community_name, theme_community
 from tests.factories import make_community, make_instance, make_user
 from tests.test_microblog_live import local_instance, login
@@ -35,6 +35,12 @@ def remote_community(name, host, subscribers=0, title=None, reported_total=0):
 def instance_for(host):
     from app.models import Instance
     return Instance.query.filter_by(domain=host).first() or make_instance(host, software='lemmy')
+
+
+def block_instance(user, instance_id):
+    db.session.add(InstanceBlock(user_id=user.id, instance_id=instance_id))
+    db.session.commit()
+    cache.delete_memoized(utils.blocked_instances, user.id)   # ids are reused across tests
 
 
 def join(user, community):
@@ -174,6 +180,40 @@ class TestResolve:
         private.private = True
         db.session.commit()
         ctx = as_user(app, None)
+        try:
+            assert resolve_community_name('memes') is None
+        finally:
+            ctx.pop()
+
+    def test_a_blocked_instances_communities_are_passed_over_joined_or_not(self, app, world):
+        blocked = remote_community('memes', 'blocked.example', subscribers=900)
+        join(world, blocked)
+        visible = remote_community('memes', 'fine.example', subscribers=1)
+        block_instance(world, blocked.instance_id)
+        ctx = as_user(app, world)
+        try:
+            assert resolve_community_name('memes').id == visible.id
+        finally:
+            ctx.pop()
+
+    def test_a_community_hidden_here_is_passed_over(self, app, world, monkeypatch):
+        local = make_community('memes')
+        hidden = remote_community('memes', 'hidden.example', subscribers=900)
+        join(world, hidden)
+        visible = remote_community('memes', 'fine.example', subscribers=1)
+        hidden_ids = {local.id, hidden.id}
+        monkeypatch.setattr('app.plain_names.hidden_here', lambda community: community.id in hidden_ids)
+        ctx = as_user(app, world)
+        try:
+            assert resolve_community_name('memes').id == visible.id
+        finally:
+            ctx.pop()
+
+    def test_none_when_every_candidate_is_blocked(self, app, world):
+        only = remote_community('memes', 'blocked.example')
+        join(world, only)
+        block_instance(world, only.instance_id)
+        ctx = as_user(app, world)
         try:
             assert resolve_community_name('memes') is None
         finally:
@@ -339,7 +379,8 @@ class TestDeduplication:
                                    'Others': [(2, 'Memes'), (3, 'Cats@lemmy.example')]}, facts)
         finally:
             ctx.pop()
-        assert plain == {'Joined communities': [(2, 'Memes')], 'Others': [(3, 'Cats')]}
+        # the reader's own memes stands for the name; a local memes they did not pick is left out of Others
+        assert plain == {'Joined communities': [(1, 'Memes')], 'Others': [(3, 'Cats')]}
 
     def test_post_destinations_titled_alike_are_one_choice(self, app, world):
         facts = {1: ('world', 'World News', False, 50), 2: ('worldnews', 'world news', False, 5),
@@ -350,7 +391,51 @@ class TestDeduplication:
                                    'Others': [(1, 'World News@a.example'), (3, 'Cats@c.example')]}, facts)
         finally:
             ctx.pop()
-        assert plain == {'Joined communities': [(1, 'World News')], 'Others': [(3, 'Cats')]}
+        assert plain == {'Joined communities': [(2, 'world news')], 'Others': [(3, 'Cats')]}
+
+    def test_post_destinations_are_unchanged_for_a_reader_with_details(self, app, world):
+        world.show_instance_details = True
+        db.session.commit()
+        sections = {'Joined communities': [(1, 'Memes@a.example')], 'Others': [(2, 'Memes')]}
+        ctx = as_user(app, world)
+        try:
+            assert plain_choices(sections, {1: ('memes', 'Memes', False, 1), 2: ('memes', 'Memes', True, 1)}) == sections
+        finally:
+            ctx.pop()
+
+    def test_the_best_ranked_of_a_group_wins_wherever_it_is_listed(self, app, world):
+        facts = {1: ('cats', 'Cats', True, 1), 2: ('cats', 'Cats', False, 900), 3: ('dogs', 'Dogs', False, 1)}
+        ctx = as_user(app, None)
+        try:
+            plain = plain_choices({'Joined communities': [(1, 'Cats'), (2, 'Cats@b.example')],
+                                   'Others': [(3, 'Dogs@c.example')]}, facts)
+        finally:
+            ctx.pop()
+        assert plain == {'Joined communities': [(1, 'Cats')], 'Others': [(3, 'Dogs')]}
+
+    def test_a_section_left_empty_is_dropped(self, app, world):
+        facts = {1: ('cats', 'Cats', False, 1), 2: ('cats', 'Cats', True, 900)}
+        ctx = as_user(app, None)
+        try:
+            plain = plain_choices({'Joined communities': [(1, 'Cats@a.example')], 'Others': [(2, 'Cats')]}, facts)
+        finally:
+            ctx.pop()
+        assert plain == {'Joined communities': [(1, 'Cats')]}
+
+    def test_a_strangers_community_cannot_hide_or_join_together_the_readers_own(self, app, world):
+        """Others holds every community, named and titled by anyone: one named like the reader's `cats` and titled
+        like their `World News` must not fold either into the other, nor take their place."""
+        facts = {1: ('cats', 'Cats', False, 1), 2: ('world', 'World News', False, 1),
+                 3: ('cats', 'World News', True, 999), 4: ('dogs', 'Dogs', False, 1),
+                 5: ('DOGS', 'Hounds', False, 50)}
+        ctx = as_user(app, None)
+        try:
+            plain = plain_choices({'Joined communities': [(1, 'Cats@a.example'), (2, 'World News@b.example')],
+                                   'Others': [(3, 'World News'), (4, 'Dogs@c.example'), (5, 'Hounds@d.example')]},
+                                  facts)
+        finally:
+            ctx.pop()
+        assert plain == {'Joined communities': [(1, 'Cats'), (2, 'World News')], 'Others': [(5, 'Hounds')]}
 
 
 class TestMentions:
@@ -406,6 +491,35 @@ class TestMentions:
         assert html == ('<p><a href="/c/memes">!memes</a> <a href="/c/memes">!memes</a> '
                         '<a href="/c/cats@lemmy.example">!cats</a> !dogs <a href="/c/memes">!memes</a> '
                         '<a href="/community/lookup/birds/nowhere.example">!birds</a></p>')
+
+    def test_nothing_to_rewrite(self, app, world):
+        assert self.mentions(app, '') == ''
+        assert self.mentions(app, None) is None
+
+    def test_a_handle_mentioned_twice_is_looked_up_once(self, app, world, monkeypatch):
+        remote_community('cats', 'lemmy.example')
+        monkeypatch.setattr('app.plain_names.MENTION_LOOKUPS', 1)
+        assert self.mentions(app, '<p>!cats@lemmy.example !cats@lemmy.example</p>') == \
+            '<p><a href="/c/cats@lemmy.example">!cats</a> <a href="/c/cats@lemmy.example">!cats</a></p>'
+
+    def test_a_reader_with_details_gets_the_lookup_links(self, app, world):
+        world.show_instance_details = True
+        db.session.commit()
+        ctx = as_user(app, world)
+        try:
+            html = community_links('<p>!cats@lemmy.example</p>')
+        finally:
+            ctx.pop()
+        assert html == '<p><a href="https://test.piefed.local/community/lookup/cats/lemmy.example">!cats@lemmy.example</a></p>'
+
+    def test_the_template_filter_gives_a_plain_reader_plain_mentions(self, app, world):
+        remote_community('cats', 'lemmy.example')
+        ctx = as_user(app, None)
+        try:
+            html = render_template_string('{{ body | community_links | safe }}', body='<p>!cats@lemmy.example</p>')
+        finally:
+            ctx.pop()
+        assert html == '<p><a href="/c/cats@lemmy.example">!cats</a></p>'
 
     def test_code_is_left_alone(self, app, world):
         remote_community('memes', 'lemmy.example')

@@ -195,7 +195,7 @@ def _duplicate_groups(entries) -> dict:
 
     for community_id, name, title in entries:
         node = ('id', community_id)
-        for key in (('title', name_key(title)), ('name', name_key(name))):
+        for key in _keys(name, title):
             parent[root(key)] = root(node)
     return {community_id: root(('id', community_id)) for community_id, _name, _title in entries}
 
@@ -232,34 +232,51 @@ def plain_communities(*sections) -> list:
     return sections[0] if len(sections) == 1 else sections
 
 
-def plain_choices(which_community: dict, facts: dict) -> dict:
+def plain_choices(which_community: dict, facts: dict, others: str = 'Others') -> dict:
     """possible_communities()'s `{section: [(id, label)]}` with each name once across all sections, for a reader
     without instance details, labelled by title alone; unchanged otherwise. `facts` maps each id to (name, title,
-    is_local, subscriber_count). Names group as in plain_communities, and the choice kept is the one `_resolve`'s
-    order ranks first, in the first section any of them held."""
+    is_local, subscriber_count).
+
+    The reader's own sections (every one but `others`) group as in plain_communities, among themselves only. The
+    `others` section holds every other community, whose names and titles anyone can choose: they are grouped among
+    themselves, and one that reads as a name or title the reader's own sections hold is left out, as their own
+    community stands for it. So a stranger's community never replaces, hides or joins together the reader's own."""
     if instance_details_shown():
         return which_community
     members = _member_ids()
-    groups = _duplicate_groups([(community_id, name, title) for community_id, (name, title, _l, _s) in facts.items()])
-    best = {}
-    for community_id, (_name, _title, is_local, subscriber_count) in facts.items():
-        rank = _rank(is_local, community_id in members, subscriber_count, community_id)
-        group = groups[community_id]
-        if group not in best or rank < best[group][0]:
-            best[group] = (rank, community_id)
+    own_ids = {community_id for section, choices in which_community.items() if section != others
+               for community_id, _label in choices}
+    own_keys = {key for community_id in own_ids for key in _keys(*facts[community_id][:2])}
+    strangers = [community_id for community_id, _label in which_community.get(others, [])
+                 if community_id not in own_ids and not own_keys & set(_keys(*facts[community_id][:2]))]
+    winners = {}
+    for population in (own_ids, strangers):
+        groups = _duplicate_groups([(community_id, *facts[community_id][:2]) for community_id in population])
+        best = {}
+        for community_id in population:
+            _name, _title, is_local, subscriber_count = facts[community_id]
+            rank = _rank(is_local, community_id in members, subscriber_count, community_id)
+            group = groups[community_id]
+            if group not in best or rank < best[group][0]:
+                best[group] = (rank, community_id)
+        winners.update({community_id: best[groups[community_id]][1] for community_id in population})
     seen = set()
     plain = {}
     for section, choices in which_community.items():
         kept = []
         for community_id, _label in choices:
-            group = groups[community_id]
-            if group not in seen:
-                seen.add(group)
-                winner = best[group][1]
+            winner = winners.get(community_id)
+            if winner is not None and winner not in seen:
+                seen.add(winner)
                 kept.append((winner, facts[winner][1]))
         if kept:
             plain[section] = kept
     return plain
+
+
+def _keys(name: str, title: str) -> tuple:
+    """The keys `_duplicate_groups` groups by."""
+    return ('title', name_key(title)), ('name', name_key(name))
 
 
 # A link a peer made for a community mention: its text is `!name@domain`.
