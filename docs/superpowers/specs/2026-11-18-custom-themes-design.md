@@ -1,6 +1,6 @@
 # Custom themes per domain: design
 
-Status: APPROVED 2026-11-18 (CT1-CT9). Phase 6 (§3.10) needs its own spec.
+Status: APPROVED 2026-11-18 (CT1-CT9). Phase 6 (§3.10) is specified in `2026-11-18-theme-code-import-export-design.md`.
 
 Date: 2026-11-18. This builds on per-domain branding (`2026-10-25-per-domain-branding-design.md`) and RBAC
 (`2026-11-03-rbac-design.md`). It reverses one branding non-goal: "Uploading new themes. A domain picks from the
