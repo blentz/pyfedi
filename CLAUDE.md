@@ -27,6 +27,15 @@ This repo is application code only and must stay deployment agnostic:
 - `docs/CHANGES-since-v1.8.10.md`: what the fork changes relative to upstream.
 - `docs/superpowers/specs/` and `docs/superpowers/plans/`: design specs and implementation plans for fork features.
 
+## Quality bar: zero tolerance for bugs
+
+- Testing is as comprehensive as possible: every change ships with tests for its behaviour, its edge cases and its
+  failure paths, and a bug fix starts with a test that fails without it.
+- Coverage stays at 100%. A run passes only with 0 errors and 0 warnings: test failures, lint findings and the
+  warnings pytest reports all count.
+- Libraries and tooling stay as up to date as possible: take new releases of dependencies and tools promptly,
+  rather than pinning to old versions.
+
 ## Tests and lint
 
 - `./run_tests.sh [pytest args]`: runs the suite in disposable podman-compose containers (`compose.test.yaml`); also
@@ -34,6 +43,7 @@ This repo is application code only and must stay deployment agnostic:
 - `./run_tests_remote.sh [pytest args]`: the same on another podman connection (`REMOTE_PODMAN`, default
   `remote-gpu`). Prefer it for full-suite or coverage runs so the laptop isn't loaded.
 - `coverage_floors.ini` sets per-module coverage floors. Floors only ever rise: never lower one to make a run pass.
+  The target is 100% for every module (see "Quality bar" above); raise floors as coverage reaches them.
 - Lint with `ruff` (`ruff.toml`).
 
 ## Notes
