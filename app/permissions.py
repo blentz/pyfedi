@@ -49,6 +49,10 @@ CATALOGUE = (
     Permission('manage domains', 'domains', False, False, 'Add and delete domains, and whether each federates'),
     Permission('edit domain branding', 'domains', True, False,
                "A domain's name, description, logos and registration mode"),
+    Permission('manage theme code', 'domains', True, False,
+               "Import and edit theme templates and scripts. Templates run on the server with all of its secrets, and "
+               "scripts run in every visitor's browser, admins included: on any domain, this is as much as full "
+               'instance admin'),
     # users
     Permission('approve registrations', 'users', True, True, 'Approve and refuse registration applications'),
     Permission('administer all users', 'users', True, True,

@@ -6118,6 +6118,11 @@ class ModLog(db.Model):
         'delete_theme': _l('Deleted theme'),
         'add_theme_file': _l('Added theme file'),
         'remove_theme_file': _l('Removed theme file'),
+        'import_theme': _l('Imported theme'),
+        'edit_theme_template': _l('Edited theme template'),
+        'remove_theme_template': _l('Removed theme template'),
+        'edit_theme_script': _l('Edited theme script'),
+        'remove_theme_script': _l('Removed theme script'),
     }
 
     # Actions recorded for admins only, whatever the public_modlog setting (D942). Role changes are among them: a
@@ -6125,7 +6130,8 @@ class ModLog(db.Model):
     admin_only_actions = {'masquerade', 'create_role', 'edit_role', 'delete_role', 'grant_role', 'change_grant_expiry',
                           'revoke_role', 'grant_expired', 'edit_offer_roles', 'create_theme', 'rename_theme',
                           'edit_theme', 'retire_theme', 'unretire_theme', 'delete_theme', 'add_theme_file',
-                          'remove_theme_file'}
+                          'remove_theme_file', 'import_theme', 'edit_theme_template', 'remove_theme_template',
+                          'edit_theme_script', 'remove_theme_script'}
 
     def action_to_str(self):
         if self.action in self.action_map:
@@ -6379,6 +6385,23 @@ class CustomTheme(db.Model):
     updated_by = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_custom_theme_updated_by', ondelete='SET NULL'))
     files = db.relationship('CustomThemeFile', backref='theme', cascade='all, delete-orphan', passive_deletes=True,
                             order_by='CustomThemeFile.filename')
+    # Theme code (phase 6, app.theme_code): only holders of `manage theme code` set these.
+    script = db.Column(db.Text)   # the theme's scripts.js; None: its base theme's
+    templates = db.relationship('CustomThemeTemplate', backref='theme', cascade='all, delete-orphan',
+                                passive_deletes=True, order_by='CustomThemeTemplate.name')
+
+
+class CustomThemeTemplate(db.Model):
+    """A custom theme's override of the app template `name` (theme code spec §3.2), loaded from here by
+    app.theme_code's loader."""
+    __tablename__ = 'custom_theme_template'
+    __table_args__ = (db.UniqueConstraint('custom_theme_id', 'name', name='uq_custom_theme_template_name'),)
+    id = db.Column(db.Integer, primary_key=True)
+    custom_theme_id = db.Column(db.Integer, db.ForeignKey('custom_theme.id', name='fk_custom_theme_template_theme_id',
+                                                          ondelete='CASCADE'), nullable=False, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    source = db.Column(db.Text, nullable=False, default='')
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
 
 class CustomThemeFile(db.Model):

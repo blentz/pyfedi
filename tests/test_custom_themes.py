@@ -142,15 +142,21 @@ def test_new_theme_defaults(two_domains):
     assert theme.created_at is not None and theme.updated_at is not None
 
 
+def _migration(pattern):
+    path = next(Path(__file__).parent.parent.glob(f'migrations/versions/{pattern}'))
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_migration_drops_and_makes_the_tables(db_session):
     """Downgrade then upgrade: the database is left as `flask db upgrade` made it."""
-    path = next(Path(__file__).parent.parent.glob('migrations/versions/*_custom_themes.py'))
-    spec = importlib.util.spec_from_file_location(path.stem, path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
+    migration, later = (_migration('*_custom_themes.py'), _migration('*_theme_code.py'))
     db.session.commit()
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            later.downgrade()   # theme code's table refers to custom_theme: it goes first and comes back last
             migration.downgrade()
             assert not inspect(db.session.connection()).has_table('custom_theme')
             assert not inspect(db.session.connection()).has_table('custom_theme_file')
@@ -158,6 +164,7 @@ def test_migration_drops_and_makes_the_tables(db_session):
             assert inspect(db.session.connection()).has_table('custom_theme')
             assert {index['name'] for index in inspect(db.session.connection()).get_indexes('custom_theme')} >= \
                 {'ix_custom_theme_domain_name', 'ix_custom_theme_site_domain_id'}
+            later.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()

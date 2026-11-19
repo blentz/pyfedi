@@ -221,6 +221,11 @@ class Config(object):
     CUSTOM_THEME_MAX_BYTES = int(os.environ.get('CUSTOM_THEME_MAX_BYTES') or 10 * 1024 * 1024)
     CUSTOM_THEME_MAX_FILES = int(os.environ.get('CUSTOM_THEME_MAX_FILES') or 50)
     CUSTOM_THEME_MAX_CSS_BYTES = int(os.environ.get('CUSTOM_THEME_MAX_CSS_BYTES') or 512 * 1024)
+    # Theme code and archives (custom themes phase 6)
+    CUSTOM_THEME_MAX_TEMPLATES = int(os.environ.get('CUSTOM_THEME_MAX_TEMPLATES') or 100)
+    CUSTOM_THEME_MAX_TEMPLATE_BYTES = int(os.environ.get('CUSTOM_THEME_MAX_TEMPLATE_BYTES') or 256 * 1024)
+    CUSTOM_THEME_MAX_SCRIPT_BYTES = int(os.environ.get('CUSTOM_THEME_MAX_SCRIPT_BYTES') or 512 * 1024)
+    CUSTOM_THEME_MAX_ARCHIVE_BYTES = int(os.environ.get('CUSTOM_THEME_MAX_ARCHIVE_BYTES') or 12 * 1024 * 1024)
 
     # Where the onion remote-media proxy caches fetched files; never inside media/
     MEDIA_PROXY_DIR = os.environ.get('MEDIA_PROXY_DIR') or os.path.join(basedir, 'media_proxy')
