@@ -6,6 +6,7 @@ import io
 import json
 import struct
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -171,6 +172,16 @@ def test_header_sizes_are_not_trusted(app):
     assert 'scripts.js' in str(refused.value)
 
 
+@pytest.mark.parametrize('seed, said', [('negative_seek_header', 'damaged'), ('unknown_zip_version', 'not a zip')])
+def test_what_the_fuzzer_found_is_refused(app, seed, said):
+    """Found by the theme_archive fuzz campaign: zipfile raised ValueError (a negative seek) and NotImplementedError
+    (an unknown zip version), not BadZipFile."""
+    crafted = (Path(__file__).parent / 'fuzz/corpus/theme_archive' / seed).read_bytes()
+    with pytest.raises(ThemeCodeError) as refused:
+        read_archive(crafted)
+    assert said in str(refused.value)
+
+
 def test_a_directory_entry_is_ignored(app):
     found = read_archive(make_zip(infos=[(zipfile.ZipInfo('files/'), b'')]))
     assert found.files == {}
@@ -270,3 +281,4 @@ def test_an_export_imports_back_to_the_same_theme(app, world, coder):
     assert (copy.css, copy.base_theme, copy.script) == (day.css, day.base_theme, day.script)
     assert [(t.name, t.source) for t in copy.templates] == [('about.html', 'about')]
     assert [(f.filename, f.size) for f in copy.files] == [('logo.png', len(PNG))]
+

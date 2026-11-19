@@ -216,6 +216,10 @@ SURFACES: dict[str, list[str]] = {
     'routes': [
         'flask.Flask.wsgi_app',
     ],
+    # A theme archive uploaded for import (custom themes phase 6): read and checked whole before anything is stored.
+    'theme_archives': [
+        'app.theme_code.read_archive',
+    ],
     # The sidebars' box order: the stored order every page reads, and the admin button posted to change it.
     'sidebar': [
         'app.sidebar.layout',

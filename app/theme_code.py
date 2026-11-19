@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import struct
 import zipfile
 import zlib
 from dataclasses import dataclass, field
@@ -244,6 +245,10 @@ def write_archive(theme) -> tuple[bytes, list[str]]:
 
 
 MANIFEST_BYTES = 64 * 1024
+# What zipfile raises for a damaged or crafted archive, beyond BadZipFile: found by the theme_archive fuzz target
+# (ValueError: a negative seek; NotImplementedError: an unknown zip version or method).
+_ZIP_ERRORS = (zipfile.BadZipFile, zipfile.LargeZipFile, zlib.error, EOFError, OSError, ValueError,
+               NotImplementedError, RuntimeError, struct.error, OverflowError)
 _SYMLINK = 0o120000
 _TOP_LEVEL = ('manifest.json', 'styles.css', 'scripts.js')
 
@@ -302,7 +307,7 @@ def read_archive(data: bytes) -> ThemeArchive:
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
         infos = archive.infolist()
-    except (zipfile.BadZipFile, zipfile.LargeZipFile, ValueError, EOFError):
+    except _ZIP_ERRORS:
         raise ThemeCodeError('The upload is not a zip archive.') from None
     entries = [info for info in infos if not info.is_dir()]
     most = config['CUSTOM_THEME_MAX_FILES'] + config['CUSTOM_THEME_MAX_TEMPLATES'] + len(_TOP_LEVEL)
@@ -331,10 +336,10 @@ def read_archive(data: bytes) -> ThemeArchive:
         try:
             with archive.open(info) as entry:
                 content = entry.read(limit + 1)
-                if len(content) > limit:
-                    raise ThemeCodeError(f'{name}: too big (at most {limit} bytes).')
-        except (zipfile.BadZipFile, zlib.error, EOFError, OSError, NotImplementedError, RuntimeError):
+        except _ZIP_ERRORS:
             raise ThemeCodeError(f'{name}: damaged in the archive.') from None
+        if len(content) > limit:
+            raise ThemeCodeError(f'{name}: too big (at most {limit} bytes).')
         total += len(content)
         if total > total_limit:
             raise ThemeCodeError(f'{name}: the archive holds more than a theme may.')
