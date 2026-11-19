@@ -75,6 +75,8 @@ services:
       - pf_test_network
 
 networks:
+  # No fixed `name:`: the network is the project's (<project>_pf_test_network), so two stacks running at once (two
+  # checkouts, or a worktree beside its repository) each have their own. With one name for all, both stacks' test-db
+  # answered on it, and one run's workers reached the other's database, whose per-worker copies it never made.
   pf_test_network:
-    name: pf_test_network
     external: false
