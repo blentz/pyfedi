@@ -16,7 +16,7 @@ from markupsafe import escape
 from sqlalchemy import desc, func
 
 from app import utils   # its names are read at call time: it imports this module too
-from app.local_names import local_clause
+from app.local_names import local_clause, named_by_actor
 from app.local_only import hidden_here
 from app.models import Community, CommunityMember
 
@@ -77,8 +77,8 @@ def install(app) -> None:
 
 def resolve_community_name(name: str):
     """The community a bare `name` means to this request's reader: the local one, else one they joined (the most
-    subscribed first), else the most subscribed other community of that name they may see. None when there is none.
-    Memoized for the request."""
+    subscribed here first), else the community of that name they may see with the most subscribers here, the oldest
+    on a tie. None when there is none. Memoized for the request."""
     if not name or '@' in name:
         return None
     key = name.strip().lower()
@@ -96,9 +96,8 @@ def _resolve(name: str):
         return local
     remote = Community.query.filter(func.lower(Community.name) == name, Community.ap_id.isnot(None),
                                     Community.banned.is_(False))
-    # subscribers()'s count: everyone's, else local
-    by_popularity = (desc(func.coalesce(func.nullif(Community.total_subscriptions_count, 0),
-                                        Community.subscriptions_count, 0)), Community.id)
+    # subscribers()'s count: local subscribers only (never a remote-reported total), then the oldest
+    by_popularity = (desc(func.coalesce(Community.subscriptions_count, 0)), Community.id)
     if current_user.is_authenticated:
         joined = remote.join(CommunityMember, CommunityMember.community_id == Community.id).filter(
             CommunityMember.user_id == current_user.id, CommunityMember.is_banned.is_(False))
@@ -147,13 +146,14 @@ def theme_community(community):
 
 
 def subscribers(community) -> int:
-    """The subscriber count a same-named community is ranked by: everyone's, else local, as the SQL in `_resolve`."""
-    return community.total_subscriptions_count or community.subscriptions_count or 0
+    """The subscriber count a same-named community is ranked by: its subscribers here, which this instance counted
+    itself. Never the total a remote server reports, which a squatter could inflate to take over a bare name."""
+    return community.subscriptions_count or 0
 
 
 def _rank(is_local: bool, is_member: bool, subscriber_count: int, community_id: int) -> tuple:
     """`_resolve`'s order, for a group already in hand: local first, then one the reader joined, then the most
-    subscribed, then the oldest."""
+    subscribed here, then the oldest."""
     return not is_local, not is_member, -(subscriber_count or 0), community_id
 
 
@@ -219,16 +219,18 @@ def plain_choices(which_community: dict, facts: dict) -> dict:
     return plain
 
 
-# A link a peer or our own renderer made for a community mention: its text is `!name@domain`.
-_MENTION_LINK_RE = re.compile(r'<a\b[^>]*>\s*!([a-zA-Z0-9_.-]+)@[a-zA-Z0-9_.-]+\s*</a>')
+# A link a peer made for a community mention: its text is `!name@domain`.
+_MENTION_LINK_RE = re.compile(r'(<a\b[^>]*>)\s*!([a-zA-Z0-9_.-]+)@([a-zA-Z0-9_.-]+)\s*</a>')
+_HREF_RE = re.compile(r'''\bhref\s*=\s*(["'])[^"']*\1''')
 # A mention in text: `!name@domain`, or a bare `!name` (a sentence's closing dot is not part of the name).
 _TEXT_MENTION_RE = re.compile(r'(?<![\w/<!@&])!([a-zA-Z0-9_]+(?:[.-][a-zA-Z0-9_]+)*)(@[a-zA-Z0-9_.-]+\b)?')
 
 
 def plain_community_mentions(html: str) -> str:
-    """Community mentions in rendered `html` for a reader without instance details: `!name@domain`, as text or as a
-    link, becomes `!name` linking to /c/name; a bare `!name` that resolves is linked the same way. A mention whose
-    name resolves to nothing keeps its text without the domain and is not linked. Code is left alone."""
+    """Community mentions in rendered `html` for a reader without instance details. A handle, `!name@domain` as text
+    or a peer's link, is shown as `!name` but still links to the community it names, never to another of that name:
+    /c/<handle> for a community we know, else the lookup (text) or the peer's own href (link). A bare `!name` that
+    resolves links to /c/name, as the name is resolved there. Code is left alone."""
     if not html:
         return html
     code_placeholder = '\x00' + utils.gibberish(10)
@@ -236,7 +238,7 @@ def plain_community_mentions(html: str) -> str:
     tag_placeholder = '\x00' + utils.gibberish(10)
 
     code_snippets, html = utils.stash_code_html(html, code_placeholder, utils._ANY_CODE_HTML_RE)
-    html = _MENTION_LINK_RE.sub(lambda m: _mention(m.group(1)), html)
+    html = _MENTION_LINK_RE.sub(_link_mention, html)
     link_snippets, html = utils.stash_link_html(html, link_placeholder, utils._ANY_LINK_HTML_RE)
     tag_snippets, html = utils.stash_code_html(html, tag_placeholder, utils._ANY_TAG_HTML_RE)
 
@@ -249,16 +251,31 @@ def plain_community_mentions(html: str) -> str:
 
 def _text_mention(match) -> str:
     name, domain = match.group(1), match.group(2)
-    if domain is None and resolve_community_name(name) is None:
-        return match.group(0)   # an exclamation, not a mention
-    return _mention(name)
-
-
-def _mention(name: str) -> str:
-    text = escape(f'!{name}')
+    if domain is not None:
+        known = _known_handle(name, domain[1:])
+        href = f'/c/{known}' if known else f'/community/lookup/{name}/{domain[1:]}'
+        return f'<a href="{escape(href)}">{escape("!" + name)}</a>'
     if resolve_community_name(name) is None:
-        return str(text)
-    return f'<a href="/c/{escape(name.lower())}">{text}</a>'
+        return match.group(0)   # an exclamation, not a mention
+    return f'<a href="/c/{escape(name.lower())}">{escape("!" + name)}</a>'
+
+
+def _link_mention(match) -> str:
+    opening, name, host = match.group(1), match.group(2), match.group(3)
+    known = _known_handle(name, host)
+    if known:
+        opening = _HREF_RE.sub(lambda _m: f'href="/c/{escape(known)}"', opening, count=1)
+    return f'{opening}{escape("!" + name)}</a>'
+
+
+def _known_handle(name: str, host: str) -> str | None:
+    """The /c/ path of the community `name@host` names exactly (a hosted domain's own, or the remote one), else
+    None. Never resolved by name alone: a handle means that community."""
+    community = Community.query.filter(named_by_actor(Community, f'{name}@{host}'.lower()),
+                                       Community.banned.is_(False)).first()
+    if community is None or hidden_here(community):
+        return None
+    return community.link()
 
 
 def community_links(html: str, server_name_override: str | None = None) -> str:

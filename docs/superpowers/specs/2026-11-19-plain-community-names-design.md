@@ -26,9 +26,11 @@ on. Only the HTML served to browsers changes: the API, ActivityPub, stored data 
 3. else any non-private remote community of that name, most subscribed first.
 
 It skips banned communities and communities hidden here (`hidden_here`), as well as instances the reader banned
-or blocked. "Most subscribed" means `total_subscriptions_count` if it is non-zero, otherwise
-`subscriptions_count`; ties go to the lower id. `_rank` repeats this order in memory for lists that are already
-loaded, so a menu and the page its link opens pick the same community.
+or blocked. "Most subscribed" means the community's subscribers **on this instance** (`subscriptions_count`, which
+we count ourselves); ties go to the oldest (lowest id). A remote server's reported total
+(`total_subscriptions_count`) is never used: a squatter could inflate it to take over a popular bare name. `_rank`
+repeats this order in memory for lists that are already loaded, so a menu and the page its link opens pick the same
+community.
 
 ## What changes when the setting is off
 
@@ -38,7 +40,7 @@ loaded, so a menu and the page its link opens pick the same community.
 | Community links | Navigational links (`href="/c/{{ community_href(c) }}"`, breadcrumbs, `post_community_link`) to a remote community use the bare name. A local community keeps `link()`: it is already bare on its own domain, and on another of our storefront domains the bare name means that domain's own community. A server view keeps its `microblogs@<host>` link. **Action URLs (join, leave, submit, moderate, flair, RSS) keep `community.link()`**, so they always act on the exact community. |
 | `/c/<name>` | For a browser request with no `@`, if no local community matches, the route shows the resolved community instead of redirecting to "add local community". ActivityPub requests are handled as before (404 for a name that isn't local). |
 | Posting | `possible_communities()` (the destination choices and `main.add_post`'s whitelist) and `post_destination_sections()` keep one entry per name: the one the resolver would pick, labelled by title. A community's own "create post" button still posts to that community. |
-| Mentions in posts and comments | The `community_links` filter (applied when rendering) turns `!name@domain`, our lookup links and peers' `<a>!name@domain</a>` links into `<a href="/c/name">!name</a>`. A bare `!name` is linked only when it resolves. A mention that doesn't resolve keeps its text, without the domain, and gets no link. Code blocks are left alone. Stored `body_html` is never changed. |
+| Mentions in posts and comments | The `community_links` filter (applied when rendering) shows a handle (`!name@domain`, as text or as a peer's link) as `!name`, but **the link still goes to the community the handle names**: `/c/<handle>` when we know it, otherwise the lookup page (for text) or the peer's own href (for a link). A handle never resolves to another community of the same name. A bare `!name` is linked to `/c/name` only when it resolves. Code blocks are left alone. Stored `body_html` is never changed. |
 | Community theme | `base.html` and the side pane take the theme (and the per-user "allow theme" toggle) from `theme_community(c)`, the community that `c.name` resolves to. |
 | Navbar communities menu and topics menu | Each of Favorites, Moderating and Joined lists a name once. The community the resolver would pick stands in for every community of that name in every section, so a favorite still appears again under Joined, as it did before. The `@domain` duplicate marker is gone. |
 | Server views (`microblogs@<host>`) | Their headings and post links show plain "microblogs". |

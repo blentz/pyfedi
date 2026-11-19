@@ -19,12 +19,13 @@ from tests.test_microblog_live import local_instance, login
 pytestmark = pytest.mark.usefixtures('db_session', 'site')
 
 
-def remote_community(name, host, subscribers=0, title=None):
+def remote_community(name, host, subscribers=0, title=None, reported_total=0):
+    """`subscribers` are counted here; `reported_total` is what the remote server claims."""
     instance = instance_for(host)
     community = Community(name=name, title=title or name.capitalize(), instance_id=instance.id, user_id=1,
                           ap_id=f'{name}@{host}', ap_profile_id=f'https://{host}/c/{name}',
                           ap_public_url=f'https://{host}/c/{name}', ap_domain=host,
-                          subscriptions_count=0, total_subscriptions_count=subscribers, local_only=False, nsfw=False)
+                          subscriptions_count=subscribers, total_subscriptions_count=reported_total, local_only=False, nsfw=False)
     db.session.add(community)
     db.session.commit()
     return community
@@ -126,6 +127,25 @@ class TestResolve:
         ctx = as_user(app, None)
         try:
             assert resolve_community_name('memes').id == big.id
+        finally:
+            ctx.pop()
+
+    def test_a_remote_reported_total_cannot_take_over_a_name(self, app, world):
+        """A squatter's server can claim any subscriber total; only subscribers counted here rank a community."""
+        real = remote_community('memes', 'real.example', subscribers=5)
+        remote_community('memes', 'squat.example', subscribers=0, reported_total=10_000_000)
+        ctx = as_user(app, None)
+        try:
+            assert resolve_community_name('memes').id == real.id
+        finally:
+            ctx.pop()
+
+    def test_on_a_tie_the_oldest_wins(self, app, world):
+        first = remote_community('memes', 'first.example')
+        remote_community('memes', 'later.example')
+        ctx = as_user(app, None)
+        try:
+            assert resolve_community_name('memes').id == first.id
         finally:
             ctx.pop()
 
@@ -274,10 +294,10 @@ class TestMentions:
         finally:
             ctx.pop()
 
-    def test_a_handle_becomes_a_bare_link(self, app, world):
+    def test_a_handle_loses_its_domain_but_links_to_the_community_it_names(self, app, world):
         remote_community('memes', 'lemmy.example')
         assert self.mentions(app, '<p>see !memes@lemmy.example now</p>') == \
-            '<p>see <a href="/c/memes">!memes</a> now</p>'
+            '<p>see <a href="/c/memes@lemmy.example">!memes</a> now</p>'
 
     def test_a_bare_name_that_resolves_is_linked_local_first(self, app, world):
         make_community('memes')
@@ -289,10 +309,21 @@ class TestMentions:
     def test_a_peers_mention_link_is_rewritten(self, app, world):
         remote_community('memes', 'lemmy.example')
         html = '<p><a href="https://lemmy.example/c/memes">!memes@lemmy.example</a></p>'
-        assert self.mentions(app, html) == '<p><a href="/c/memes">!memes</a></p>'
+        assert self.mentions(app, html) == '<p><a href="/c/memes@lemmy.example">!memes</a></p>'
 
-    def test_an_unknown_handle_loses_its_domain_but_no_link_is_made(self, app, world):
-        assert self.mentions(app, '<p>!ghosts@nowhere.example</p>') == '<p>!ghosts</p>'
+    def test_a_handle_never_resolves_to_another_community_of_its_name(self, app, world):
+        make_community('memes')   # a local one wins the bare name, but not a handle naming the remote one
+        remote_community('memes', 'lemmy.example')
+        assert self.mentions(app, '<p>!memes@lemmy.example and !memes</p>') == \
+            '<p><a href="/c/memes@lemmy.example">!memes</a> and <a href="/c/memes">!memes</a></p>'
+
+    def test_an_unknown_peers_link_keeps_its_href(self, app, world):
+        html = '<a href="https://nowhere.example/c/ghosts">!ghosts@nowhere.example</a>'
+        assert self.mentions(app, html) == '<a href="https://nowhere.example/c/ghosts">!ghosts</a>'
+
+    def test_an_unknown_handle_links_to_the_lookup(self, app, world):
+        assert self.mentions(app, '<p>!ghosts@nowhere.example</p>') == \
+            '<p><a href="/community/lookup/ghosts/nowhere.example">!ghosts</a></p>'
 
     def test_code_is_left_alone(self, app, world):
         remote_community('memes', 'lemmy.example')
