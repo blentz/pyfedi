@@ -30,7 +30,7 @@ from app.activitypub.serializers.microblog import link_hashtags, microblog_note
 from app.activitypub.util import comment_model_to_json, post_to_page
 from app.constants import COMMUNITY_KIND_MICROBLOGS, COMMUNITY_KIND_VIDEO_CHANNEL, POST_TYPE_VIDEO
 from app.federation_urls import activity_id, hosted_domain_names, object_base, owned_elsewhere
-from app.models import Site, ActivityPubLog, ChatMessage, CommunityFlair, CommunityMember, Conversation, Feed, File, Instance, \
+from app.models import ActivityPubLog, ChatMessage, CommunityFlair, CommunityMember, Conversation, Feed, File, Instance, \
     Post, PostVote, Site, SiteDomain, Tag, federation_base
 from app.quotes import resolve_quotes
 from app.shared.media import with_media

@@ -238,7 +238,6 @@ class TestSorts:
         assert row.last_active is not None
 
     def test_a_new_post_gets_a_last_active_without_being_told(self, spread):
-        from app.models import Post
         post = Post(user_id=spread.posts[0].user_id,
                     community_id=spread.posts[0].community_id,
                     title='fresh', ap_id='https://test.piefed.local/p/fresh')

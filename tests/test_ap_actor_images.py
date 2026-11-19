@@ -370,7 +370,7 @@ class TestAnActorBecomingARowForTheFirstTime:
 
     def test_a_new_user_takes_its_avatar_from_the_last_entry(self, app, db_session):
         from app.activitypub.util import actor_json_to_model
-        from tests.factories import make_instance, peer_actor_json
+        from tests.factories import peer_actor_json
 
         make_instance(PEER)
         document = peer_actor_json(name='alice', server=PEER,
@@ -380,7 +380,7 @@ class TestAnActorBecomingARowForTheFirstTime:
 
     def test_a_new_user_takes_its_cover_from_the_first(self, app, db_session):
         from app.activitypub.util import actor_json_to_model
-        from tests.factories import make_instance, peer_actor_json
+        from tests.factories import peer_actor_json
 
         make_instance(PEER)
         document = peer_actor_json(name='alice', server=PEER,
@@ -395,7 +395,7 @@ class TestAnActorBecomingARowForTheFirstTime:
         """`icon: []` was an IndexError here too, and this is the path a peer
         reaches simply by being mentioned for the first time."""
         from app.activitypub.util import actor_json_to_model
-        from tests.factories import make_instance, peer_actor_json
+        from tests.factories import peer_actor_json
 
         make_instance(PEER)
         document = peer_actor_json(name='alice', server=PEER,

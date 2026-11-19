@@ -1,3 +1,4 @@
+import importlib
 import json
 import os
 import re
@@ -118,8 +119,8 @@ from xdist.scheduler import LoadScopeScheduling
 # circular ImportError. Every other test module in this repo sidesteps this by
 # importing something from app.* first (e.g. `from app.utils import ...`); do
 # the same here so `from config import Config` below sees a fully-initialised
-# config module.
-import app  # noqa: F401
+# config module. Imported for that side effect alone, without binding the name `app`, which the fixture below takes.
+importlib.import_module('app')
 
 from app import celery
 from app.activitypub.ld_contexts import ld_document_loader
