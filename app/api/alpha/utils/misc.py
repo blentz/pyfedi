@@ -9,6 +9,7 @@ from app.activitypub.util import find_actor_or_create, remote_object_to_json, ac
     find_community, create_resolved_object, normalise_actor_string, host_of, find_microblogging_community, NEW_CONTENT_TYPES
 from app.api.alpha.utils.community import get_community_list
 from app.api.alpha.utils.found import a_post
+import app.reads.post as reads_post   # the module, as post.py imports it (import cycle)
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.user import get_user_list
 from app.api.alpha.utils.reply import get_reply_list
@@ -575,14 +576,16 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
 
 
 def _suggestion_thread(post_id, user_id):
-    """The post whose repliers a person suggestion puts first, or None. A post hidden here, or one the caller may not
-    see, is None as one nobody holds is: the suggestions never tell them apart (follow-up F6)."""
+    """The post whose repliers a person suggestion puts first, or None. A post hidden here, one the caller may not
+    see, and one in a private community they are no member of (its comments are its members') are None as one nobody
+    holds is: the suggestions never tell them apart (follow-up F6)."""
     if post_id is None:
         return None
     try:
         post = a_post(post_id)
+        reads_post.refuse_private_thread(post.community, user_id)
     except Exception as refused:
-        if str(refused) != 'post not found':
+        if not (str(refused) == 'post not found' or str(refused).startswith('Private community - ')):
             raise
         return None
     return post if can_view(post, user_id) else None
@@ -602,6 +605,7 @@ def get_suggestion(data, auth=None):
         thread = _suggestion_thread(data.get('post_id'), user_id)
         if thread is not None:
             replies = without_hidden_here(PostReply.query.filter(PostReply.post_id == thread.id,
+                                                                  PostReply.deleted.is_(False),
                                                                   visible_to_clause(PostReply, user_id)),
                                           PostReply, visible).with_entities(PostReply.user_id)
             people_from_post = without_local_only_actors(User.query.filter(User.id.in_(replies)).

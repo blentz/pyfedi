@@ -581,6 +581,31 @@ def test_a_post_the_caller_may_not_see_puts_nobody_first(app, env):
         get_suggestion({'q': '@seen', 'post_id': 2 ** 31 - 1}, token(author))
 
 
+def test_a_private_community_post_puts_nobody_first_for_a_non_member(app, env):
+    """Its comments are its members' (refuse_private_thread), so who wrote them is too."""
+    from app.api.alpha.utils.misc import get_suggestion
+
+    user, author, community, post, reply, baseline = env   # author is no member of the post's community
+    replier, _ = _a_thread_replier_under_seven_namesakes(baseline, post, 'inner')
+    assert replier.lemmy_link() in get_suggestion({'q': '@inner', 'post_id': post.id}, token(author))['result']
+    post.community.private = True
+    db.session.commit()
+
+    assert get_suggestion({'q': '@inner', 'post_id': post.id}, token(author)) == \
+        get_suggestion({'q': '@inner', 'post_id': 2 ** 31 - 1}, token(author))
+
+
+def test_a_deleted_reply_puts_nobody_first(app, env):
+    from app.api.alpha.utils.misc import get_suggestion
+
+    user, author, community, post, reply, baseline = env
+    replier, gone = _a_thread_replier_under_seven_namesakes(baseline, post, 'gone')
+    gone.deleted = True
+    db.session.commit()
+
+    assert replier.lemmy_link() not in get_suggestion({'q': '@gone', 'post_id': post.id}, token(author))['result']
+
+
 def test_a_followers_only_reply_the_caller_may_not_see_puts_nobody_first(app, env):
     from app.api.alpha.utils.misc import get_suggestion
     from app.constants import VISIBILITY_FOLLOWERS

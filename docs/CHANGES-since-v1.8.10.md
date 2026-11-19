@@ -1066,7 +1066,8 @@ Also: the unread private-message count counts messages, notified or not
 500 (`558b029a`). `post_id` is in the schema, so the people who replied to that
 post come first, as the code always meant; before, the field was dropped as
 unknown. A post the caller may not see, or one hidden here, answers as one nobody
-holds, and a followers-only reply the caller may not see does not count.
+holds, and so is a post in a private community the caller is no member of;
+deleted replies, and followers-only ones the caller may not see, do not count.
 
 ### 2.5 Federation and wire-format changes (for other implementers)
 
