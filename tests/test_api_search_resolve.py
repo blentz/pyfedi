@@ -595,6 +595,16 @@ def test_a_private_community_post_puts_nobody_first_for_a_non_member(app, env):
         get_suggestion({'q': '@inner', 'post_id': 2 ** 31 - 1}, token(author))
 
 
+def test_a_thread_lookup_failure_that_is_no_refusal_is_not_hidden(app, env):
+    """Only 'not found' and the private-community refusals mean no thread; anything else is a real error."""
+    from app.api.alpha.utils.misc import get_suggestion
+
+    user, author, community, post, reply, baseline = env
+    with patch('app.api.alpha.utils.misc.a_post', side_effect=Exception('database is down')):
+        with pytest.raises(Exception, match='database is down'):
+            get_suggestion({'q': '@anyone', 'post_id': post.id}, token(author))
+
+
 def test_a_deleted_reply_puts_nobody_first(app, env):
     from app.api.alpha.utils.misc import get_suggestion
 
