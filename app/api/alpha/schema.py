@@ -803,6 +803,7 @@ class GetFeedRequest(DefaultSchema):
 
 class GetSuggestCompletionRequest(DefaultSchema):
     q = fields.String(required=True)   # fork: without it, get_suggestion raised KeyError (a 500)
+    post_id = fields.Integer()   # fork: people in this post's thread come first; unknown fields are dropped
 
 
 class GetSuggestCompletionResponse(DefaultSchema):

@@ -537,6 +537,63 @@ def test_a_person_suggestion_prefers_people_in_the_thread(app, env):
     assert author.lemmy_link() in answer['result']
 
 
+def test_the_api_passes_post_id_so_people_in_the_thread_come_first(app, env, monkeypatch):
+    """post_id was not in the request schema, which drops unknown fields, so the thread was never consulted."""
+    user, author, community, post, reply, baseline = env
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    prefix = author.user_name[:3]
+    for number in range(8):   # better known than the author: without the thread they fill all seven places
+        make_user(baseline.instance_local, f'{prefix}busy{number}', local=True).reputation = 100
+    db.session.commit()
+
+    def suggested(**extra):
+        response = app.test_client().get('/api/alpha/suggest_completion', headers={'Authorization': token(user)},
+                                         query_string={'q': f'@{prefix}', **extra})
+        assert response.status_code == 200
+        return response.get_json()['result']
+
+    assert author.lemmy_link() not in suggested()
+    assert author.lemmy_link() in suggested(post_id=post.id)
+
+
+def _a_thread_replier_under_seven_namesakes(baseline, post, prefix):
+    """A replier to `post` whom seven better-known users with the same prefix keep off the list without the thread."""
+    for number in range(7):
+        make_user(baseline.instance_local, f'{prefix}known{number}', local=True).reputation = 100
+    replier = make_user(baseline.instance_local, f'{prefix}replier', local=True)
+    reply = make_post_reply(post, replier, body='in the thread')
+    db.session.commit()
+    return replier, reply
+
+
+def test_a_post_the_caller_may_not_see_puts_nobody_first(app, env):
+    """A followers-only post answers as one nobody holds: its repliers are not named for being in it."""
+    from app.api.alpha.utils.misc import get_suggestion
+    from app.constants import VISIBILITY_FOLLOWERS
+
+    user, author, community, post, reply, baseline = env   # user wrote the post, so the caller is author
+    replier, _ = _a_thread_replier_under_seven_namesakes(baseline, post, 'seen')
+    post.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+
+    assert replier.lemmy_link() not in get_suggestion({'q': '@seen', 'post_id': post.id}, token(author))['result']
+    assert get_suggestion({'q': '@seen', 'post_id': post.id}, token(author)) == \
+        get_suggestion({'q': '@seen', 'post_id': 2 ** 31 - 1}, token(author))
+
+
+def test_a_followers_only_reply_the_caller_may_not_see_puts_nobody_first(app, env):
+    from app.api.alpha.utils.misc import get_suggestion
+    from app.constants import VISIBILITY_FOLLOWERS
+
+    user, author, community, post, reply, baseline = env   # user wrote the post and sees what answers it
+    replier, hidden = _a_thread_replier_under_seven_namesakes(baseline, post, 'quiet')
+    assert replier.lemmy_link() in get_suggestion({'q': '@quiet', 'post_id': post.id}, token(author))['result']
+    hidden.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+
+    assert replier.lemmy_link() not in get_suggestion({'q': '@quiet', 'post_id': post.id}, token(author))['result']
+
+
 def test_a_person_suggestion_without_a_thread(app, env):
     from app.api.alpha.utils.misc import get_suggestion
 

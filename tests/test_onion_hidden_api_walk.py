@@ -233,6 +233,7 @@ def _cases():
         ('POST', '/post/assign_flair', 'flair_id_list'): ('flairs', {'post_id': 'first_post'}),
         ('GET', '/resolve_object', 'q'): ('post_url', {}),
         ('GET', '/suggest_completion', 'q'): ('person_prefix', {}),
+        ('GET', '/suggest_completion', 'post_id'): ('post', {'q': ('literal', '@thread')}),   # repliers first
         ('GET', '/feed', 'id'): ('feed', {}),
         ('GET', '/feed', 'name'): ('feed_name', {}),
         ('POST', '/feed/follow', 'feed_id'): ('feed', {'follow': ('literal', False)}),   # a join ends the session
@@ -306,6 +307,11 @@ def visible(world, viewer, kind, key):
     if kind in ('post', 'posts', 'post_url'):
         post = make_post(world.first_art, world.first_bob, f'https://{FIRST}/post/fresh{fresh}', title=f'FRESH{fresh}')
         make_post_reply(post, world.first_bob, f'FRESH{fresh}')   # for the lists of a post's replies
+        if key[1].endswith('/suggest_completion'):   # a replier seven better-known namesakes keep off the list
+            for number in range(7):
+                world.two_domains.local_user(f'thread{fresh}known{number}', first).reputation = 100
+            make_post_reply(post, world.two_domains.local_user(f'thread{fresh}replier', first), f'FRESH{fresh}')
+            db.session.commit()
         return {'post': post.id, 'posts': [post.id], 'post_url': f'{HOSTS[FIRST]}/post/{post.id}'}[kind]
     if kind == 'reply':
         return make_post_reply(world.first_post, world.first_bob, f'FRESH{fresh}').id

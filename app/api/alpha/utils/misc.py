@@ -8,6 +8,7 @@ from sqlalchemy import desc, not_, or_
 from app.activitypub.util import find_actor_or_create, remote_object_to_json, actor_json_to_model, is_user_actor, \
     find_community, create_resolved_object, normalise_actor_string, host_of, find_microblogging_community, NEW_CONTENT_TYPES
 from app.api.alpha.utils.community import get_community_list
+from app.api.alpha.utils.found import a_post
 from app.api.alpha.utils.post import get_post_list
 from app.api.alpha.utils.user import get_user_list
 from app.api.alpha.utils.reply import get_reply_list
@@ -21,8 +22,9 @@ from app.storefront import current_storefront, default_domain, domain_authority,
     link_host
 from app.user.utils import search_for_user
 from app.feed_domains import feed_shown_here
-from app.local_only import hidden_here, without_local_only_actors
-from app.visibility import can_view, is_open, modlog_domain_clause, modlog_local_only_clause, modlog_open_clause
+from app.local_only import hidden_here, without_hidden_here, without_local_only_actors
+from app.visibility import can_view, is_open, modlog_domain_clause, modlog_local_only_clause, modlog_open_clause, \
+    visible_to_clause
 from app.feed.util import search_for_feed
 from app.utils import authorise_api_user, gibberish, subscribed_feeds, communities_banned_from, \
     moderating_communities_ids, joined_or_modding_communities, blocked_communities, blocked_or_banned_instances, \
@@ -572,21 +574,39 @@ def get_resolve_object(auth, data, user_id=None, recursive=False):
     raise Exception(NOT_FOUND)
 
 
+def _suggestion_thread(post_id, user_id):
+    """The post whose repliers a person suggestion puts first, or None. A post hidden here, or one the caller may not
+    see, is None as one nobody holds is: the suggestions never tell them apart (follow-up F6)."""
+    if post_id is None:
+        return None
+    try:
+        post = a_post(post_id)
+    except Exception as refused:
+        if str(refused) != 'post not found':
+            raise
+        return None
+    return post if can_view(post, user_id) else None
+
+
 def get_suggestion(data, auth=None):
     query = data['q']
     result = []
     try:   # a logged-out caller sees no local-only row; a token that fails to authorise is logged out, not an error
-        visible = bool(auth) and authorise_api_user(auth) is not None
+        user_id = authorise_api_user(auth) if auth else None
     except Exception as refused:
         if str(refused) != 'incorrect_login':
             raise
-        visible = False
+        user_id = None
+    visible = user_id is not None
     if query.startswith('@'):
-        if 'post_id' in data:
-            people_from_post = without_local_only_actors(User.query.join(PostReply, PostReply.user_id == User.id).
-                                                         filter(PostReply.post_id == data['post_id']).
+        thread = _suggestion_thread(data.get('post_id'), user_id)
+        if thread is not None:
+            replies = without_hidden_here(PostReply.query.filter(PostReply.post_id == thread.id,
+                                                                  visible_to_clause(PostReply, user_id)),
+                                          PostReply, visible).with_entities(PostReply.user_id)
+            people_from_post = without_local_only_actors(User.query.filter(User.id.in_(replies)).
                                                          filter(User.user_name.ilike(f'{query[1:]}%')), User,
-                                                         visible).distinct()
+                                                         visible)
 
             for person in people_from_post.all():
                 person_text = person.lemmy_link()
