@@ -1,7 +1,7 @@
 # Changes since v1.8.10
 
-This document summarises what changed on the `blentz` branch between the tag
-`v1.8.10` and the current HEAD. It is written for two audiences: instance
+This document summarises what changed on this fork's main branch (named
+`blentz` until 2026-11-18) between the tag `v1.8.10` and the current HEAD. It is written for two audiences: instance
 operators who are upgrading, and PieFed developers reviewing the fork. The
 upgrade notes come first because they are what an operator must act on.
 
@@ -261,7 +261,7 @@ single head. None of the seven touches a column or index the branch touches.
 
 - **From v1.8.10:** `flask db upgrade` applies the branch's chain, then the
   merge migration.
-- **From a `blentz` deployment made before the rebase** (database at
+- **From a deployment of this fork made before the rebase** (database at
   `a7c2e5f9d3b1`): `flask db upgrade` applies v1.8.10's seven migrations,
   then the merge migration. Nothing of the branch's runs again.
 - **Then, either way:** `c3e9a7d1f5b2` album_posts_become_galleries turns
@@ -1734,6 +1734,10 @@ Residues of earlier fixes, found after the register was closed:
   logged as User Block, a new `APLOG_USERBLOCK` (D83 residue, `df34f48d`).
 - Closed, not a defect: R223 residue (an Update omitting the More info Link
   clears it), because an Update replaces the object.
+- `app.shared.user` imports first in a fresh interpreter again:
+  `app.activitypub.routes` took `move_account_followers` by name while the
+  module was still loading, and now looks it up when an account Move arrives
+  (`8ce9a39c`).
 
 ### Fixes in the feature tracks
 
