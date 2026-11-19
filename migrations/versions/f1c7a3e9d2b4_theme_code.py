@@ -17,6 +17,9 @@ depends_on = None
 
 def upgrade():
     op.add_column('custom_theme', sa.Column('script', sa.Text(), nullable=True))
+    op.add_column('custom_theme', sa.Column('code_failed_template', sa.String(length=255), nullable=True))
+    op.add_column('custom_theme', sa.Column('code_failure', sa.Text(), nullable=True))
+    op.add_column('custom_theme', sa.Column('code_failed_at', sa.DateTime(), nullable=True))
     op.create_table(
         'custom_theme_template',
         sa.Column('id', sa.Integer(), nullable=False),
@@ -34,4 +37,5 @@ def upgrade():
 
 def downgrade():
     op.drop_table('custom_theme_template')
-    op.drop_column('custom_theme', 'script')
+    for column in ('code_failed_at', 'code_failure', 'code_failed_template', 'script'):
+        op.drop_column('custom_theme', column)

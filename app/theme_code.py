@@ -12,13 +12,16 @@ sandboxes them, by design (§4).
 """
 import os
 import re
+from datetime import timedelta
 from functools import lru_cache
 
-from flask import current_app
+from flask import current_app, has_request_context, request
 from flask.templating import Environment
 from jinja2 import BaseLoader, ChoiceLoader, TemplateNotFound, TemplateSyntaxError
+from sqlalchemy import or_, update
 
 from app import db
+from app.clock import utcnow
 from app.custom_themes import theme_version
 
 PREFIX = 'custom_theme/'
@@ -83,6 +86,79 @@ def override_names(theme_id: int, version: str):
     return None if code is None else code[1]
 
 
+_ACTIVE = 'piefed.theme_code'          # request.environ key: the request's code theme, worked out once
+_OFF = 'piefed.theme_code_off'         # request.environ key: render without theme code (the fallback)
+FAILURE_SECONDS = 7 * 24 * 3600   # how long a failure is shown to the theme's holders
+FAILURE_THROTTLE = 60             # at most one failure write a minute per theme
+
+
+def active_code_theme():
+    """(theme id, version, override names) of the code theme in effect for this request, or None: outside a
+    request, when the theme in effect is not a custom theme of this domain, when it overrides nothing, or while a
+    page renders again without theme code. Kept on the request, which a test's shared `g` would not be."""
+    if not has_request_context() or request.environ.get(_OFF):
+        return None
+    if _ACTIVE not in request.environ:
+        from app.custom_themes import custom_theme_here
+        from app.storefront import current_storefront
+        from app.utils import current_theme
+        custom = custom_theme_here(current_theme(), current_storefront())
+        active = None
+        if custom is not None:
+            version = str(theme_version(custom))
+            names = override_names(custom.id, version)
+            active = (custom.id, version, names) if names else None
+        request.environ[_ACTIVE] = active
+    return request.environ[_ACTIVE]
+
+
+def override_for(template_name: str):
+    """The loader name of the active code theme's override of `template_name`, or None."""
+    active = active_code_theme()
+    if active is None or template_name not in active[2]:
+        return None
+    return f'{PREFIX}{active[0]}/{active[1]}/{template_name}'
+
+
+def render_with_fallback(render, template_name: str):
+    """`render()` with theme code; if that raises in a code theme, `render()` again without it. The failure is kept
+    for the theme's holders (`last_failure`) only when the page renders without the theme's code, so an app error is
+    never blamed on a theme."""
+    active = active_code_theme()
+    if active is None:
+        return render()
+    try:
+        return render()
+    except Exception as error:   # noqa: BLE001 -- any error in theme code; the page must still render
+        request.environ[_OFF] = True
+        content = render()        # an app error raises here, as it would have anyway
+        current_app.logger.warning('Custom theme %s failed rendering %s', active[0], template_name, exc_info=True)
+        _record_failure(active[0], template_name, error)
+        return content
+
+
+def _record_failure(theme_id: int, template_name: str, error: Exception) -> None:
+    """Keeps the failure on the theme's row, in a transaction of its own (the page's own session may hold anything),
+    at most once a minute per theme so a broken theme on a busy domain does not write on every request."""
+    from app.models import CustomTheme
+    table, now = CustomTheme.__table__, utcnow()
+    with db.engine.begin() as connection:
+        connection.execute(update(table).where(
+            table.c.id == theme_id,
+            or_(table.c.code_failed_at.is_(None), table.c.code_failed_at < now - timedelta(seconds=FAILURE_THROTTLE))
+        ).values(code_failed_template=template_name, code_failure=str(error)[:500], code_failed_at=now))
+
+
+def last_failure(theme_id: int):
+    """{'template', 'error', 'at'} of the theme's last failed render in the past week, or None."""
+    from app.models import CustomTheme
+    row = db.session.query(CustomTheme.code_failed_template, CustomTheme.code_failure, CustomTheme.code_failed_at) \
+        .filter(CustomTheme.id == theme_id).one_or_none()
+    if row is None or row.code_failed_at is None or row.code_failed_at < utcnow() - timedelta(seconds=FAILURE_SECONDS):
+        return None
+    return {'template': row.code_failed_template, 'error': row.code_failure, 'at': row.code_failed_at}
+
+
 class CustomThemeLoader(BaseLoader):
     """Serves `custom_theme/<id>/<version>/<name>` from the database. Every other name is not found here."""
 
@@ -110,9 +186,11 @@ class ThemeCodeEnvironment(Environment):
         self.loader = ChoiceLoader([CustomThemeLoader(), self.loader])
 
     def join_path(self, template, parent):
-        found = _LOADER_NAME.fullmatch(parent) if isinstance(parent, str) else None
-        if found is None or template.startswith(('themes/', PREFIX)):
+        if template.startswith(('themes/', PREFIX)):
             return template
+        found = _LOADER_NAME.fullmatch(parent) if isinstance(parent, str) else None
+        if found is None:   # in an app or shipped template: the request's code theme may override the name
+            return override_for(template) or template
         code = _theme_code(int(found.group(1)), found.group(2))
         if code is not None and template in code[1]:
             return f'{PREFIX}{found.group(1)}/{found.group(2)}/{template}'

@@ -86,6 +86,7 @@ from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, DomainInfo
     act_in_this_request, acting_as_default, acting_domain, domain_authority, \
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_hosted_uri, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from app.branding import branding_for
+from app import theme_code
 from app.custom_themes import THEME_PREVIEW, custom_identifier, custom_theme_here, custom_theme_id, custom_themes_for, \
     is_shipped, manages_themes, theme_counts, theme_version
 from collections import Counter
@@ -100,11 +101,15 @@ def render_template(template_name: str, skip_protocol_replacement: bool = False,
     # R219: on a private instance a page's RSS link carries the member's token, which is what opens the feed
     if isinstance(context.get('rss_feed'), str) and login_required_here() and current_user.is_authenticated:
         context['rss_feed'] += f"?token={ensure_rss_token(current_user)}"
-    theme = template_theme()
-    if theme != '' and os.path.exists(f'app/templates/themes/{theme}/{template_name}'):
-        content = flask.render_template(f'themes/{theme}/{template_name}', **context)
-    else:
-        content = flask.render_template(template_name, **context)
+    def render():
+        override = theme_code.override_for(template_name)   # a custom theme's own template first (phase 6)
+        if override is not None:
+            return flask.render_template(override, **context)
+        theme = template_theme()
+        if theme != '' and os.path.exists(f'app/templates/themes/{theme}/{template_name}'):
+            return flask.render_template(f'themes/{theme}/{template_name}', **context)
+        return flask.render_template(template_name, **context)
+    content = theme_code.render_with_fallback(render, template_name)
 
     if not skip_protocol_replacement and current_app.config['HTTP_PROTOCOL'] == 'mixed':  # mixed mode is for instances like retro.piefed.com which has a web ui that uses http while federation happens over https
         server_name = storefront_host()

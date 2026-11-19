@@ -6387,6 +6387,10 @@ class CustomTheme(db.Model):
                             order_by='CustomThemeFile.filename')
     # Theme code (phase 6, app.theme_code): only holders of `manage theme code` set these.
     script = db.Column(db.Text)   # the theme's scripts.js; None: its base theme's
+    # The last render that failed in its code and was rendered again without it (app.theme_code.last_failure)
+    code_failed_template = db.Column(db.String(255))
+    code_failure = db.Column(db.Text)
+    code_failed_at = db.Column(db.DateTime)
     templates = db.relationship('CustomThemeTemplate', backref='theme', cascade='all, delete-orphan',
                                 passive_deletes=True, order_by='CustomThemeTemplate.name')
 
