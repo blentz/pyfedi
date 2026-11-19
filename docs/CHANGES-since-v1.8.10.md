@@ -337,6 +337,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 48 | `d7a2c5e9f3b1` user_also_known_as | Adds `also_known_as` (account aliases, NULL by default) to `user`. | No |
 | 49 | `e8b3d6a1f4c7` custom_themes | Creates `custom_theme` (a domain's own copy of a theme: name, base theme, CSS, retired) and `custom_theme_file` (its images and fonts). Both go with their domain. (`cfa0caf5`) | No |
 | 50 | `f1c7a3e9d2b4` theme_code | Creates `custom_theme_template` (a custom theme's override of one app template) and adds `script`, `code_failed_template`, `code_failure` and `code_failed_at` to `custom_theme`. (`a21ccbca`) | No |
+| 51 | `c4e8a2d6f1b3` site_domain_referral_codes | Adds `site_domain.referral_codes` (NOT NULL, default true): whether, in referral-code mode, a valid code opens signup on a domain whose registration is closed. True keeps every existing domain as it was. (`33812c3b`) | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -1952,6 +1953,7 @@ is described in 2.3 to 2.5:
 | Sidebar | | Box order and hiding per site and domain (`5c424327`) |
 | Custom themes | `2026-11-18-custom-themes-design.md` | A domain's theme holders copy a shipped theme, rename it, edit its CSS, add images and fonts, preview it and retire it; it is offered in every theme picker on that domain only. Shipped themes stay read-only (`cfa0caf5`..`1d59b744`) |
 | Theme code | `2026-11-18-theme-code-import-export-design.md` | Export a custom theme as one zip and import one; holders of the new `manage theme code` permission (domain-scoped, admin-equivalent) give a theme Jinja template overrides of any app template and its own `scripts.js`. A page that fails in theme code renders again without it. Archives are checked whole before anything is stored, and fuzzed (`theme_archive`) (`a21ccbca`..`e553d453`) |
+| Closed domains and referral codes | `2026-10-31-referral-codes-design.md` RC11a | In referral-code mode a valid code opened signup on every closed domain (RC11). Each domain's settings page now has "Referral codes open a closed domain", on by default; off, the domain shows "Registration is closed" and refuses every signup, by form or API, code or not (`33812c3b`) |
 | Domain scheme | | Admin → Domains no longer offers http: a new domain is https (a hidden field, and nothing else is accepted); an onion host is stored as http, since Tor encrypts it |
 | Project links | | Source, bug-report and get-involved URLs; nodeinfo and Mastodon source (`b65b4fd6`) |
 | HLS | | Optional HLS copies, backfill and delete, PeerTube streaming playlists (`8e94a322`) |
