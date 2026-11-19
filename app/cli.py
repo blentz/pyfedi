@@ -86,6 +86,7 @@ from app.storefront import clear_domain_cache, default_domain, domain_base_url, 
     instance_id_of, normalise_host
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
+from app.cms_cli import register_cms_commands
 import app as app_pkg
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,7 @@ def rebuild_schema(connection) -> None:
 
 def register(app):
     register_relay_commands(app)   # fork: flask relays
+    register_cms_commands(app)   # fork: flask cms export / import
     register_discovery_commands(app)   # fork (interop D24): flask refresh_discovery
 
     @app.cli.group()

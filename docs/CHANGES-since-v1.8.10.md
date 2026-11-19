@@ -435,6 +435,10 @@ aarch64 wheel, which is why it must stay out of the production install.
   `flask discovery-seed-fixtures` (local validation data, no network) and the
   `flask relays` group, including `flask relays refresh`, which follows every
   accepted relay again after a restart (`cc41d630`, `e08a4e7f`).
+- `flask cms export` prints every CMS page as JSON, and `flask cms import`
+  creates or updates pages from that JSON on standard input (by URL, never
+  deleting, every page checked before any is stored, each stored as the admin
+  editor stores it), so a site can keep its pages in files.
 
 ### 2.3 Behaviour changes operators and users will notice
 
