@@ -27,9 +27,9 @@ from app.cms import cms_nav_links_changed
 from app.branding import ends_inside_markup, offsite_references
 from app.custom_themes import THEME_PREVIEW, ThemeFileError, ThemeNameError, add_theme_file, check_name, copy_theme, \
     custom_identifier, custom_themes_for, in_use, is_shipped, manages_themes, remove_theme_files, shipped_css, shipped_name, shipped_themes, \
-    theme_file_paths, uses
+    theme_file_paths, unique_copy_name, uses
 from app.theme_code import ThemeCodeError, archive_name, check_template_name, check_template_source, last_failure, \
-    app_template_names, write_archive
+    app_template_names, read_archive, write_archive
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.local_only import accounts_shown_here_sql, domain_has_owners, user_local_only, without_local_only, without_local_only_actors
@@ -660,6 +660,58 @@ def admin_domain_themes(domain_id):
     return render_template('admin/domain_themes.html', title=_('Themes: %(domain)s', domain=row.domain), row=row,
                            shipped=shipped, custom=custom, describe_uses=_describe_uses,
                            on_this_domain=current_storefront().id == row.id)
+
+
+@bp.route('/domains/<int:domain_id>/themes/import', methods=['POST'])
+@login_required
+def admin_domain_theme_import(domain_id):
+    """A new custom theme of this domain from an exported archive (theme code spec §3.5). All or nothing: every check
+    runs first, and a refusal is a 400 naming the entry and the reason. Code needs `manage theme code` here."""
+    row = _themes_domain(domain_id)
+    upload = request.files.get('archive')
+    if upload is None or not upload.filename:
+        abort(400)
+    limit = current_app.config['CUSTOM_THEME_MAX_ARCHIVE_BYTES']
+    data = upload.stream.read(limit + 1)
+    try:
+        if len(data) > limit:
+            raise ThemeCodeError(_('The archive is too big (at most %(size)s).', size=human_filesize(limit)))
+        found = read_archive(data)
+        if found.has_code and not may_change_theme_code(row):
+            abort(403)
+        if found.base_theme != 'piefed' and not is_shipped(found.base_theme):
+            raise ThemeCodeError(_('The theme needs base theme %(base)s, which this site does not have.',
+                                   base=found.base_theme))
+        offsite = offsite_references(css=found.css, own_host=row.domain)
+        if offsite and row.is_onion:
+            raise ThemeCodeError(_('styles.css: off the onion: %(references)s', references=', '.join(offsite)))
+        if len(found.css.encode('utf-8')) > current_app.config['CUSTOM_THEME_MAX_CSS_BYTES']:
+            raise ThemeCodeError(_('styles.css: over the size a stylesheet may be.'))
+        limits = theme_file_limits()
+        if len(found.files) > limits['files'] or sum(len(d) for d in found.files.values()) > limits['theme_bytes']:
+            raise ThemeCodeError(_('files/: more than a theme may hold.'))
+    except ThemeCodeError as error:
+        flash(_('The theme was not imported: %(why)s', why=str(error)), 'error')
+        return admin_domain_themes(domain_id), 400
+    try:
+        name = check_name(found.name, row.id)
+    except ThemeNameError:
+        name = unique_copy_name(found.name, row.id)
+    theme = CustomTheme(site_domain_id=row.id, name=name, base_theme=found.base_theme, css=found.css,
+                        script=found.script, updated_by=current_user.id)
+    db.session.add(theme)
+    db.session.flush()
+    db.session.add_all([CustomThemeTemplate(custom_theme_id=theme.id, name=template, source=source,
+                                            updated_at=utcnow()) for template, source in found.templates.items()])
+    db.session.commit()
+    for filename, content in found.files.items():   # checked above: none of these can be refused
+        add_theme_file(theme, filename, content, False, limits)
+    _log_theme('import_theme', row, theme.name,
+               reason=upload.filename + (_(', with code') if found.has_code else ''))
+    flash(_('Imported %(name)s.', name=theme.name))
+    if offsite:
+        flash_offsite_warning({'css': offsite})
+    return redirect(url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=theme.id))
 
 
 @bp.route('/domains/<int:domain_id>/themes/shipped/<name>', methods=['GET'])

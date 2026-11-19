@@ -75,6 +75,12 @@
         {% else %}
         <p>{{ _('None yet. Copy one of the themes below to start.') }}</p>
         {% endif %}
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('admin.admin_domain_theme_import', domain_id=row.id) }}" class="d-flex flex-wrap gap-2 align-items-center mb-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label for="archive">{{ _('Import a theme exported from this or another site:') }}</label>
+            <input type="file" id="archive" name="archive" class="form-control w-auto" accept=".zip,application/zip" required>
+            <button type="submit" class="btn btn-outline-primary">{{ _('Import') }}</button>
+        </form>
 
         <h2>{{ _('Themes that ship with PieFed') }}</h2>
         <div class="table-responsive">

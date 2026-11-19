@@ -15,6 +15,8 @@ import json
 import os
 import re
 import zipfile
+import zlib
+from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import lru_cache
 
@@ -239,3 +241,142 @@ def write_archive(theme) -> tuple[bytes, list[str]]:
         if theme.script:
             add('scripts.js', theme.script)
     return buffer.getvalue(), missing
+
+
+MANIFEST_BYTES = 64 * 1024
+_SYMLINK = 0o120000
+_TOP_LEVEL = ('manifest.json', 'styles.css', 'scripts.js')
+
+
+@dataclass
+class ThemeArchive:
+    """What an archive holds, every part checked (spec §3.5); nothing is stored yet."""
+    name: str
+    base_theme: str
+    css: str
+    files: dict = field(default_factory=dict)       # file name: bytes
+    templates: dict = field(default_factory=dict)   # template name: source
+    script: str | None = None
+
+    @property
+    def has_code(self) -> bool:
+        return bool(self.templates) or self.script is not None
+
+
+def _entry_limit(name: str, config) -> int:
+    if name == 'manifest.json':
+        return MANIFEST_BYTES
+    if name == 'styles.css':
+        return config['CUSTOM_THEME_MAX_CSS_BYTES']
+    if name == 'scripts.js':
+        return config['CUSTOM_THEME_MAX_SCRIPT_BYTES']
+    if name.startswith('files/'):
+        return config['CUSTOM_THEME_MAX_FILE_BYTES']
+    return config['CUSTOM_THEME_MAX_TEMPLATE_BYTES']
+
+
+def _check_entry_name(name: str) -> None:
+    """Refuses an entry name an archive may not hold. Names are only ever keys here, never paths on disk, but an
+    archive with a name like these was not made by an export, and is refused whole."""
+    parts = name.split('/')
+    if '\\' in name or '\x00' in name or name.startswith('/') or any(part in ('', '.', '..') for part in parts):
+        raise ThemeCodeError(f'{name}: not a name an archive may hold.')
+    if name in _TOP_LEVEL or (parts[0] == 'files' and len(parts) == 2) or (parts[0] == 'templates' and len(parts) > 1):
+        return
+    raise ThemeCodeError(f'{name}: not part of a theme (only manifest.json, styles.css, scripts.js, files/ and '
+                         f'templates/ are).')
+
+
+def _text(name: str, data: bytes) -> str:
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError:
+        raise ThemeCodeError(f'{name}: not UTF-8 text.') from None
+
+
+def read_archive(data: bytes) -> ThemeArchive:
+    """The theme an uploaded archive holds, every entry checked before anything is stored (spec §3.5); ThemeCodeError
+    naming the entry and the reason otherwise. Sizes are counted while decompressing: zip headers are not trusted."""
+    from app.custom_themes import clean_filename, sniff_type
+    config = current_app.config
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+        infos = archive.infolist()
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, ValueError, EOFError):
+        raise ThemeCodeError('The upload is not a zip archive.') from None
+    entries = [info for info in infos if not info.is_dir()]
+    most = config['CUSTOM_THEME_MAX_FILES'] + config['CUSTOM_THEME_MAX_TEMPLATES'] + len(_TOP_LEVEL)
+    if len(entries) > most:
+        raise ThemeCodeError(f'The archive has {len(entries)} entries; a theme has at most {most}.')
+    total_limit = (config['CUSTOM_THEME_MAX_BYTES'] + config['CUSTOM_THEME_MAX_CSS_BYTES'] + MANIFEST_BYTES +
+                   config['CUSTOM_THEME_MAX_SCRIPT_BYTES'] +
+                   config['CUSTOM_THEME_MAX_TEMPLATES'] * config['CUSTOM_THEME_MAX_TEMPLATE_BYTES'])
+    contents, total, templates = {}, 0, 0
+    for info in entries:
+        name = info.filename
+        _check_entry_name(name)
+        if name in contents:
+            raise ThemeCodeError(f'{name}: in the archive twice.')
+        if (info.external_attr >> 16) & 0o170000 == _SYMLINK:
+            raise ThemeCodeError(f'{name}: a link, not a file.')
+        if info.flag_bits & 0x1:
+            raise ThemeCodeError(f'{name}: encrypted.')
+        if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            raise ThemeCodeError(f'{name}: a compression method other than stored or deflate.')
+        if name.startswith('templates/'):
+            templates += 1
+            if templates > config['CUSTOM_THEME_MAX_TEMPLATES']:
+                raise ThemeCodeError(f'{name}: more templates than a theme may override.')
+        limit = _entry_limit(name, config)
+        try:
+            with archive.open(info) as entry:
+                content = entry.read(limit + 1)
+                if len(content) > limit:
+                    raise ThemeCodeError(f'{name}: too big (at most {limit} bytes).')
+        except (zipfile.BadZipFile, zlib.error, EOFError, OSError, NotImplementedError, RuntimeError):
+            raise ThemeCodeError(f'{name}: damaged in the archive.') from None
+        total += len(content)
+        if total > total_limit:
+            raise ThemeCodeError(f'{name}: the archive holds more than a theme may.')
+        contents[name] = content
+
+    if 'manifest.json' not in contents:
+        raise ThemeCodeError('manifest.json: missing; this is not a theme export.')
+    try:
+        manifest = json.loads(contents['manifest.json'])
+    except ValueError:
+        raise ThemeCodeError('manifest.json: not valid JSON.') from None
+    if not isinstance(manifest, dict):
+        raise ThemeCodeError('manifest.json: not a JSON object.')
+    version = manifest.get('format')
+    if isinstance(version, int) and not isinstance(version, bool) and version > ARCHIVE_FORMAT:
+        raise ThemeCodeError(f'manifest.json: format {version} was made by a newer version of this software.')
+    if version != ARCHIVE_FORMAT or isinstance(version, bool):
+        raise ThemeCodeError(f'manifest.json: format must be {ARCHIVE_FORMAT}.')
+    for key in ('name', 'base_theme'):
+        if not isinstance(manifest.get(key), str) or not manifest[key].strip():
+            raise ThemeCodeError(f'manifest.json: {key} must be text.')
+
+    found = ThemeArchive(name=manifest['name'].strip(), base_theme=manifest['base_theme'].strip(),
+                         css=_text('styles.css', contents.get('styles.css', b'')))
+    if 'scripts.js' in contents:
+        found.script = _text('scripts.js', contents['scripts.js'])
+        if '\x00' in found.script:
+            raise ThemeCodeError('scripts.js: contains a NUL character.')
+    for name, content in contents.items():
+        if name.startswith('templates/'):
+            template = name[len('templates/'):]
+            try:
+                found.templates[check_template_name(template)] = check_template_source(_text(name, content))
+            except ThemeCodeError as error:
+                raise ThemeCodeError(f'{name}: {error}') from None
+        elif name.startswith('files/'):
+            filename = name[len('files/'):]
+            kind = sniff_type(content)
+            if kind is None:
+                raise ThemeCodeError(f'{name}: not an image or font a theme may hold.')
+            if clean_filename(filename, kind[1]) != filename:
+                raise ThemeCodeError(f'{name}: the name must end in .{kind[1]} and use only letters, digits, '
+                                     f'".", "_" and "-".')
+            found.files[filename] = content
+    return found
