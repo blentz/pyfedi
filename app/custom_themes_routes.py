@@ -1,5 +1,5 @@
-"""What a page in a custom theme loads from its own domain: the theme's stylesheet and files (custom themes spec §3.3,
-§3.7)."""
+"""What a page in a custom theme loads from its own domain: the theme's stylesheet, script and files (custom themes spec
+§3.3, §3.7; theme code spec §3.3)."""
 import os
 
 from flask import Blueprint, Response, abort, request, send_file
@@ -26,6 +26,19 @@ def stylesheet(theme_id):
         abort(404)
     css = onion_safe_css(theme.css, storefront_host(), f'custom theme {theme.id}') if domain.is_onion else theme.css
     response = Response(css, mimetype='text/css')
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Cache-Control'] = LONG_CACHE if request.args.get('v') == str(theme_version(theme)) \
+        else SHORT_CACHE
+    return response
+
+
+@bp.route('/theme/<int:theme_id>/scripts.js', methods=['GET'])
+def script(theme_id):
+    """A custom theme's own scripts.js (theme code spec §3.3), only on the domain that owns it (CT3)."""
+    theme = custom_theme_here(custom_identifier(theme_id), current_storefront())
+    if theme is None or not theme.script:
+        abort(404)
+    response = Response(theme.script, mimetype='application/javascript')
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Cache-Control'] = LONG_CACHE if request.args.get('v') == str(theme_version(theme)) \
         else SHORT_CACHE

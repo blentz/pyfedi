@@ -5318,6 +5318,18 @@ def theme_stylesheet_url(identifier: str | None) -> str | None:
     return None
 
 
+def theme_script_url() -> str | None:
+    """The scripts.js a page loads: the custom theme in effect's own (theme code spec §3.3), else its base theme's,
+    else None. Never both."""
+    custom = custom_theme_here(current_theme(), current_storefront())
+    if custom is not None and custom.script:
+        return url_for('custom_themes.script', theme_id=custom.id, v=theme_version(custom))
+    theme = template_theme()
+    if theme and os.path.exists(f'app/templates/themes/{theme}/scripts.js'):
+        return url_for('static', filename=f'themes/{theme}/scripts.js')
+    return None
+
+
 def theme_label(identifier: str) -> str:
     """How a page names theme `identifier`: a custom theme that counts here by its name, anything else as stored."""
     custom = custom_theme_here(identifier, current_storefront())

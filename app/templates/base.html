@@ -410,8 +410,9 @@
             </script>
         {% endif -%}
     {% endif -%}
-    {% if theme() and file_exists('app/templates/themes/' + theme() + '/scripts.js') -%}
-        <script src="{{ url_for('static', filename='themes/' + theme() + '/scripts.js') }}" nonce="{{ nonce }}"></script>
+    {% set script_url = theme_script_url() -%}
+    {% if script_url -%}
+        <script src="{{ script_url }}" nonce="{{ nonce }}"></script>
     {% endif -%}
     {% block end_scripts -%}
 
