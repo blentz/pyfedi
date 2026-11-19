@@ -15,7 +15,8 @@ This repo is application code only and must stay deployment agnostic:
 ## Remotes and branches
 
 - `origin` is upstream PieFed (codeberg.org/rimu/pyfedi); `github` is our fork (github.com/blentz/pyfedi).
-- Day-to-day work is on `blentz`; feature branches as `feat/...`.
+- Day-to-day work is on the deployment branch the workspace CLAUDE.md names (if present); feature branches as
+  `feat/...`.
 - Keep upstream mergeable: prefer additive changes over rewriting upstream code.
 - Push only when the user asks; some branches are deployed automatically (see the workspace CLAUDE.md, if present).
 
