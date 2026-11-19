@@ -1263,14 +1263,14 @@ def test_join_feed_sends_a_signed_follow_for_a_remote_feed(app, db_session):
     assert FeedMember.query.filter_by(user_id=member_id, feed_id=feed_id).count() == 1
     assert send.call_count == 1
     url, activity, private_key, key_id = send.call_args.args
-    assert url == f'https://remote.piefed.local/f/remotefeed/inbox'
+    assert url == 'https://remote.piefed.local/f/remotefeed/inbox'
     assert private_key == 'the-members-private-key'
     assert key_id == expected_key_id
     assert send.call_args.kwargs == {'timeout': 10}
     # The collection comes from the following url, not the inbox: two
     # different fields on the same feed, and nothing else in this test
     # distinguishes them.
-    assert get.call_args.args == (f'https://remote.piefed.local/f/remotefeed/following',)
+    assert get.call_args.args == ('https://remote.piefed.local/f/remotefeed/following',)
     assert activity['type'] == 'Follow'
     assert activity['actor'] == expected_actor
     assert activity['object'] == expected_object
@@ -1424,7 +1424,7 @@ def test_join_feed_rolls_back_and_re_raises_what_the_remote_call_raised(app, db_
         pass
 
     s = _seed()
-    feed = _remote_feed()
+    _remote_feed()
     s.member.feed_auto_follow = False
     db.session.commit()
     member_id = s.member.id
@@ -1446,7 +1446,7 @@ def test_a_join_that_fails_after_the_follow_was_sent_undoes_the_follow(app, db_s
     sends the leave path's Undo{Follow}, naming the Follow that was sent.
     """
     s = _seed()
-    feed = _remote_feed()
+    _remote_feed()
     s.member.feed_auto_follow = False
     db.session.commit()
     member_id = s.member.id

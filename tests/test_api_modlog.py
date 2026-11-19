@@ -120,7 +120,7 @@ def test_staff_see_them_too(app, env):
     moderator, target, community, post, reply, baseline = env
     staff = with_role(make_user(baseline.instance_local, 'thestaff',
                                 local=True), 'Staff')
-    entry = an_entry('delete_post', moderator, public=False, post_id=post.id)
+    an_entry('delete_post', moderator, public=False, post_id=post.id)
 
     answer = get_modlog(token(staff), {})
 

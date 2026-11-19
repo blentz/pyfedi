@@ -827,9 +827,9 @@ def test_the_posts_page_paginates_and_sorts_newest_first(app, db_session):
     instance, alice, bob = _seed()
     peer = _instance('peer.example')
     community = make_community('microblogs')
-    older = _post_from(peer, community, alice, 'older',
+    _post_from(peer, community, alice, 'older',
                        posted_at=utcnow() - timedelta(days=2))
-    newer = _post_from(peer, community, alice, 'newer')
+    _post_from(peer, community, alice, 'newer')
     for index in range(50):
         _post_from(peer, community, alice, f'filler {index}',
                    posted_at=utcnow() - timedelta(days=5))

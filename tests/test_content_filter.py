@@ -29,8 +29,6 @@ class TestContentFilter(unittest.TestCase):
 
 
     def test_content_filter_square_bracket_filter(self):
-        content_filters = {'trump': ['[Trump]'],
-                           'elon': ['elon', 'musk']}
         p = Post(title="[Trump] does something daft again", user_id=1)
         filtered = p.blocked_by_content_filter(self.content_filters, 2)
         assert filtered

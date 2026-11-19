@@ -313,7 +313,7 @@ class TestWhatAReaderIsShown:
         blocked = make_user(env.baseline.instance_local, 'nuisance',
                             local=True)
         db.session.commit()
-        reply = make_post_reply(env.post, blocked, body='from a blocked user')
+        make_post_reply(env.post, blocked, body='from a blocked user')
         db.session.add(UserBlock(blocker_id=env.reader.id,
                                  blocked_id=blocked.id))
         a_reply(env, body='from somebody else')
@@ -414,7 +414,7 @@ class TestWhatAnAnonymousVisitorIsShown:
 class TestOneBranchOfTheTree:
     def test_the_reply_asked_for_and_what_hangs_off_it(self, env):
         first = a_reply(env, body='first')
-        second = a_reply(env, body='second', parent=first)
+        a_reply(env, body='second', parent=first)
         a_reply(env, body='unrelated')
         db.session.commit()
         tree = get_comment_branch(env.post, first.id, 'new', viewer=None)

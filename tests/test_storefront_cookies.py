@@ -150,7 +150,8 @@ def test_login_cookies_end_to_end(app, person, secure_config):
     onion = _login(app, 'http://abc.onion', 'person@test.piefed.local').headers.getlist('Set-Cookie')
     g.pop('_login_user', None)   # the suite-wide app context keeps the first login's user in g
     https = _login(app, 'https://test.piefed.local').headers.getlist('Set-Cookie')
-    names = lambda headers: {h.split('=')[0] for h in headers}
+    def names(headers):
+        return {h.split('=')[0] for h in headers}
     assert {'remember_token', 'low_bandwidth'} <= names(onion) and len(names(onion)) >= 3
     assert not any('Secure' in h or 'Domain=' in h for h in onion)
     assert names(https) == names(onion)

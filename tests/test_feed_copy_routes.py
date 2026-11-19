@@ -846,7 +846,7 @@ def test_looking_up_a_known_remote_feed_redirects_to_it(app, db_session):
     request uses MIXED case, and without :692-693 the filter_by would miss the
     row and fall through to a remote search."""
     instance, owner = _seed()
-    found = _remote_feed()
+    _remote_feed()
 
     with app.test_client() as client:
         with patch('app.feed.routes.search_for_feed') as search:

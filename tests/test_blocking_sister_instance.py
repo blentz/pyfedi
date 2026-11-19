@@ -178,11 +178,11 @@ def test_a_sisters_profile_blocked_over_htmx_goes_home_when_viewed_on_that_domai
 
 def test_a_remote_profile_blocks_its_instance_naming_the_remote_domain(app, world):
     remote = make_instance('remote.example', software='lemmy')
-    stranger = make_user(remote, 'stranger')
+    make_user(remote, 'stranger')
     db.session.commit()
     viewer = world.viewers[FIRST]
     visitor = Visitor(app, viewer, FIRST)
-    assert visitor.post(f'/u/stranger@remote.example/block_instance').status_code == 302
+    assert visitor.post('/u/stranger@remote.example/block_instance').status_code == 302
     assert blocked(viewer) == {remote.id}
     assert 'Content from remote.example will be hidden.' in flashes(visitor)
 

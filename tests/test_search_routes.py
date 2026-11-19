@@ -222,7 +222,7 @@ def test_the_bare_search_page_lists_communities_and_languages(app, db_session):
 def test_the_start_page_hides_communities_the_reader_is_banned_from(app, db_session):
     from tests.factories import ban_user_from_community
     instance, alice, bob = _seed()
-    open_community = make_community('microblogs')
+    make_community('microblogs')
     barred = make_community('barred')
     ban_user_from_community(alice, barred)
     client = app.test_client()
@@ -948,7 +948,7 @@ def test_a_banned_user_cannot_retrieve_a_remote_post(app, db_session):
     client = app.test_client()
     login(client, alice)
 
-    with patch('app.search.routes.render_template', return_value='rendered') as render, \
+    with patch('app.search.routes.render_template', return_value='rendered'), \
          patch('app.search.routes.resolve_remote_post_from_search') as resolver:
         response = client.get('/retrieve_remote_post')
 

@@ -44,7 +44,7 @@ OFF_HOST_IDS = ['other-host', 'userinfo', 'subdomain', 'path', 'trailing-dot', '
 # URLs on the actor's host, written differently.
 ON_HOST = [
     f'https://{PEER}/inbox',
-    f'https://PEER.Example/inbox',                    # case
+    'https://PEER.Example/inbox',                    # case
     f'https://{PEER}:8443/inbox',                     # a port
     f'https://elsewhere.example@{PEER}/inbox',        # userinfo naming another host
 ]

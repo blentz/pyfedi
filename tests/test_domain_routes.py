@@ -370,7 +370,7 @@ def test_a_blocked_instances_posts_are_filtered_out(app, db_session):
     peer = make_instance('remote.example', software='lemmy')
     domain = _domain()
     community = make_community('microblogs')
-    blocked = _post_on(domain, community, alice, title='from blocked', instance_id=peer.id)
+    _post_on(domain, community, alice, title='from blocked', instance_id=peer.id)
     _post_on(domain, community, alice, title='no instance', instance_id=None)
     make_instance_block(alice, peer)
     db.session.commit()
@@ -619,7 +619,7 @@ def test_the_feed_carries_the_domains_posts(app, db_session):
     assert response.headers['ETag'] == f'{domain.id}_{hash(domain.post_count)}'
     assert response.headers['Cache-Control'].startswith('public, max-age=')   # v1.8.10: cached by post rate
     assert '<title>an article</title>' in body
-    assert f'example.test on ' in body
+    assert 'example.test on ' in body
 
 
 def test_an_unchanged_feed_answers_304(app, db_session):

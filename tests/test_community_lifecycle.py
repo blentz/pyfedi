@@ -363,7 +363,7 @@ def test_creation_is_refused_when_restricted_to_admins(app, db_session):
     db.session.commit()
     client = app.test_client()
     login(client, ordinary)
-    token = csrf(app, client)
+    csrf(app, client)
 
     with patch('app.community.routes.flash') as flashed:
         response = client.get(url(app, 'community.add_local'))

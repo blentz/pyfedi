@@ -211,7 +211,7 @@ def _templated_feed(fields: list[bytes]) -> bytes:
         role, href, img, name = parts[index % len(parts)][:4]
         people.append(f'<podcast:person role={quoteattr(role)} href={quoteattr(href)} img={quoteattr(img)}>'
                       f'{escape(name)}</podcast:person>')
-    guests = ''.join(person.replace(f'role=', 'role="guest" data-role=', 1) for person in people)
+    guests = ''.join(person.replace('role=', 'role="guest" data-role=', 1) for person in people)
     link = escape(parts[0][1])
     return (f'<?xml version="1.0"?><rss xmlns:podcast="{_NAMESPACE}"><channel>{"".join(people)}'
             f'<item><link>{link}</link><guid>{escape(parts[0][2])}</guid>{guests}</item></channel></rss>').encode()

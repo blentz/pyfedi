@@ -580,7 +580,7 @@ def test_a_failed_post_shows_its_reason(env):
 
 def test_a_processing_post_is_not_listed_anywhere(env, monkeypatch):
     post = stored_post(env, env.chan, title='HIDDENCLIP')
-    shown = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/shown', title='SHOWNCLIP')
+    make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/shown', title='SHOWNCLIP')
     db.session.commit()
     monkeypatch.setitem(env.app.config, 'ENABLE_ALPHA_API', 'true')
     author, _ = env.client_for(env.mod)

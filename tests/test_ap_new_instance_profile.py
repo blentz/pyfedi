@@ -149,7 +149,7 @@ class TestWhatTheActorDocumentSays:
         assert instance.updated_at is not None
 
     def test_one_that_names_no_inbox(self, env):
-        document = an_application()
+        an_application()
         answer(env, actor=httpx.Response(200, json={
             'type': 'Application', 'outbox': f'https://{DOMAIN}/outbox'}))
         new_instance_profile_task(env.instance.id)

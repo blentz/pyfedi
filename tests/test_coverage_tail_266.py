@@ -200,7 +200,7 @@ class TestABoostFromAnAccountThatIsBanned:
         community = make_community('privateland')
         community.private = True
         db.session.commit()
-        post = make_post(community, followed_booster, ap_id=f'https://{PEER}/statuses/secret')
+        make_post(community, followed_booster, ap_id=f'https://{PEER}/statuses/secret')
         db.session.commit()
         boosted = []
 

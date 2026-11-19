@@ -343,7 +343,7 @@ class TestWhatTheEntriesCarry:
         """Not the author name: `fe.author(name=...)` is set, and feedgen's RSS
         serialiser writes `<author>` only from an email address, so the name does
         not appear in the document. Measured, not assumed."""
-        post = self.a_local_post(env)
+        self.a_local_post(env)
 
         response = env.client.get('/index/feed/local')
 

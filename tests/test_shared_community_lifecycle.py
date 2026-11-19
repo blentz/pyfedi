@@ -1704,7 +1704,7 @@ def test_edit_community_undetermined_language_appended_and_correct_row_selected(
     decoy = Language(code='xx', name='Decoy, must sort before und')
     db.session.add(decoy)
     db.session.commit()
-    und = _seed_und_language()
+    _seed_und_language()
     make_community_member(s.user, s.community, is_moderator=True)
     monkeypatch.setattr('app.shared.community.task_selector', lambda *a, **kw: None)
     monkeypatch.setattr('app.shared.community.is_image_url', lambda url: False)

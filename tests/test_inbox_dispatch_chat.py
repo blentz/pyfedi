@@ -392,7 +392,7 @@ def test_a_page_delivered_as_a_message_is_logged_under_create(app, db_session, m
                             object={'type': 'Page', 'to': recipient.ap_profile_id,
                                     'content': 'hello', 'id': 'https://peer.example/pm/1'}))
 
-    assert [(l.activity_type, l.result) for l in ActivityPubLog.query.all()] == [('Create', 'success')]
+    assert [(entry.activity_type, entry.result) for entry in ActivityPubLog.query.all()] == [('Create', 'success')]
 
 
 def test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check(app, db_session, monkeypatch):
@@ -411,7 +411,7 @@ def test_an_unhandled_chat_lets_the_arm_continue_to_the_domain_check(app, db_ses
                                       'id': 'https://peer.example/pm/1'})
     dispatch(activity)
 
-    messages = [l.exception_message for l in ActivityPubLog.query.all()]
+    messages = [entry.exception_message for entry in ActivityPubLog.query.all()]
     # P3 (Pixelfed spike 2026-10-28): the decline is not a failure of its own; only the real outcome is logged
     assert messages == ['Domains do not match']
 
@@ -430,7 +430,7 @@ def test_a_public_note_tried_as_a_chat_logs_no_false_failure(app, db_session, mo
                                     'to': ['https://www.w3.org/ns/activitystreams#Public'],
                                     'id': 'https://peer.example/p/1'}))
 
-    assert [l.exception_message for l in ActivityPubLog.query.all()] == ['Domains do not match']
+    assert [entry.exception_message for entry in ActivityPubLog.query.all()] == ['Domains do not match']
 
 
 def test_a_message_containing_a_blocked_phrase_is_refused(app, db_session, monkeypatch):

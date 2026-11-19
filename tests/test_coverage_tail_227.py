@@ -254,7 +254,7 @@ class TestTheFederatedInstancesView:
 
         peer = make_instance('peer.example', software='lemmy')
         peer.version = '0.19.3'
-        blocked_peer = make_instance('blocked.example', software='lemmy')
+        make_instance('blocked.example', software='lemmy')
         db.session.add_all([AllowedInstances(domain='peer.example'),
                             BannedInstances(domain='blocked.example')])
         db.session.commit()

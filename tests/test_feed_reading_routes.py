@@ -380,7 +380,7 @@ def test_an_anonymous_reader_is_sent_to_log_in_for_adult_feeds(app, db_session,
     if expect_redirect:
         assert result.status_code == 302
         assert '/auth/login' in result.headers['Location']
-        assert f'next=/f/adultfeed' in result.headers['Location']
+        assert 'next=/f/adultfeed' in result.headers['Location']
         assert flash_stub.call_count == 1
     else:
         assert flash_stub.call_count == 0

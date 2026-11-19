@@ -133,7 +133,7 @@ def test_only_media_local_and_remote(world):
 
 
 def test_a_tag_timeline_is_the_posts_carrying_it(world):
-    tagged, plain = _post(world, minutes=1), _post(world, minutes=2)
+    tagged, _plain = _post(world, minutes=1), _post(world, minutes=2)
     tagged.tags.append(Tag(name='pie', display_as='Pie'))
     db.session.commit()
     assert _ids(_get(world, '/api/v1/timelines/tag/Pie')) == _sid(tagged)

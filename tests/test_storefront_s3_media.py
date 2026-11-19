@@ -82,11 +82,11 @@ def hide(body, mimetype='text/html'):
     (f'<img src="&#x1;https://{S3}/x"/>'.replace('&#x1;', chr(1)), HIDDEN),
     (f'<img src="{chr(0x1b)}https://{S3}/x{chr(0x1f)}"/>', HIDDEN),
     (f'<img src="https://cdn.exampl{chr(0xfe00)}e.test/x"/>', HIDDEN),
-    (f'<img src="https://cdn.exampl&#xFE00;e.test/x"/>', HIDDEN),
-    (f'<img src="https://cdn.exampl%EF%B8%80e.test/x"/>', HIDDEN),
+    ('<img src="https://cdn.exampl&#xFE00;e.test/x"/>', HIDDEN),
+    ('<img src="https://cdn.exampl%EF%B8%80e.test/x"/>', HIDDEN),
     (f'<img src="https://cdn.exampl{chr(0x34f)}e.test/x"/>', HIDDEN),
     (f'<img src="https://cdn.exampl{chr(0x3164)}e.test/x"/>', HIDDEN),
-    (f'<img src="https://cdn.exampl%E3%85%A4e.test/x"/>', HIDDEN),
+    ('<img src="https://cdn.exampl%E3%85%A4e.test/x"/>', HIDDEN),
     (f'<img src="https://cdn.exampl{chr(0xe0100)}e.test/x"/>', HIDDEN),
     (f'<img src="https://cdn.example.test{chr(0xfffe)}/x"/>', HIDDEN),   # cannot be mapped: hidden, never kept
     (f'<img src="https://{S3}/first" src="/second.jpg"/>', HIDDEN),   # a browser uses the first of two attributes
@@ -110,20 +110,20 @@ def hide(body, mimetype='text/html'):
     (f'<div style="--a:"x\\"y;background:url(https://{S3}/x);">t</div>'.replace('"x', "'x").replace('\\"y', "\\'y"), '<div>t</div>'),
     (f'<div style="font-family: \'{S3}\'">t</div>', '<div>t</div>'),
     (f'<div style="--x: {S3.replace(".", "%2e")}">t</div>', '<div>t</div>'),
-    (f'<div style="--x: \\63 dn.example.test">t</div>', '<div>t</div>'),
+    ('<div style="--x: \\63 dn.example.test">t</div>', '<div>t</div>'),
     # round 3 I-1, the six the review loaded in Chromium: a url( spelled with escapes, or after a function whose name
     # ends in "url", with a spelling of the host only a browser's host reading sees. Then three more of those shapes.
-    (f'<div style="background-image:u\\72l(https://cdn%2eexample.test/x)">t</div>', '<div>t</div>'),
-    (f'<div style="background-image:\\75 rl(https://%63dn.example.test/x)">t</div>', '<div>t</div>'),
-    (f'<div style="background-image:\\url(https://cdn.exa\\9 mple.test/x)">t</div>', '<div>t</div>'),
+    ('<div style="background-image:u\\72l(https://cdn%2eexample.test/x)">t</div>', '<div>t</div>'),
+    ('<div style="background-image:\\75 rl(https://%63dn.example.test/x)">t</div>', '<div>t</div>'),
+    ('<div style="background-image:\\url(https://cdn.exa\\9 mple.test/x)">t</div>', '<div>t</div>'),
     (f'<div style="background-image:u\\72l(https://cdn{chr(0x3002)}example{chr(0x3002)}test/x)">t</div>', '<div>t</div>'),
-    (f'<div style="background-image:u\\72l(https://cdn.exa\\ad mple.test/x)">t</div>', '<div>t</div>'),
-    (f'<div style="--a:xurl(a\')\' );background-image:url(https://cdn%2eexample.test/x)">t</div>', '<div>t</div>'),
+    ('<div style="background-image:u\\72l(https://cdn.exa\\ad mple.test/x)">t</div>', '<div>t</div>'),
+    ('<div style="--a:xurl(a\')\' );background-image:url(https://cdn%2eexample.test/x)">t</div>', '<div>t</div>'),
     (f'<div style="background-image:ur\\l(https://{chr(0xff43)}dn.example.test/x)">t</div>', '<div>t</div>'),
-    (f'<div style="--a:1url(a\')\' );background-image:url(https://cdn.exa%C2%ADmple.test/x)">t</div>', '<div>t</div>'),
-    (f'<div style="--a:@url(a\')\' );background-image:url(https://cdn.exampl%\\9 65.test/x)">t</div>', '<div>t</div>'),
+    ('<div style="--a:1url(a\')\' );background-image:url(https://cdn.exa%C2%ADmple.test/x)">t</div>', '<div>t</div>'),
+    ('<div style="--a:@url(a\')\' );background-image:url(https://cdn.exampl%\\9 65.test/x)">t</div>', '<div>t</div>'),
     # round 3 I-3: an escape a browser reads as U+FFFD, never as a lone surrogate: hidden, and nothing raises
-    (f'<div style="background:url(https://a\\d800 .test/x)">t</div>', '<div>t</div>'),
+    ('<div style="background:url(https://a\\d800 .test/x)">t</div>', '<div>t</div>'),
     # srcset splits on ASCII white space only (M-6)
     (f'<img srcset="https://a{chr(0xa0)}b@{S3}/x 1x"/>', HIDDEN),
     (f'<img srcset="https://a{chr(0x1c)}b@{S3}/x 1x"/>', HIDDEN),
@@ -131,7 +131,7 @@ def hide(body, mimetype='text/html'):
     (f'<div style="background-image:image-set(\'https://{S3}/x\' 1x)">t</div>', '<div>t</div>'),
     (f'<div style="background-image:image-set(url(https://{S3}/x) 1x)">t</div>', '<div>t</div>'),
     (f'<div style="background:url(https\\3a //{S3}/x)">t</div>', '<div>t</div>'),
-    (f'<div style="background:url(\'https://\\63 dn.example.test/x\')">t</div>', '<div>t</div>'),
+    ('<div style="background:url(\'https://\\63 dn.example.test/x\')">t</div>', '<div>t</div>'),
 ])
 def test_s3_media_is_hidden_on_the_onion(app, onion, s3, body, shown):
     out = hide(body)

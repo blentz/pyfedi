@@ -131,7 +131,8 @@ def test_the_viewer_sees_what_they_favourited_bookmarked_and_boosted(world):
     db.session.commit()
     rows = [liked, kept, boosted, disliked, reply]
     entities = {entity['id']: entity for entity in Page(viewer, rows).statuses(rows)}
-    flags = lambda row: tuple(entities[ids.status_id(row)][name] for name in ('favourited', 'bookmarked', 'reblogged'))
+    def flags(row):
+        return tuple(entities[ids.status_id(row)][name] for name in ('favourited', 'bookmarked', 'reblogged'))
     assert flags(liked) == (True, False, False)
     assert flags(kept) == (False, True, False)
     assert flags(boosted) == (False, False, True)

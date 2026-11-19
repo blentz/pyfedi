@@ -1104,7 +1104,7 @@ def test_a_poll_post_arrives_with_its_choices(app, env):
     anon, community, post, mod, author, outsider = env
     post.type = POST_TYPE_POLL
     db.session.commit()
-    poll = make_poll(post, mode='multiple')
+    make_poll(post, mode='multiple')
     # Inserted out of order on purpose (facts 499, 506).
     make_poll_choice(post, 'no', sort_order=1)
     make_poll_choice(post, 'yes', sort_order=0)

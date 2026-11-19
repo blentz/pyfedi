@@ -126,7 +126,7 @@ def test_listed_role_holders_are_each_listed_once_and_skip_the_banned(people):
     _, _, holder = people
     banned = make_user(holder.instance, 'banned', local=True)
     banned.banned = True
-    scoped = make_user(holder.instance, 'scoped', local=True)
+    make_user(holder.instance, 'scoped', local=True)
     domain = SiteDomain(domain='x.listed.example', scheme='https', federates=False)
     db.session.add(domain)
     db.session.commit()

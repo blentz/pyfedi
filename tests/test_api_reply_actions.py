@@ -473,7 +473,7 @@ def test_a_moderator_reads_the_reports_for_their_community(app, env):
 
     author, stranger, community, post, reply, baseline = env
     moderator = a_moderator(baseline, community)
-    report = a_report(stranger, reply, community)
+    a_report(stranger, reply, community)
 
     answer = get_reply_report_list(token(moderator),
                                    {'community_id': community.id})
@@ -512,7 +512,7 @@ def test_somebody_who_administers_communities_reads_them_all(app, env):
     admin = with_permission(make_user(baseline.instance_local, 'theadmin',
                                       local=True),
                             'moderate all communities')
-    report = a_report(stranger, reply, community)
+    a_report(stranger, reply, community)
 
     for data in ({}, {'comment_id': reply.id}, {'community_id': community.id}):
         answer = get_reply_report_list(token(admin), data)

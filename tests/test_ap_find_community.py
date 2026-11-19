@@ -102,7 +102,7 @@ class TestAddressingStrategy:
     """
 
     def test_audience_string_matching_a_community_is_found(self, app, db_session):
-        instance = seed_community_owner()
+        seed_community_owner()
         community = make_community('audiencematch')
         assert find_community({'audience': community.ap_profile_id}) == community
 

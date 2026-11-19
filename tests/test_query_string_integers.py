@@ -113,7 +113,7 @@ class TestTheCommunityList:
         db.session.add(topic)
         db.session.commit()
         env.community.topic_id = topic.id
-        other = make_community('elsewhere')
+        make_community('elsewhere')
         db.session.commit()
         response = env.client.get(f'/communities?topic_id={topic.id}')
         assert response.status_code == 200

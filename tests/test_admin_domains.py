@@ -265,7 +265,7 @@ def test_deleting_a_domain_deletes_its_instance_row_so_no_peer_list_names_it(app
 def test_a_domain_whose_instance_row_is_referenced_is_not_deleted(app, reference):
     row = _onion_row()
     instance_id = row.instance_id
-    peer = make_instance('peer.example', software='piefed')
+    make_instance('peer.example', software='piefed')
     if reference == 'user':   # an account on the row that the domain does not own
         make_user(db.session.get(Instance, instance_id), 'stray')
     else:   # a first-domain account that blocked the onion's row

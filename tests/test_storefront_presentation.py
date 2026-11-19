@@ -242,7 +242,7 @@ def test_link_filters_use_the_storefront(app, onion):
         assert f'href="http://{ONION}/community/lookup/' in community_link_to_href('!a@b.example')
         assert f'href="http://{ONION}/feed/lookup/' in feed_link_to_href('~a@b.example')
         assert f'href="http://{ONION}/user/lookup/' in person_link_to_href('@a@b.example')
-        assert f'href="https://x.example/community/lookup/' in community_link_to_href('!a@b.example', 'x.example')
+        assert 'href="https://x.example/community/lookup/' in community_link_to_href('!a@b.example', 'x.example')
 
 
 def test_storefront_link_moves_only_our_urls(app, onion):

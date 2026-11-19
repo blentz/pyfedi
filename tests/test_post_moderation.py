@@ -502,7 +502,7 @@ def test_a_reply_that_has_answers_cannot_be_purged(app, env):
     refused with a message rather than done."""
     anon, community, post, mod, author, outsider = env
     parent = a_reply(post, author, deleted=True, deleted_by=mod.id)
-    child = a_reply(post, author, body='an answer', parent_id=parent.id)
+    a_reply(post, author, body='an answer', parent_id=parent.id)
     parent.child_count = 1
     db.session.commit()
     client = as_user(app, mod)

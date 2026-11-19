@@ -197,6 +197,6 @@ def test_each_style_url_is_replaced_at_its_own_position(app):
 def test_a_style_keeps_its_relative_url_and_proxies_its_remote_one(app, onion):
     # coverage test: passes against the existing code
     out = on_onion(f'<img src="/x.jpg" style="background:url(/static/a.png), url({IMG})"/>')
-    assert f'url(/static/a.png)' in out
+    assert 'url(/static/a.png)' in out
     assert proxy_url(IMG) in out
     assert 'lemmy.world' not in out

@@ -94,7 +94,8 @@ def test_shown_outside_a_request_is_the_default(item):
 def test_language_names_is_one_query_per_request(item, app):
     with app.test_request_context('/'):
         statements = []
-        listener = lambda *args: statements.append(args[2])
+        def listener(*args):
+            return statements.append(args[2])
         event.listen(db.engine, 'before_cursor_execute', listener)
         try:
             for _ in range(5):
@@ -113,7 +114,8 @@ def test_language_ids_is_one_query_per_request_and_uncached_outside_one(item, ap
     assert language_ids()['fr'] == expected
     with app.test_request_context('/'):
         statements = []
-        listener = lambda *args: statements.append(args[2])
+        def listener(*args):
+            return statements.append(args[2])
         event.listen(db.engine, 'before_cursor_execute', listener)
         try:
             for _ in range(5):

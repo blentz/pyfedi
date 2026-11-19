@@ -138,7 +138,6 @@ def test_post_new_is_reached_only_through_create_post():
     wrongly credited with preventing, and nothing else in the suite would notice.
     """
     create_post_file = pathlib.Path(create_post.__code__.co_filename)
-    app_dir = create_post_file.parent.parent
     body, first_line = inspect.getsourcelines(create_post)
     create_post_lines = range(first_line, first_line + len(body))
 

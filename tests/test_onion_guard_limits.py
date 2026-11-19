@@ -515,7 +515,8 @@ def test_onion_api_buckets_are_per_account(limits):
         db.session.commit()
         bearer = {u.user_name: {'Authorization': f'Bearer {u.encode_jwt_token()}'} for u in (one, two)}
     client = limits.test_client(use_cookies=False)
-    probe = lambda headers: onion_get(client, '/api/alpha/onion_probe', headers=headers).status_code
+    def probe(headers):
+        return onion_get(client, '/api/alpha/onion_probe', headers=headers).status_code
     assert [probe(bearer['apione']) for _ in range(3)] == [200, 200, 429]
     assert probe(bearer['apitwo']) == 200
     assert [probe({}) for _ in range(3)] == [200, 200, 429]

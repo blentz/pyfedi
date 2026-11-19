@@ -944,12 +944,12 @@ class TestPropertyValueAttachments:
         peer_instance(PEER)
         document = peer_actor_json(name='alice', fields={
             'attachment': {'type': 'PropertyValue', 'name': 'Website', 'value': 'example.org'}})
-        user = actor_json_to_model(document, 'alice', PEER)
+        actor_json_to_model(document, 'alice', PEER)
         assert db.session.query(UserExtraField).count() == 0
 
     def test_absent_attachment_leaves_no_extra_fields(self, app, db_session):
         peer_instance(PEER)
-        user = actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
+        actor_json_to_model(peer_actor_json(name='alice'), 'alice', PEER)
         assert db.session.query(UserExtraField).count() == 0
 
 

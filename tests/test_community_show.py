@@ -1623,7 +1623,7 @@ def remote_community(name='general', host='other.example', gone=False):
 
 def test_a_community_on_a_dead_instance_warns(app, env):
     client, _local_community, author = env
-    community = remote_community('remote', gone=True)
+    remote_community('remote', gone=True)
 
     with patch('app.community.routes.flash') as flashed:
         with patch('app.community.routes.render_template',

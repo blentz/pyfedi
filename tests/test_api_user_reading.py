@@ -44,7 +44,6 @@ def env(app, api_baseline):
     g.site = db.session.get(Site, 1)
     reader = api_baseline.user2
     author = api_baseline.user3
-    community = api_baseline.community1
     post = api_baseline.post1
     reply = make_post_reply(post, author, body='a reply')
     reply.body_html = '<p>a reply</p>'

@@ -224,7 +224,7 @@ def test_a_post_in_another_community_is_excluded(app, db_session, monkeypatch):
     exactly one community.
     """
     seed_actors()
-    community = seed_local_community('books')
+    seed_local_community('books')
     other = make_community(name='films', host='test.piefed.local')
     user = make_user(None, 'author', local=True)
     make_post(other, user, 'https://test.piefed.local/post/1')
@@ -299,7 +299,7 @@ def test_a_sticky_post_in_another_community_is_excluded(app, db_session, monkeyp
     community filter were missing.
     """
     seed_actors()
-    community = seed_local_community('books')
+    seed_local_community('books')
     other = make_community(name='films', host='test.piefed.local')
     user = make_user(None, 'author', local=True)
     post = make_post(other, user, 'https://test.piefed.local/post/1')

@@ -278,7 +278,7 @@ class TestLemmyAdminRoles:
         The oracle is that `find_actor_or_create` was NOT called -- asserting
         only that no role exists would hold if the resolver returned None too.
         """
-        instance = _seed_instance('peer.example', software='lemmy')
+        _seed_instance('peer.example', software='lemmy')
         resolver = _Recorder(result=None)
         _quiet_http_half(monkeypatch)
         monkeypatch.setattr(

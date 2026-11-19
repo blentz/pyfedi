@@ -215,7 +215,7 @@ class TestTheCountersAfterACommunityBan:
         account's posts in every other community, so zeroing the totals would under-count
         them everywhere."""
         a_thread(scene, scene.author)
-        post = make_post(scene.community, scene.author,
+        make_post(scene.community, scene.author,
                          ap_id='https://test.piefed.local/p/5')
         db.session.commit()
         scene.author.post_count = 5

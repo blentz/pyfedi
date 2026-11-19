@@ -28,8 +28,8 @@ def test_the_migration_backfills_each_local_feed_to_its_owners_domain(app, three
     first_feed = t.local_feed('firstf', t.first, first_owner)
     shop_feed = t.local_feed('shopf', t.shop, shop_owner)
     onion_feed = t.local_feed('onionf', t.onion, onion_owner)
-    ownerless = t.local_feed('ownerless', t.first)
-    remote = make_feed(peer, 'remotef')   # make_feed sets ap_id
+    t.local_feed('ownerless', t.first)
+    make_feed(peer, 'remotef')   # make_feed sets ap_id
     db.session.execute(text('UPDATE feed SET site_domain_id = NULL'))
     db.session.execute(text('UPDATE feed SET user_id = :u WHERE id = :f'), {'u': shop_owner.id, 'f': shop_feed.id})
     db.session.execute(text('UPDATE feed SET user_id = :u WHERE id = :f'), {'u': onion_owner.id, 'f': onion_feed.id})

@@ -228,7 +228,7 @@ def test_a_rename_alone_needs_no_confirmation(env):
 def test_a_change_of_a_permissions_domains_alone_asks_first(env):
     role = a_role('Helpers', 'ban users')
     grant_role(env.holder, role)
-    form = {f'scope-ban users': 'selected', f'domains-ban users': str(env.domain.id)}
+    form = {'scope-ban users': 'selected', 'domains-ban users': str(env.domain.id)}
     response = post(env, f'/admin/roles/{role.id}/edit', name='Helpers', permissions=['ban users'], **form)
     assert 'This changes access for 1 user.' in response.get_data(as_text=True)
     assert 'value="selected" checked' in response.get_data(as_text=True)   # the choice survives the second look

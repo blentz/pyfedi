@@ -662,7 +662,7 @@ def test_get_comm_flair_list_str_arg_exact_match_requires_the_ap_domain_too(
     kill stays honest, and the row cannot fail for a reason that has nothing
     to do with what it tests. See D847.
     """
-    s = _seed()
+    _seed()
     first = make_community('shared', host='decoy.example')
     second = make_community('shared', host='target.example')
     assert first.name == second.name
@@ -1201,7 +1201,7 @@ def test_invite_with_chat_missing_community_raises_NoResultFound(app, db_session
     before this fix. That test's name and assertion no longer apply.
     """
     s = _seed()
-    recipient = make_user(s.instance, 'bob', local=True)
+    make_user(s.instance, 'bob', local=True)
 
     with web_ctx(app, s.user):
         with pytest.raises(NoResultFound):
@@ -1228,7 +1228,7 @@ def test_invite_with_chat_banned_community_returns_0_and_creates_no_conversation
     file's tests -- see that test's docstring for the mutant this decouples.
     """
     s = _seed()
-    recipient = make_user(s.instance, 'carol', local=True)
+    make_user(s.instance, 'carol', local=True)
     s.community.banned = True
     db.session.commit()
 
@@ -1260,7 +1260,7 @@ def test_invite_with_chat_banned_community_web_src_returns_0_and_creates_no_conv
     runs, since `assert` stops at the first failure), then restored.
     """
     s = _seed()
-    recipient = make_user(s.instance, 'dana', local=True)
+    make_user(s.instance, 'dana', local=True)
     s.community.banned = True
     db.session.commit()
 
@@ -1465,7 +1465,7 @@ def test_invite_with_chat_private_community_api_src_still_embeds_display_name(
     assert s.community.title != s.community.name
     s.community.private = True
     db.session.commit()
-    recipient = make_user(s.instance, 'rosa', local=True)
+    make_user(s.instance, 'rosa', local=True)
     calls = []
     senders = []
     monkeypatch.setattr('app.chat.util.send_message',

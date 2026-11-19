@@ -849,7 +849,6 @@ def test_a_misc_settings_save_that_omits_the_cutoff_is_refused_not_a_500(app, db
     instance, ordinary = _seed()
     admin = _settings_admin(instance)
     language = _language()
-    site = db.session.get(Site, 1)
 
     client = app.test_client()
     login(client, admin)
@@ -874,7 +873,6 @@ def test_a_cutoff_of_zero_is_accepted(app, db_session):
     instance, ordinary = _seed()
     admin = _settings_admin(instance)
     language = _language()
-    site = db.session.get(Site, 1)
 
     payload = _valid_misc_payload(language)
     client = app.test_client()

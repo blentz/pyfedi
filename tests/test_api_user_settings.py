@@ -594,7 +594,7 @@ def test_the_unread_list_leaves_out_what_was_read(app, env, status):
     user, author, baseline = env
     unread = a_post_notification(user, author, baseline.post1, NOTIF_FEED,
                                  'new_post')
-    read = a_notification(user, author, NOTIF_FEED, 'new_post',
+    a_notification(user, author, NOTIF_FEED, 'new_post',
                           {'gen': '0', 'post_id': baseline.post1.id},
                           read=True)
 

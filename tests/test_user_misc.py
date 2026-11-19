@@ -274,7 +274,7 @@ def test_the_hidden_posts_list_is_yours_alone(app, env):
 
 def test_the_scheduled_posts_list(app, env):
     client, viewer, other, community = env
-    scheduled = a_post(community, viewer, 1, title='scheduled',
+    a_post(community, viewer, 1, title='scheduled',
                        status=POST_STATUS_SCHEDULED,
                        scheduled_for=utcnow() + timedelta(days=1))
     a_post(community, viewer, 2, title='published')
@@ -485,7 +485,7 @@ def test_looking_up_a_known_remote_account_redirects_to_it(app, env):
     happened, because the search would find the same person and redirect to
     the same place. The Location alone cannot tell the two paths apart."""
     client, viewer, other, community = env
-    remote = make_user(make_instance('other.example', software='piefed'),
+    make_user(make_instance('other.example', software='piefed'),
                        'remote')
     db.session.commit()
 

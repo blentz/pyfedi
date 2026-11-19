@@ -343,7 +343,7 @@ class TestProcessExpiredBans:
         `ap_profile_id` does not start with SERVER_URL. The ban is still
         deleted -- only the notification is skipped.
         """
-        local_instance = make_instance('local.example')
+        make_instance('local.example')
         remote_instance = make_instance('remote.example')
         remote_user = make_user(remote_instance, 'visitor')
         community = make_community()

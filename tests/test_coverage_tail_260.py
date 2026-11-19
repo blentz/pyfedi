@@ -85,7 +85,7 @@ class TestWhatATagListAdds:
         """`if updated_flair_obj is None: return`. A tag with no usable name means the document
         cannot be trusted to say which flair should exist -- so the function returns BEFORE the
         removal pass, and nothing this community already has is deleted."""
-        existing = make_community_flair(env.community, 'Existing')
+        make_community_flair(env.community, 'Existing')
         db.session.commit()
 
         update_community_flair_from_tags(env.community, [tag('Spoilers'), {'type': 'x'}])

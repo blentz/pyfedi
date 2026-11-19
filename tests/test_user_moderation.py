@@ -1040,7 +1040,7 @@ def test_a_remote_handle_resolves_for_every_action(app, env, path, extra):
     local URL -- and the handle arm is a separate line in each function."""
     client, founder, viewer, target = env
     moderator_of_users(viewer)
-    remote = a_remote_user()
+    a_remote_user()
     token = csrf(app, client)
     data = {'csrf_token': token}
     data.update(extra)

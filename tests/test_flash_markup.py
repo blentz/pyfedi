@@ -218,7 +218,7 @@ class TestJoiningACommunity:
     def test_the_local_join_message_carries_no_tag(self, app, env):
         from app.community.routes import do_subscribe
 
-        community = _payload_community(local=True)
+        _payload_community(local=True)
         alice = make_user(make_instance('local.flash.test'), 'alice2', local=True)
         db.session.commit()
 
@@ -233,7 +233,7 @@ class TestJoiningACommunity:
         Without this the fix could be "drop the community name" and pass."""
         from app.community.routes import do_subscribe
 
-        community = _payload_community(local=True)
+        _payload_community(local=True)
         alice = make_user(make_instance('local.flash.test'), 'alice3', local=True)
         db.session.commit()
 
@@ -297,7 +297,7 @@ class TestTheOtherThreeCallSites:
         which joins and then redirects to the compose form. It is
         `@validation_required` and `@approval_required`, so the user has to be
         one the instance has actually admitted."""
-        community = _payload_community(local=True)
+        _payload_community(local=True)
         joiner = api_baseline.user2
         # `validation_required` wants `verified`, and `approval_required` refuses
         # an account with no `private_key` while the instance is 'Closed' or

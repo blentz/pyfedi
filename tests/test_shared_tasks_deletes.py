@@ -506,7 +506,7 @@ def test_a_local_only_community_sends_no_reply_delete(db_session, http_mock):
     `_following_instance_without_a_mocked_route`.
     """
     s = _seed(with_keys=True)
-    peer = _make_deliverable(s)
+    _make_deliverable(s)
     _following_instance_without_a_mocked_route(s)
     _personal_follower_without_a_mocked_route(s)
     reply = make_post_reply(s.post, s.user)
@@ -1183,7 +1183,7 @@ def test_a_follower_on_an_already_notified_domain_is_not_sent_to_twice(
     peer = _make_deliverable(s)
     s.community.ap_domain = peer.domain
     db.session.commit()
-    route = http_mock.post(PEER_INBOX).respond(200, json={})
+    http_mock.post(PEER_INBOX).respond(200, json={})
     fan = make_user(peer, 'fan_same_domain')
     peer.inbox = PEER_INBOX
     make_follow(s.user, fan, is_inward=True)

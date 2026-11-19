@@ -1283,7 +1283,7 @@ def test_deleting_a_local_user_unsubscribes_and_federates_the_deletion(
     from tests.factories import make_community
 
     instance = _instance()
-    owner = make_user(instance, 'owner', local=True)
+    make_user(instance, 'owner', local=True)
     user = make_user(instance, 'victim', local=True)
     user.private_key = 'a private key'
     community = make_community('somewhere', host='remote.example')

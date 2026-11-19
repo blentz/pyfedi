@@ -242,7 +242,7 @@ def test_an_anonymous_reader_sees_the_unfiltered_list(app, db_session, listing):
 @pytest.mark.parametrize('listing', [sidebar_active_communities, sidebar_new_communities])
 def test_a_reader_banned_from_a_community_is_not_offered_it(app, db_session, listing):
     instance, alice = _seed()
-    keep = _listable('microblogs')
+    _listable('microblogs')
     barred = _listable('barred')
     make_community_ban(alice, barred)
     db.session.commit()
@@ -357,11 +357,11 @@ def test_the_new_instance_list_shows_only_live_unbanned_piefed_peers(app, db_ses
     rather than nothing.
     """
     _seed()
-    wanted = make_instance('wanted.example', software='piefed')
+    make_instance('wanted.example', software='piefed')
     make_instance('gone.example', software='piefed').gone_forever = True
     make_instance('dormant.example', software='piefed').dormant = True
     make_instance('lemmy.example', software='lemmy')
-    banned = make_instance('banned.example', software='piefed')
+    make_instance('banned.example', software='piefed')
     db.session.add(BannedInstances(domain='banned.example'))
     db.session.commit()
 

@@ -498,7 +498,7 @@ def test_a_remote_account_has_no_remote_follow_page(app, env):
     the instance that hosts the account, and a remote account is already
     there."""
     client, viewer, other = env
-    remote = make_user(make_instance('other.example', software='piefed'),
+    make_user(make_instance('other.example', software='piefed'),
                        'remote')
     db.session.commit()
 

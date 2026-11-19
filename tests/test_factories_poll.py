@@ -20,8 +20,8 @@ def test_make_poll_is_keyed_by_its_post_and_finds_its_choices(app, db_session):
     post = make_post(community, author, 'https://peer.example/post/1')
 
     poll = make_poll(post, mode='multiple')
-    first = make_poll_choice(post, 'yes', sort_order=0)
-    second = make_poll_choice(post, 'no', sort_order=1)
+    make_poll_choice(post, 'yes', sort_order=0)
+    make_poll_choice(post, 'no', sort_order=1)
 
     assert db_session.get(Poll, post.id) is poll
     assert poll.mode == 'multiple'          # explicitly passed, not a default

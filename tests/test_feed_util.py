@@ -102,7 +102,7 @@ def test_a_known_remote_feed_is_returned_without_fetching(app, db_session):
     entirely -- asserted by the request count, since the return value alone
     cannot tell a cached hit from a fetched one."""
     instance, owner = _seed()
-    remote_instance = make_instance('remote.example', software='piefed')
+    make_instance('remote.example', software='piefed')
     feed = _feed(owner, 'remotefeed', ap_id='remotefeed@remote.example')
 
     with app.test_request_context('/'):

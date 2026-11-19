@@ -108,7 +108,7 @@ def test_the_topic_list_is_returned_as_a_tree(app, db_session, api_baseline):
     point: a flat list would satisfy a test that only counted topics.
     """
     parent = _topic('fediverse')
-    child = _topic('microblogging', parent=parent)
+    _topic('microblogging', parent=parent)
     _topic('unrelated')
 
     with app.test_request_context('/'):

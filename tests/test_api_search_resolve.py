@@ -502,7 +502,7 @@ def test_a_local_account_by_its_url(app, env):
     user, author, community, post, reply, baseline = env
 
     with patch('app.api.alpha.utils.misc.search_for_user',
-               return_value=author) as searched:
+               return_value=author):
         answer = get_resolve_object(token(user),
                                     {'q': local_url(f'/u/{author.user_name}')})
 
@@ -1668,7 +1668,7 @@ def test_a_hint_that_finds_nothing_falls_through_to_the_fetch(app, env, query, f
     user, author, community, post, reply, baseline = env
 
     with patch(f'app.api.alpha.utils.misc.{finder}', return_value=None), \
-            patch('app.api.alpha.utils.misc.find_actor_or_create', return_value=None) as fetched, \
+            patch('app.api.alpha.utils.misc.find_actor_or_create', return_value=None), \
             patch('app.api.alpha.utils.misc.remote_object_to_json', return_value=None) as asked:
         with pytest.raises(Exception) as refused:
             get_resolve_object(token(user), {'q': query})

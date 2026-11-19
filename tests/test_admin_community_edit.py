@@ -152,7 +152,6 @@ def _round_trip_sets():
         assigned = node.targets[0]
         if not isinstance(assigned, ast.Attribute):
             continue
-        source = ast.unparse(node.value)
         if (assigned.attr == 'data'
                 and isinstance(assigned.value, ast.Attribute)
                 and isinstance(assigned.value.value, ast.Name)

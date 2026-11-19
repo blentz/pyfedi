@@ -88,7 +88,7 @@ class TestWhoMayMakeThisServerFetchAnother:
         """`:490`. A peer's own request carries `Accept: application/activity+json`, and
         answering it by fetching a third host is how one server turns another into a
         proxy."""
-        reader = make_user(env.baseline.instance_local, 'apcaller', local=True)
+        make_user(env.baseline.instance_local, 'apcaller', local=True)
         db.session.commit()
 
         with env.app.test_request_context('/u/someone@remote.example',

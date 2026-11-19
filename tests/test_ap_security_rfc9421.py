@@ -308,8 +308,9 @@ class TestKeysAndAlgorithms:
     def test_rsa_pss_sha512(self, extra):
         private_key, public_key = a_keypair()
         key = _rsa_private(private_key)
-        pss = lambda data: key.sign(data, padding.PSS(mgf=padding.MGF1(hashes.SHA512()), salt_length=64),
-                                    hashes.SHA512())
+        def pss(data):
+            return key.sign(data, padding.PSS(mgf=padding.MGF1(hashes.SHA512()), salt_length=64),
+                            hashes.SHA512())
         headers = _custom(['@method'], pss, extra=extra, method='GET')
         assert rfc9421.verify('GET', URL, headers, b'', public_key, now=NOW)
 

@@ -1382,7 +1382,7 @@ def test_an_unbanned_video_url_lets_edit_post_run(db_session, app, http_mock):
     post_module.edit_post = recorder
     try:
         with web_ctx(app, s.author):
-            post = make_post(form, s.community, POST_TYPE_VIDEO, SRC_WEB)
+            make_post(form, s.community, POST_TYPE_VIDEO, SRC_WEB)
     finally:
         post_module.edit_post = original
 

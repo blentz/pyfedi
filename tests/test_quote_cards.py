@@ -157,7 +157,8 @@ def test_priming_resolves_a_page_in_one_query_per_table(world, app):
         posts.append(p)
     db.session.commit()
     statements = []
-    listener = lambda *args: statements.append(args[2])
+    def listener(*args):
+        return statements.append(args[2])
     event.listen(db.engine, 'before_cursor_execute', listener)
     try:
         with app.test_request_context('/'):
@@ -171,7 +172,8 @@ def test_priming_resolves_a_page_in_one_query_per_table(world, app):
 def test_priming_scan_matched_the_batch_select_it_counts(world, app):
     """The query-count test's matcher must actually see the batch select, or it passes by seeing nothing."""
     statements = []
-    listener = lambda *args: statements.append(args[2])
+    def listener(*args):
+        return statements.append(args[2])
     event.listen(db.engine, 'before_cursor_execute', listener)
     try:
         with app.test_request_context('/'):
@@ -204,7 +206,8 @@ def test_a_missed_row_falls_back_to_one_memoised_lookup(world, app):
     with app.test_request_context('/'):
         assert quote_target(world['quoting']) is world['target']
         statements = []
-        listener = lambda *args: statements.append(args[2])
+        def listener(*args):
+            return statements.append(args[2])
         event.listen(db.engine, 'before_cursor_execute', listener)
         try:
             assert quote_target(world['quoting']) is world['target']
@@ -477,7 +480,8 @@ def test_a_page_of_cards_costs_a_constant_number_of_queries(world, app):
     db.session.expire_all()
     posts = [db.session.get(type(p), p.id) for p in posts]
     statements = []
-    listener = lambda *args: statements.append(args[2])
+    def listener(*args):
+        return statements.append(args[2])
     with app.test_request_context('/'):
         g.storefront = default_domain()   # a real request has its storefront from before_request, once
         login_user(world['viewer'])

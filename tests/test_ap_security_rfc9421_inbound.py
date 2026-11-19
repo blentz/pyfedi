@@ -347,7 +347,7 @@ class TestInboxPaths:
     def test_a_rotated_key_is_accepted_after_one_refetch(self, app, signing_peer, http_mock, dispatched):
         site = db.session.get(Site, 1) or make_site()
         site.private_key, _ = a_keypair()
-        private_key, public_key = signing_peer.private_key, signing_peer.public_key
+        _private_key, public_key = signing_peer.private_key, signing_peer.public_key
         signing_peer.public_key = next(p for _, p in (a_keypair() for _ in range(16)) if p != public_key)
         db.session.commit()
         route = http_mock.get(signing_peer.ap_profile_id).respond(

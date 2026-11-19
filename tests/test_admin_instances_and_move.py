@@ -103,7 +103,7 @@ class TestTheInstanceList:
                                              ('dormant', 'dormant'),
                                              ('gone_forever', 'gone_forever')])
     def test_each_filter_shows_only_what_it_names(self, env, name, column):
-        other = make_instance('other.test')
+        make_instance('other.test')
         setattr(env.remote, column, True)
         db.session.commit()
         client = client_for(env, 'change instance settings')

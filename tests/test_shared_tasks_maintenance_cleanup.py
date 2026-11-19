@@ -551,7 +551,7 @@ class TestUpdateCommunityStats:
         instance, user, community, post = _seed()
         deleted_post = make_post(community, user, 'https://peer.example/p/2')
         deleted_post.deleted = True
-        reply = make_post_reply(post, user)
+        make_post_reply(post, user)
         deleted_reply = make_post_reply(post, user)
         deleted_reply.deleted = True
         db.session.commit()

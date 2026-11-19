@@ -73,7 +73,7 @@ def test_off_by_default_chooses_and_follows_nobody(db_session, fed):
 
 def test_the_top_n_per_host_by_followers(db_session, fed):
     set_setting('discovery_people_per_host', 2)
-    ann, bob, cat = person('ann', followers=5), person('bob', followers=50), person('cat', followers=20)
+    _ann, bob, cat = person('ann', followers=5), person('bob', followers=50), person('cat', followers=20)
     other = person('dan', host='pix.example', followers=1)
 
     desired = desired_people()

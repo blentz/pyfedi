@@ -505,7 +505,7 @@ def test_no_state_changing_route_answers_a_banned_user(app, community_world):
             with patch('app.community.routes.task_selector'):
                 with patch('app.community.routes.render_template',
                            return_value='rendered'):
-                    response = getattr(client, method)(
+                    getattr(client, method)(
                         path, data={'csrf_token': token})
         except Exception:
             # A route that raises has not silently done the work, which is what

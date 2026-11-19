@@ -301,7 +301,7 @@ def test_a_child_feed_is_nested_under_its_parent(app, env):
     from app.api.alpha.utils.feed import get_feed_list
 
     owner, stranger, public, private = env
-    child = a_feed(owner, 'childfeed', public=True, parent_feed_id=public.id)
+    a_feed(owner, 'childfeed', public=True, parent_feed_id=public.id)
 
     listed = get_feed_list(token(stranger), {})
 

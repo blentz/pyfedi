@@ -429,7 +429,7 @@ def test_an_unknown_post_has_no_lazy_thread(app, env):
 
 
 def ai_says(result='ai', confidence=0.9):
-    response = patch('app.post.routes.get_request').start()
+    patch('app.post.routes.get_request').start()
     patch.stopall()
     return result, confidence
 
@@ -797,7 +797,7 @@ def test_a_cookie_naming_a_community_that_is_gone_is_ignored(app, env):
 
 def test_cross_posting_carries_the_post_into_the_new_form(app, env):
     anon, community, post, mod, author, outsider = env
-    other = make_community('elsewhere')
+    make_community('elsewhere')
     db.session.commit()
     client = as_user(app, author)
     token = csrf(app, client)

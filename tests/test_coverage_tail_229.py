@@ -79,7 +79,7 @@ class TestWhatASignedInViewerIsShown:
     def test_a_community_they_are_banned_from_is_not_listed(self, env):
         """:439. The ban is a moderator's decision about this viewer, so it is not enough
         that the community is hard to reach -- it must not be advertised either."""
-        allowed = make_community('permitted')
+        make_community('permitted')
         banned = make_community('forbidden')
         db.session.add(CommunityBan(user_id=env.user.id, community_id=banned.id))
         db.session.commit()
@@ -92,7 +92,7 @@ class TestWhatASignedInViewerIsShown:
     def test_a_community_they_have_blocked_is_not_listed(self, env):
         """:452. The viewer's own decision, and the one case where showing it anyway would
         be read as the block having silently failed."""
-        kept = make_community('kept')
+        make_community('kept')
         blocked = make_community('unwanted')
         db.session.add(CommunityBlock(user_id=env.user.id, community_id=blocked.id))
         db.session.commit()
@@ -109,7 +109,7 @@ class TestWhatASignedInViewerIsShown:
         instance = Instance(domain='blocked.example', software='piefed')
         db.session.add(instance)
         db.session.commit()
-        local = make_community('homegrown')
+        make_community('homegrown')
         remote = make_community('faraway')
         remote.instance_id = instance.id
         instanceless = make_community('stateless')
@@ -128,8 +128,8 @@ class TestWhatASignedInViewerIsShown:
         `title`, so the row that proves the filter ran needs a community whose name does
         NOT contain the keyword but whose title does."""
         env.user.community_keyword_filter = 'cricket'
-        kept = make_community('football')
-        by_name = make_community('cricketclub')
+        make_community('football')
+        make_community('cricketclub')
         by_title = make_community('sportsdesk')
         by_title.title = 'cricket news'
         db.session.commit()
@@ -145,7 +145,7 @@ class TestWhatASignedInViewerIsShown:
         """:436. `hide_low_quality` is a preference, so the same two communities must both
         appear once it is off -- otherwise this row would pass against a filter that drops
         low-quality communities from everyone."""
-        good = make_community('curated')
+        make_community('curated')
         poor = make_community('memedump')
         poor.low_quality = True
         env.user.hide_low_quality = True
@@ -163,7 +163,7 @@ class TestWhatASignedInViewerIsShown:
     def test_the_nsfw_selector_filters_both_ways(self, env):
         """:445-448, the arm taken by a viewer who has NOT set `hide_nsfw`. Both values are
         asserted: a filter stuck on `False` satisfies `?nsfw=no` by itself."""
-        plain = make_community('wholesome')
+        make_community('wholesome')
         adult = make_community('spicy')
         adult.nsfw = True
         env.user.hide_nsfw = 0
@@ -201,7 +201,7 @@ class TestTheSelectors:
     def test_remote_only_hides_local_communities(self, env):
         """:376. `home_select=remote` is `ap_id IS NOT NULL`; the factory leaves `ap_id`
         unset, which is what makes a community local."""
-        local = make_community('townhall')
+        make_community('townhall')
         remote = make_community('elsewhere')
         remote.ap_id = 'elsewhere@remote.example'
         db.session.commit()
@@ -217,7 +217,7 @@ class TestTheSelectors:
         moderatorships, and the two selector values must partition the same set -- a
         community cannot be missing from both answers."""
         joined = make_community('mine')
-        other = make_community('theirs')
+        make_community('theirs')
         make_community_member(env.user, joined)
         db.session.commit()
 
@@ -257,7 +257,7 @@ class TestWhatAnAnonymousViewerIsShown:
     def test_nsfl_is_always_hidden_from_anonymous_viewers(self, env):
         """The `else` arm's first line: an anonymous viewer has no preference to read, so
         NSFL is unconditional rather than a selector."""
-        plain = make_community('ordinary')
+        make_community('ordinary')
         nsfl = make_community('grim')
         nsfl.nsfl = True
         db.session.commit()
@@ -269,7 +269,7 @@ class TestWhatAnAnonymousViewerIsShown:
 
     def test_an_anonymous_viewer_can_still_use_the_nsfw_selector(self, env):
         """:464-465, the anonymous twin of the signed-in selector."""
-        plain = make_community('safeforwork')
+        make_community('safeforwork')
         adult = make_community('adultsonly')
         adult.nsfw = True
         db.session.commit()

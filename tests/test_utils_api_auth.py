@@ -233,7 +233,7 @@ class TestAuthoriseApiUserCompoundRejection:
     def test_a_remote_user_is_refused(self, app, db_session):
         """Fails if `user.ap_id is not None` is deleted. make_user(instance,
         name) without local=True produces a remote user (ap_id set)."""
-        instance = make_instance('test.piefed.local', software='piefed')
+        make_instance('test.piefed.local', software='piefed')
         remote = make_instance('remote.example')
         user = make_user(remote, 'remoteuser')
         user.password_updated_at = SAFE_PASSWORD_UPDATED_AT

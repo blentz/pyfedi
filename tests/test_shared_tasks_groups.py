@@ -570,7 +570,7 @@ def test_each_community_language_becomes_an_identifier_and_name(
     edit_community(None, s.user.id, s.community.id)
 
     group = _sent_activity(route)['object']['object']
-    assert {(l['identifier'], l['name']) for l in group['language']} == {
+    assert {(language['identifier'], language['name']) for language in group['language']} == {
         ('en', 'English'), ('de', 'German')}
 
 

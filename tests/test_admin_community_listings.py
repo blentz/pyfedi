@@ -142,7 +142,7 @@ class TestWhichCommunitiesEachListingHolds:
 class TestTheSearchBox:
     @pytest.mark.parametrize('path', LISTINGS)
     def test_a_search_narrows_the_list(self, env, path):
-        wanted = a_community('wantedcommunity', topic_id=None, low_quality=True,
+        a_community('wantedcommunity', topic_id=None, low_quality=True,
                              un_moderated=True)
         a_community('othercommunity', topic_id=None, low_quality=True,
                     un_moderated=True)
