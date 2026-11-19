@@ -204,7 +204,8 @@ def unique_copy_name(name: str, domain_id: int) -> str:
 
 def copy_theme(source: str, domain_id: int, user_id: int | None):
     """A new custom theme of domain `domain_id`, copied from `source`: a shipped theme or piefed (its styles.css with
-    relative URLs made absolute), or a custom theme of the same domain (its CSS, and a copy of each of its files). The copy is not retired.
+    relative URLs made absolute), or a custom theme of the same domain (its CSS, a copy of each of its files, and its
+    template overrides and script: theme code spec §3.7). The copy is not retired.
     `source` names nothing the domain may copy: ValueError."""
     custom = owned_theme(source, domain_id)
     if custom is not None:
@@ -226,6 +227,11 @@ def copy_theme(source: str, domain_id: int, user_id: int | None):
             continue
         db.session.add(models.CustomThemeFile(custom_theme_id=theme.id, filename=file.filename, path=_store(data),
                                               mime_type=file.mime_type, size=file.size))
+    if custom is not None:   # theme code goes with a copy, whoever makes it (spec §3.6)
+        theme.script = custom.script
+        db.session.add_all([models.CustomThemeTemplate(custom_theme_id=theme.id, name=template.name,
+                                                       source=template.source, updated_at=now)
+                            for template in custom.templates])
     db.session.commit()
     return theme
 

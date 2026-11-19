@@ -160,6 +160,38 @@ def test_the_holder_manages_xs_themes_and_not_ys(world):
     assert db.session.get(CustomTheme, y_theme.id).retired is False
 
 
+def test_theme_code_needs_its_own_permission_added_to_the_role(world):
+    """Theme code spec §3.1: `manage theme code` is never implied by `edit domain branding`. The composed domain admin
+    cannot write a theme's script on X until the Admin adds the permission, limited to X, through the role editor;
+    then they can on X and still not on Y."""
+    admin_client, _token, role = build_and_grant(world)
+    x_theme = CustomTheme(site_domain_id=world.x.id, name='Ex', base_theme='forest')
+    y_theme = CustomTheme(site_domain_id=world.y.id, name='Why', base_theme='forest')
+    db.session.add_all([x_theme, y_theme])
+    db.session.commit()
+    client = as_grantee(world)
+
+    def write_script(theme, domain):
+        g.pop('_login_user', None)
+        return client.post(f'/admin/domains/{domain.id}/themes/{theme.id}/script',
+                           data={'csrf_token': csrf(world.app, client), 'script': 'go();'}).status_code
+
+    assert write_script(x_theme, world.x) == 403
+    data = form_for(world.x)
+    data['permissions'] = list(DOMAIN_ADMIN) + ['manage theme code']
+    data['scope-manage theme code'], data['domains-manage theme code'] = 'selected', str(world.x.id)
+    data['confirmed'] = '1'   # the role has a holder: the editor asks for a second look first
+    g.pop('_login_user', None)
+    login(admin_client, world.admin)
+    fresh = csrf(world.app, admin_client)   # the grantee's requests replaced the token in the shared context
+    g.pop('_login_user', None)
+    assert admin_client.post(f'/admin/roles/{role.id}/edit', data={'csrf_token': fresh, **data}).status_code == 302
+    assert write_script(x_theme, world.x) == 302
+    assert db.session.get(CustomTheme, x_theme.id).script == 'go();'
+    assert write_script(y_theme, world.y) == 403
+    assert db.session.get(CustomTheme, y_theme.id).script is None
+
+
 def test_the_holders_actions_land_on_x_and_are_refused_on_y(world):
     build_and_grant(world)
     client = as_grantee(world)
