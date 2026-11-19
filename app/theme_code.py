@@ -5,7 +5,7 @@ Overrides live in the database (TC2) and reach Jinja through `CustomThemeLoader`
 `custom_theme/<id>/<version>/<template name>`. The version is the theme's `theme_version`, so a changed theme has new
 names and no worker can serve a stale compiled template. Inside an override, `extends`, `include` and `import`
 resolve a plain template name to the same theme's override, else its base theme's shipped one, else the app's
-(`ThemeCodeEnvironment.join_path`).
+(`join_path`, installed on the app's environment by `install`).
 
 Templates run with the app's full context: only holders of `manage theme code` write them (spec §3.1). Nothing here
 sandboxes them, by design (§4).
@@ -21,14 +21,16 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import lru_cache
 
-from flask import current_app, has_request_context, request
-from flask.templating import Environment
+from flask import current_app, g, has_request_context, request
 from jinja2 import BaseLoader, ChoiceLoader, TemplateNotFound, TemplateSyntaxError
 from sqlalchemy import or_, update
 
+import app.models as models
+import app.storefront as storefront
+import app.utils as utils   # app.utils imports this module: its names are looked up when called
 from app import db
 from app.clock import utcnow
-from app.custom_themes import theme_version
+from app.custom_themes import clean_filename, custom_theme_here, read_stored, sniff_type, theme_version
 
 PREFIX = 'custom_theme/'
 SHIPPED_DIR = 'app/templates/themes'
@@ -79,8 +81,7 @@ def _theme_code(theme_id: int, version: str):
     """(base theme, the names it overrides) of theme `theme_id` as of `version`, or None when it has no such
     version. Keyed by version, so a save is never served from here. Sources are not kept: Jinja caches what it
     compiles."""
-    from app.models import CustomTheme
-    theme = db.session.get(CustomTheme, theme_id)
+    theme = db.session.get(models.CustomTheme, theme_id)
     if theme is None or str(theme_version(theme)) != version:
         return None
     return theme.base_theme, frozenset(template.name for template in theme.templates)
@@ -102,13 +103,10 @@ def active_code_theme():
     """(theme id, version, override names) of the code theme in effect for this request, or None: outside a
     request, when the theme in effect is not a custom theme of this domain, when it overrides nothing, or while a
     page renders again without theme code. Kept on the request, which a test's shared `g` would not be."""
-    if not has_request_context() or request.environ.get(_OFF):
-        return None
+    if not has_request_context() or request.environ.get(_OFF) or g.get('site') is None:
+        return None   # outside a page's request (no site loaded): no theme is in effect
     if _ACTIVE not in request.environ:
-        from app.custom_themes import custom_theme_here
-        from app.storefront import current_storefront
-        from app.utils import current_theme
-        custom = custom_theme_here(current_theme(), current_storefront())
+        custom = custom_theme_here(utils.current_theme(), storefront.current_storefront())
         active = None
         if custom is not None:
             version = str(theme_version(custom))
@@ -146,8 +144,7 @@ def render_with_fallback(render, template_name: str):
 def _record_failure(theme_id: int, template_name: str, error: Exception) -> None:
     """Keeps the failure on the theme's row, in a transaction of its own (the page's own session may hold anything),
     at most once a minute per theme so a broken theme on a busy domain does not write on every request."""
-    from app.models import CustomTheme
-    table, now = CustomTheme.__table__, utcnow()
+    table, now = models.CustomTheme.__table__, utcnow()
     with db.engine.begin() as connection:
         connection.execute(update(table).where(
             table.c.id == theme_id,
@@ -157,9 +154,9 @@ def _record_failure(theme_id: int, template_name: str, error: Exception) -> None
 
 def last_failure(theme_id: int):
     """{'template', 'error', 'at'} of the theme's last failed render in the past week, or None."""
-    from app.models import CustomTheme
-    row = db.session.query(CustomTheme.code_failed_template, CustomTheme.code_failure, CustomTheme.code_failed_at) \
-        .filter(CustomTheme.id == theme_id).one_or_none()
+    theme = models.CustomTheme
+    row = db.session.query(theme.code_failed_template, theme.code_failure, theme.code_failed_at) \
+        .filter(theme.id == theme_id).one_or_none()
     if row is None or row.code_failed_at is None or row.code_failed_at < utcnow() - timedelta(seconds=FAILURE_SECONDS):
         return None
     return {'template': row.code_failed_template, 'error': row.code_failure, 'at': row.code_failed_at}
@@ -169,12 +166,11 @@ class CustomThemeLoader(BaseLoader):
     """Serves `custom_theme/<id>/<version>/<name>` from the database. Every other name is not found here."""
 
     def get_source(self, environment, template):
-        from app.models import CustomThemeTemplate
         found = _LOADER_NAME.fullmatch(template)
         code = found and _theme_code(int(found.group(1)), found.group(2))
         if not code or found.group(3) not in code[1]:
             raise TemplateNotFound(template)
-        source = db.session.query(CustomThemeTemplate.source).filter_by(
+        source = db.session.query(models.CustomThemeTemplate.source).filter_by(
             custom_theme_id=int(found.group(1)), name=found.group(3)).scalar()
         if source is None:   # removed since the names were read, without a new version
             raise TemplateNotFound(template)
@@ -184,26 +180,29 @@ class CustomThemeLoader(BaseLoader):
         return []   # names are made per theme and version, never listed
 
 
-class ThemeCodeEnvironment(Environment):
-    """Flask's environment with the database loader in front, and override-relative name resolution."""
-
-    def __init__(self, app, **options):
-        super().__init__(app, **options)
-        self.loader = ChoiceLoader([CustomThemeLoader(), self.loader])
-
-    def join_path(self, template, parent):
-        if template.startswith(('themes/', PREFIX)):
-            return template
-        found = _LOADER_NAME.fullmatch(parent) if isinstance(parent, str) else None
-        if found is None:   # in an app or shipped template: the request's code theme may override the name
-            return override_for(template) or template
-        code = _theme_code(int(found.group(1)), found.group(2))
-        if code is not None and template in code[1]:
-            return f'{PREFIX}{found.group(1)}/{found.group(2)}/{template}'
-        base = code[0] if code is not None else None
-        if base and os.path.exists(f'{SHIPPED_DIR}/{base}/{template}'):
-            return f'themes/{base}/{template}'
+def join_path(template, parent):
+    """Jinja's name resolution for `extends`, `include` and `import`: a plain name inside a code theme's override is
+    the same theme's override if it has one, else its base theme's shipped one, else the app's; in any other template,
+    the request's code theme's override if it has one. Names under `themes/` are never changed."""
+    if template.startswith(('themes/', PREFIX)):
         return template
+    found = _LOADER_NAME.fullmatch(parent) if isinstance(parent, str) else None
+    if found is None:   # in an app or shipped template: the request's code theme may override the name
+        return override_for(template) or template
+    code = _theme_code(int(found.group(1)), found.group(2))
+    if code is not None and template in code[1]:
+        return f'{PREFIX}{found.group(1)}/{found.group(2)}/{template}'
+    base = code[0] if code is not None else None
+    if base and os.path.exists(f'{SHIPPED_DIR}/{base}/{template}'):
+        return f'themes/{base}/{template}'
+    return template
+
+
+def install(app) -> None:
+    """Puts the database loader in front of the app's Jinja loader and `join_path` on its environment. Called once,
+    by register_request_hooks, before any page renders."""
+    app.jinja_env.loader = ChoiceLoader([CustomThemeLoader(), app.jinja_env.loader])
+    app.jinja_env.join_path = join_path
 
 
 # --- Archives (spec §3.4, §3.5)
@@ -222,7 +221,6 @@ def archive_name(theme_name: str) -> str:
 def write_archive(theme) -> tuple[bytes, list[str]]:
     """`theme` as one zip: manifest.json, styles.css, files/<name>, templates/<name> and scripts.js (spec §3.4).
     Returns the zip and the names of stored files that could not be read, which it leaves out."""
-    from app.custom_themes import read_stored
     buffer, missing = io.BytesIO(), []
 
     with zipfile.ZipFile(buffer, 'w') as archive:
@@ -302,7 +300,6 @@ def _text(name: str, data: bytes) -> str:
 def read_archive(data: bytes) -> ThemeArchive:
     """The theme an uploaded archive holds, every entry checked before anything is stored (spec §3.5); ThemeCodeError
     naming the entry and the reason otherwise. Sizes are counted while decompressing: zip headers are not trusted."""
-    from app.custom_themes import clean_filename, sniff_type
     config = current_app.config
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))

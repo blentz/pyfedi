@@ -265,8 +265,6 @@ class StripCookieVaryForAnonymous:
 
 def create_app(config_class=Config):
     app = Flask(__name__)
-    from app.theme_code import ThemeCodeEnvironment
-    app.jinja_environment = ThemeCodeEnvironment   # custom themes' template overrides (theme code spec §3.3)
     app.request_class = PieFedRequest
     refuse_json_that_is_not_an_object()
     app.config.from_object(config_class)

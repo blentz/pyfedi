@@ -12,6 +12,7 @@ from app.login_gate import refuse_lapsed, refuse_logged_out
 from app.payments.offers import donations_menu_shown, money, money_major, subscription_settings_shown
 from app.payments.shortcodes import checkout_shortcodes
 from app.permissions import holds_any_grant, may_act_on_user, may_ban
+from app.theme_code import install as install_theme_code
 from app.referral import referral_page_available, referrals_available
 from app.branding import DERIVED_FIELDS, Branding, current_branding
 from app.project_links import footer_invitation, project_links
@@ -173,6 +174,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['show_explore'] = show_explore
     app.jinja_env.globals['in_sorted_list'] = in_sorted_list
     app.jinja_env.globals['theme'] = template_theme          # the shipped theme whose templates render
+    install_theme_code(app)                                   # custom themes' template overrides (phase 6)
     app.jinja_env.globals['theme_in_effect'] = current_theme  # what the page is in: a shipped theme or custom:<id>
     app.jinja_env.globals['theme_stylesheet_url'] = theme_stylesheet_url
     app.jinja_env.globals['theme_script_url'] = theme_script_url
