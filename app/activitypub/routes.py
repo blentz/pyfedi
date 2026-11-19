@@ -1492,7 +1492,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                             'Follow request for remote user received')
                             return
                         if local_user.has_blocked_user(remote_user.id) or local_user.has_blocked_instance(remote_user.instance_id) or instance_banned(remote_user.instance.domain):
-                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_FAILURE, saved_json, f'Attempt to follow denied due to block')
+                            log_incoming_ap(id, APLOG_FOLLOW, APLOG_FAILURE, saved_json, 'Attempt to follow denied due to block')
                             return
                         existing_follower = session.query(UserFollower).filter_by(local_user_id=local_user.id,
                                                                          remote_user_id=remote_user.id, is_inward=True).first()
@@ -1529,7 +1529,7 @@ def process_inbox_request(request_json, store_ap_json, relay_id=None, announce_v
                                                 'author_id': remote_user.id,
                                                 'author_user_name': remote_user.stored_link()}
                                 new_notification = Notification(title=_('Someone is requesting to follow you'),
-                                                                url=f"/user/follow_requests",
+                                                                url="/user/follow_requests",
                                                                 user_id=local_user.id, author_id=remote_user.id,
                                                                 notif_type=NOTIF_FOLLOW_REQUEST,
                                                                 subtype='new_follower',

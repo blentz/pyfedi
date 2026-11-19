@@ -271,7 +271,7 @@ class NNTPServer(abc.ABC, socketserver.ThreadingMixIn, socketserver.TCPServer):
                 raise ValueError(
                     "You set use_ssl to True but the ssl module could not be imported."
                 )
-            self.ssl_version = ssl_version = ssl.PROTOCOL_TLS
+            self.ssl_version = ssl.PROTOCOL_TLS
         super().__init__(*args, **kwargs)
 
     def get_request(self) -> typing.Tuple[typing.Any, typing.Tuple[str, int]]:
@@ -520,7 +520,7 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
 
         try:
             self._auth_token = self.server.auth_user(self._authed_user, value)
-            self.send_lines([f"281 Authentication accepted"])
+            self.send_lines(["281 Authentication accepted"])
             self._authed = True
         except NNTPAuthenticationError as exc:
             self.send_lines([f"481 {exc.response}"])

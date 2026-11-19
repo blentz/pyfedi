@@ -1135,7 +1135,7 @@ def refresh_instance_chooser():
         # Make request to main instance list
         try:
             response = get_request(f'https://{main_list}/static/media/known_instances.json?cache_bust={date.today()}')
-        except Exception as e:
+        except Exception:
             current_app.logger.error(f'{main_list} API is down')
             return
 

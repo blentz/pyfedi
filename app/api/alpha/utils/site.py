@@ -79,9 +79,7 @@ def get_federated_instances(data):
 
 def get_site_metadata(auth, data):
     if auth:
-        user = authorise_api_user(auth)
-    else:
-        user = None
+        authorise_api_user(auth)   # a token that is sent must be valid; the metadata does not depend on who asks
 
     if not data or 'url' not in data:
         raise Exception('url required')

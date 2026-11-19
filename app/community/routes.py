@@ -32,7 +32,7 @@ from app.community.forms import SearchRemoteCommunity, CreateDiscussionForm, Cre
     InviteCommunityForm, MoveCommunityForm, EditCommunityFlairForm, SetMyFlairForm, FindAndBanUserCommunityForm, \
     CreateEventForm, InviteAcceptForm, EditCommunityMembership, CommunityRssFeedEdit, DeleteCommunityRssFeedForm, \
     CreateGalleryForm
-from app.community.live import is_live_community, live_posts, live_available, LIVE_COMMUNITY, is_local_microblogs, microblog_server_view, busiest_microblog_servers, join_server_view, leave_server_view
+from app.community.live import is_live_community, live_posts, live_available, LIVE_COMMUNITY, microblog_server_view, busiest_microblog_servers, join_server_view, leave_server_view
 from app.community.util import search_for_community, actor_to_community, \
     save_icon_file, save_banner_file, \
     delete_post_from_community, delete_post_reply_from_community, \

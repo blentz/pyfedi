@@ -393,7 +393,7 @@ If you are NOT using scripts, LLMs or other automation to create posts, please v
 
 """
     challenge_text += f"{current_app.config['SERVER_URL']}/botchallenge/{uuid}\n\n"
-    challenge_text += f"If this account is run by a bot, in part or fully, do nothing and we will automatically flag it as a reposter / bot. If you'd rather not click the link, just reply to this message and I'll do it for you.\n\nThank you"
+    challenge_text += "If this account is run by a bot, in part or fully, do nothing and we will automatically flag it as a reposter / bot. If you'd rather not click the link, just reply to this message and I'll do it for you.\n\nThank you"
     chat_util.send_message(challenge_text, conversation.id, user)
 
     if existing_challenge is None:

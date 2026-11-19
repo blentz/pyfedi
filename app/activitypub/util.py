@@ -215,7 +215,7 @@ def stable_create_token(object_id: str) -> str:
     for an object with no stored one (Task 10 review M4)."""
     number = int.from_bytes(hashlib.sha256(f'create {object_id}'.encode()).digest(), 'big')
     token = ''
-    for _ in range(15):
+    for _position in range(15):
         number, digit = divmod(number, len(random_chars))
         token += random_chars[digit]
     return token

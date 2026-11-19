@@ -1355,7 +1355,7 @@ def notify_admins_of_post_needing_approval(post):
     # communities pages` instance-wide or on the post's domain. Each account once.
     for admin in recipients_for('administer communities pages', on=post):
         notify = Notification(title='Approve new post',
-                              url=f'/admin/content?show=approval', user_id=admin.id,
+                              url='/admin/content?show=approval', user_id=admin.id,
                               author_id=post.user_id, notif_type=NOTIF_NEW_POST,
                               subtype='new_post_for_approval',
                               targets=targets_data)

@@ -1646,7 +1646,7 @@ def admin_federation_remote_scan():
                     page += 1
 
             # filter out the communities
-            already_known_count = nsfw_count = low_content_count = low_active_users_count = bad_words_count = 0
+            already_known_count = low_content_count = low_active_users_count = bad_words_count = 0
             candidate_communities = []
             for community in comms_list:
                 # sort out already known communities
@@ -1720,7 +1720,7 @@ def admin_federation_remote_scan():
                     page += 1
 
             # filter out the communities
-            already_known_count = nsfw_count = low_content_count = low_active_users_count = bad_words_count = 0
+            already_known_count = low_content_count = low_active_users_count = bad_words_count = 0
             candidate_communities = []
             for community in comms_list:
                 # sort out already known communities

@@ -48,7 +48,7 @@ from app.payments.retention import end_expired_subscriptions, pseudonymise_settl
 from app.cms import DONATE_BODY, DONATE_BODY_HTML, DONATE_TITLE, DONATE_URL
 from app.roles import remove_expired_grants, seed_default_roles
 from app.models import CmsPage, CronJobLog, Settings, BannedInstances, Role, User, Domain, ActivityPubLog, utcnow, \
-    utcnow, Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
+    Site, Instance, File, Notification, Post, CommunityMember, NotificationSubscription, PostReply, Language, \
     Community, SendQueue, _store_files_in_s3, PostVote, Poll, \
     ActivityBatch, Reminder, RssFeed, RssFeedItem, Feed, media_of, ErrorCount, SiteDomain
 from app.shared.tasks import task_selector
@@ -2586,11 +2586,11 @@ def register(app):
                               if top_recv else 0.0),
             }
 
-        for g in groups:
-            g.update(describe(g['members']))
-            g['is_ring'] = g['inward'] >= min_inward and g['ben_votes'] >= min_promoted
+        for group in groups:
+            group.update(describe(group['members']))
+            group['is_ring'] = group['inward'] >= min_inward and group['ben_votes'] >= min_promoted
 
-        rings = [g for g in groups if g['is_ring']]
+        rings = [group for group in groups if group['is_ring']]
         print(f"{len(rings):,} of them concentrate on one account; "
               f"the rest look like people who read the same things")
 
@@ -2599,8 +2599,8 @@ def register(app):
         # slightly different membership. Everything pointing at the same
         # beneficiary is one finding - merge them and re-describe the union.
         merged, by_beneficiary = [], defaultdict(list)
-        for g in rings:
-            by_beneficiary[g['beneficiary']].append(g)
+        for ring in rings:
+            by_beneficiary[ring['beneficiary']].append(ring)
         for beneficiary, gs in by_beneficiary.items():
             union = set().union(*(g['members'] for g in gs))
             entry = describe(union)

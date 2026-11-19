@@ -1038,7 +1038,7 @@ And if you want to add your score to the database to help your fellow Bookworms 
 
     return ip_address()
 
-    json = {
+    delete_activity = {
         "@context": "https://www.w3.org/ns/activitystreams",
         "actor": "https://ioc.exchange/users/haiviittech",
         "id": "https://ioc.exchange/users/haiviittech#delete",
@@ -1053,10 +1053,10 @@ And if you want to add your score to the database to help your fellow Bookworms 
 
     jsonld.set_document_loader(jsonld.requests_document_loader(timeout=5))
 
-    ld = LDSignature.create_signature(json, r.private_key, r.public_url() + '#main-key')
-    json.update(ld)
+    ld = LDSignature.create_signature(delete_activity, r.private_key, r.public_url() + '#main-key')
+    delete_activity.update(ld)
 
-    LDSignature.verify_signature(json, r.public_key)
+    LDSignature.verify_signature(delete_activity, r.public_key)
 
     # for community in Community.query.filter(Community.content_retention != -1):
     #    for post in community.posts.filter(Post.posted_at < utcnow() - timedelta(days=Community.content_retention)):
@@ -1642,7 +1642,6 @@ def index_rss(feed_type=None):
     # conditions `authorise_api_user` applies to a JWT; `verified` is deliberately not one,
     # since an instance with email verification off has legitimate unverified accounts.
     current_user_is_authenticated = user is not None
-    rss_token = request.args.get('token')
 
     community_ids = [-1]
     low_quality_filter = 'AND c.low_quality is false' if current_user_is_authenticated and user.hide_low_quality else ''
@@ -1935,8 +1934,8 @@ def health2():
     if request.args.get('prompt'):
         flash(_('You did not choose any topics. Would you like to choose individual communities instead?'))
 
-    topics = Topic.query.order_by(Topic.name).all()            
-    languages = Language.query.order_by(Language.name).all()   
+    _topics = Topic.query.order_by(Topic.name).all()   # busy-work: the queries run, their rows are not used
+    _languages = Language.query.order_by(Language.name).all()
     communities = Community.query.filter_by(banned=False)
     if search_param == '':
         pass
@@ -1951,7 +1950,7 @@ def health2():
         communities = communities.join(community_language).filter(community_language.c.language_id == language_id)
 
     # find all the feeds marked as public
-    public_feeds = Feed.query.filter_by(public=True).filter(listed_feeds_clause(feed_view_domain())).order_by(
+    _public_feeds = Feed.query.filter_by(public=True).filter(listed_feeds_clause(feed_view_domain())).order_by(
         Feed.title).all()
 
     # if filtering by public feed
@@ -2003,6 +2002,6 @@ def health2():
                                                      {'title', 'subscriptions_count', 'post_count', 'post_reply_count',
                                                       'last_active', 'created_at'})).limit(100)
 
-    c = communities.all() 
+    _rows = communities.all()
 
     return ''
