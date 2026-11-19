@@ -53,6 +53,57 @@
             <label class="form-check-label"><input type="checkbox" name="replace" value="1" class="form-check-input"> {{ _('Replace a file of the same name') }}</label>
             <button type="submit" class="btn btn-primary">{{ _('Upload') }}</button>
         </form>
+
+        <h2 class="mt-4">{{ _('Theme code') }}</h2>
+        {% if failure %}
+        <p class="alert alert-warning">{{ _('A page in this theme failed in %(template)s and was shown without the theme\'s code: %(error)s', template=failure.template, error=failure.error) }}</p>
+        {% endif %}
+        {% if not may_code %}
+        <p>{{ _('Changing theme code needs the manage theme code permission.') }}</p>
+        {% endif %}
+        {% if custom_theme.templates %}
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead><tr><th>{{ _('Template override') }}</th><th></th></tr></thead>
+                <tbody>
+                    {% for override in custom_theme.templates %}
+                    <tr>
+                        <td><code>{{ override.name }}</code></td>
+                        <td>
+                            {% if may_code %}
+                            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.admin_domain_theme_template', domain_id=row.id, theme_id=custom_theme.id, name=override.name) }}">{{ _('Edit') }}</a>
+                            <form method="post" class="d-inline" action="{{ url_for('admin.admin_domain_theme_template_remove', domain_id=row.id, theme_id=custom_theme.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="name" value="{{ override.name }}">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">{{ _('Remove') }}</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p>{{ _('No template overrides: pages use %(base)s\'s templates.', base=custom_theme.base_theme) }}</p>
+        {% endif %}
+        {% if may_code %}
+        <p><a class="btn btn-outline-primary" href="{{ url_for('admin.admin_domain_theme_template', domain_id=row.id, theme_id=custom_theme.id) }}">{{ _('Add an override') }}</a></p>
+        <form method="post" action="{{ url_for('admin.admin_domain_theme_script', domain_id=row.id, theme_id=custom_theme.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="form-label" for="script">{{ _('Script (scripts.js). It runs in every visitor\'s browser on this domain, admins included.') }}</label>
+            <textarea class="form-control font-monospace mb-2" id="script" name="script" rows="15" spellcheck="false">{{ custom_theme.script or '' }}</textarea>
+            <button type="submit" class="btn btn-primary">{{ _('Save script') }}</button>
+        </form>
+        {% if custom_theme.script %}
+        <form method="post" class="mt-2" action="{{ url_for('admin.admin_domain_theme_script_remove', domain_id=row.id, theme_id=custom_theme.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-outline-danger">{{ _('Remove the script') }}</button>
+        </form>
+        {% endif %}
+        {% elif custom_theme.script %}
+        <p>{{ _('This theme has its own script.') }}</p>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

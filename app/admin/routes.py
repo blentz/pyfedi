@@ -28,6 +28,8 @@ from app.branding import ends_inside_markup, offsite_references
 from app.custom_themes import THEME_PREVIEW, ThemeFileError, ThemeNameError, add_theme_file, check_name, copy_theme, \
     custom_identifier, custom_themes_for, in_use, is_shipped, manages_themes, remove_theme_files, shipped_css, shipped_name, shipped_themes, \
     theme_file_paths, uses
+from app.theme_code import ThemeCodeError, check_template_name, check_template_source, last_failure, \
+    app_template_names
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.local_only import accounts_shown_here_sql, domain_has_owners, user_local_only, without_local_only, without_local_only_actors
@@ -66,7 +68,7 @@ from app.complimentary import complimentary_of
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, Domain, \
-    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding, Referral, CustomTheme
+    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding, Referral, CustomTheme, CustomThemeTemplate
 from app.referral import DEFAULT_GENERATORS, GENERATOR_CHOICES, GENERATORS_SETTING, MAX_PER_CODE_SETTING, MAX_PER_USER_SETTING
 from app.storefront import clear_domain_cache, current_storefront, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
 from app.onion_media import DEFAULT_CACHE_BYTES
@@ -713,7 +715,112 @@ def admin_domain_theme_edit(domain_id, theme_id):
     # not `theme`: that is the Jinja global the page's layout calls
     return render_template('admin/domain_theme_edit.html', title=_('Theme: %(name)s', name=theme.name), row=row,
                            custom_theme=theme, form=form,
-                           file_limit=human_filesize(current_app.config['CUSTOM_THEME_MAX_FILE_BYTES']))
+                           file_limit=human_filesize(current_app.config['CUSTOM_THEME_MAX_FILE_BYTES']),
+                           may_code=may_change_theme_code(row), failure=last_failure(theme.id))
+
+
+def may_change_theme_code(row: SiteDomain) -> bool:
+    """Whether the current user may change theme code on domain `row` (theme code spec §3.1): one of its theme holders
+    (checked by `_themes_domain`) who also holds `manage theme code` there."""
+    return user_access('manage theme code', current_user.get_id(), on=row)
+
+
+def _code_theme(domain_id: int, theme_id: int) -> tuple[SiteDomain, CustomTheme]:
+    """The domain and theme a theme code request is about: 404 or 403 as `_themes_domain`, and 403 without
+    `manage theme code` on that domain."""
+    row = _themes_domain(domain_id)
+    theme = _domain_theme(row, theme_id)
+    if not may_change_theme_code(row):
+        abort(403)
+    return row, theme
+
+
+def _code_changed(theme: CustomTheme, action: str, row: SiteDomain, reason: str = ''):
+    """After a theme code change: a new version (so no worker serves the old code), no recorded failure, a mod log
+    entry, and back to the theme's page."""
+    theme.updated_at, theme.updated_by = utcnow(), current_user.id
+    theme.code_failed_template = theme.code_failure = theme.code_failed_at = None
+    db.session.commit()
+    _log_theme(action, row, theme.name, reason=reason)
+    return redirect(url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=theme.id))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/template', methods=['GET', 'POST'])
+@login_required
+def admin_domain_theme_template(domain_id, theme_id):
+    """Add or replace one of a theme's template overrides (theme code spec §3.6). A name or source that cannot be used
+    is flashed back, as a file that cannot be added is."""
+    row, theme = _code_theme(domain_id, theme_id)
+    if request.method == 'GET':
+        name = request.args.get('name', '')
+        found = next((t for t in theme.templates if t.name == name), None)
+        return render_template('admin/domain_theme_template.html', title=_('Theme: %(name)s', name=theme.name),
+                               row=row, custom_theme=theme, name=name, source=found.source if found else '',
+                               names=sorted(app_template_names()))
+    name, source = request.form.get('name'), request.form.get('source')
+    if name is None or source is None:
+        abort(400)
+    source = source.replace('\r\n', '\n')
+    existing = next((t for t in theme.templates if t.name == name), None)
+    try:
+        check_template_name(name)
+        check_template_source(source)
+        if existing is None and len(theme.templates) >= current_app.config['CUSTOM_THEME_MAX_TEMPLATES']:
+            raise ThemeCodeError(_('A theme may override at most %(num)d templates.',
+                                   num=current_app.config['CUSTOM_THEME_MAX_TEMPLATES']))
+    except ThemeCodeError as error:
+        flash(_('The template was not saved: %(why)s', why=str(error)), 'error')
+        return redirect(url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=theme.id))
+    if existing is None:
+        db.session.add(CustomThemeTemplate(custom_theme_id=theme.id, name=name, source=source, updated_at=utcnow()))
+    else:
+        existing.source, existing.updated_at = source, utcnow()
+    flash(_('Saved the override of %(name)s.', name=name))
+    return _code_changed(theme, 'edit_theme_template', row, reason=name)
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/template/remove', methods=['POST'])
+@login_required
+def admin_domain_theme_template_remove(domain_id, theme_id):
+    row, theme = _code_theme(domain_id, theme_id)
+    name = request.form.get('name')
+    if name is None:
+        abort(400)
+    found = next((t for t in theme.templates if t.name == name), None) or abort(404)
+    db.session.delete(found)
+    flash(_('Removed the override of %(name)s.', name=name))
+    return _code_changed(theme, 'remove_theme_template', row, reason=name)
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/script', methods=['POST'])
+@login_required
+def admin_domain_theme_script(domain_id, theme_id):
+    """Set a theme's own scripts.js (theme code spec §3.6); it replaces its base theme's."""
+    row, theme = _code_theme(domain_id, theme_id)
+    script = (request.form.get('script') or '').replace('\r\n', '\n')
+    if not script:
+        abort(400)
+    limit = current_app.config['CUSTOM_THEME_MAX_SCRIPT_BYTES']
+    if len(script.encode('utf-8')) > limit:
+        flash(_('The script is over %(size)s.', size=human_filesize(limit)), 'error')
+    elif '\x00' in script:
+        flash(_('The script may not contain a NUL character.'), 'error')
+    else:
+        theme.script = script
+        flash(_('Script saved.'))
+        return _code_changed(theme, 'edit_theme_script', row)
+    return redirect(url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=theme.id))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/script/remove', methods=['POST'])
+@login_required
+def admin_domain_theme_script_remove(domain_id, theme_id):
+    row, theme = _code_theme(domain_id, theme_id)
+    if not theme.script:
+        abort(404)
+    theme.script = None
+    flash(_('Removed the script: the theme uses %(base)s\'s again.', base=theme.base_theme))
+    return _code_changed(theme, 'remove_theme_script', row)
 
 
 def theme_file_limits() -> dict:

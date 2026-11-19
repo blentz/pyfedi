@@ -35,7 +35,7 @@ class ThemeCodeError(ValueError):
 
 
 @lru_cache(maxsize=1)
-def _app_template_names() -> frozenset:
+def app_template_names() -> frozenset:
     """Every template the app itself has, shipped theme directories left out. The app's templates do not change
     while it runs."""
     return frozenset(name for name in current_app.jinja_env.list_templates()
@@ -44,7 +44,7 @@ def _app_template_names() -> frozenset:
 
 def check_template_name(name) -> str:
     """`name` if a custom theme may override it (TC3: any template the app has), else ThemeCodeError."""
-    if not isinstance(name, str) or name not in _app_template_names():
+    if not isinstance(name, str) or name not in app_template_names():
         raise ThemeCodeError(f'{name!r} is not a template this site has.')
     return name
 
