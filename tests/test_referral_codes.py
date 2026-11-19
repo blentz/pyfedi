@@ -295,6 +295,33 @@ def test_a_code_works_on_any_domain(people):
     assert referrer_for(code, domain_by_id(shop.id)).id == admin.id
 
 
+def test_a_code_is_refused_where_codes_are_not_taken(people):
+    """No code on a domain that refuses them (RC11a), nor on a paid domain other than the default, whose joining is
+    paid for (security review 2026-11-19: the API's gate let it through)."""
+    shop = _shop('paid')
+    admin = people['admin']
+    code = _code(admin)
+    assert referrer_for(code, domain_by_id(shop.id)) is None
+    shop.registration, shop.referral_codes = 'closed', False
+    db.session.commit()
+    clear_domain_cache()
+    assert referrer_for(code, domain_by_id(shop.id)) is None
+
+
+def test_the_api_refuses_a_code_on_a_paid_domain(app, people, monkeypatch):
+    """The API signup on a paid domain other than the default: a valid code does not make a free account."""
+    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
+    _shop('paid')
+    code = _code(people['admin'])
+    body = {'username': 'freeloader', 'email': 'f@example.com', 'password': 'a-good-password',
+            'password_verify': 'a-good-password', 'answer': code}
+    with patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'), \
+            patch('app.auth.util.captcha_enabled', return_value=False):
+        response = app.test_client().post('/api/alpha/user/register', json=body, base_url='https://shop.example')
+    assert response.status_code == 400 and 'invalid_referral_code' in response.get_data(as_text=True)
+    assert User.query.filter_by(user_name='freeloader').count() == 0
+
+
 def test_a_default_domain_code_registers_on_the_domain_used(app, people, no_captcha):
     """RC10: the account belongs to the domain the code was used on, wherever its referrer lives."""
     shop = _shop('closed')

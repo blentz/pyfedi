@@ -114,8 +114,11 @@ def referrer_for(text: str | None, storefront: DomainInfo) -> User | None:
     user = User.query.filter(User.referral_code == code).with_for_update(of=User).first()
     if user is None or not may_generate(user):
         return None
-    # RC10 (2026-11-19): a code works on any storefront that takes one, and the account is made there. Whether this
-    # one takes codes at all (RC11a, a paid domain other than the default) is the caller's gate, as it is for the form.
+    # RC10 (2026-11-19): a code works on any storefront that takes one, and the account is made there. Checked here,
+    # not left to callers: the API's gate lets a paid domain other than the default through with a code, where the
+    # web form sends it to payment (security review 2026-11-19)
+    if not takes_referral_codes(storefront):
+        return None
     return user if under_caps(user) else None
 
 
