@@ -13,7 +13,7 @@
         <h1>{{ _('Theme: %(name)s', name=custom_theme.name) }}</h1>
         <p><a href="{{ url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=custom_theme.id) }}">{{ _('Back to the theme') }}</a></p>
         <p>{{ _('An override replaces the site\'s template of the same name wherever a page in this theme uses it. It runs on the server with everything the site can reach: only put code here that you trust.') }}</p>
-        <form method="post" action="{{ url_for('admin.admin_domain_theme_template', domain_id=row.id, theme_id=custom_theme.id) }}">
+        <form method="post" action="{{ url_for('admin.admin_domain_theme_template_save', domain_id=row.id, theme_id=custom_theme.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="mb-3">
                 <label class="form-label" for="name">{{ _('Template') }}</label>

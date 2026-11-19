@@ -685,8 +685,6 @@ def admin_domain_theme_import(domain_id):
         offsite = offsite_references(css=found.css, own_host=row.domain)
         if offsite and row.is_onion:
             raise ThemeCodeError(_('styles.css: off the onion: %(references)s', references=', '.join(offsite)))
-        if len(found.css.encode('utf-8')) > current_app.config['CUSTOM_THEME_MAX_CSS_BYTES']:
-            raise ThemeCodeError(_('styles.css: over the size a stylesheet may be.'))
         limits = theme_file_limits()
         if len(found.files) > limits['files'] or sum(len(d) for d in found.files.values()) > limits['theme_bytes']:
             raise ThemeCodeError(_('files/: more than a theme may hold.'))
@@ -811,18 +809,24 @@ def admin_domain_theme_export(domain_id, theme_id):
                      download_name=archive_name(theme.name))
 
 
-@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/template', methods=['GET', 'POST'])
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/template', methods=['GET'])
 @login_required
 def admin_domain_theme_template(domain_id, theme_id):
-    """Add or replace one of a theme's template overrides (theme code spec §3.6). A name or source that cannot be used
-    is flashed back, as a file that cannot be added is."""
+    """The form to add one of a theme's template overrides, or (`?name=`) to change one (theme code spec §3.6)."""
     row, theme = _code_theme(domain_id, theme_id)
-    if request.method == 'GET':
-        name = request.args.get('name', '')
-        found = next((t for t in theme.templates if t.name == name), None)
-        return render_template('admin/domain_theme_template.html', title=_('Theme: %(name)s', name=theme.name),
-                               row=row, custom_theme=theme, name=name, source=found.source if found else '',
-                               names=sorted(app_template_names()))
+    name = request.args.get('name', '')
+    found = next((t for t in theme.templates if t.name == name), None)
+    return render_template('admin/domain_theme_template.html', title=_('Theme: %(name)s', name=theme.name),
+                           row=row, custom_theme=theme, name=name, source=found.source if found else '',
+                           names=sorted(app_template_names()))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/template', methods=['POST'])
+@login_required
+def admin_domain_theme_template_save(domain_id, theme_id):
+    """Add or replace one of a theme's template overrides. A name or source that cannot be used is flashed back, as a
+    file that cannot be added is."""
+    row, theme = _code_theme(domain_id, theme_id)
     name, source = request.form.get('name'), request.form.get('source')
     if name is None or source is None:
         abort(400)
