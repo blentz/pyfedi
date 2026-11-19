@@ -28,8 +28,8 @@ from app.branding import ends_inside_markup, offsite_references
 from app.custom_themes import THEME_PREVIEW, ThemeFileError, ThemeNameError, add_theme_file, check_name, copy_theme, \
     custom_identifier, custom_themes_for, in_use, is_shipped, manages_themes, remove_theme_files, shipped_css, shipped_name, shipped_themes, \
     theme_file_paths, uses
-from app.theme_code import ThemeCodeError, check_template_name, check_template_source, last_failure, \
-    app_template_names
+from app.theme_code import ThemeCodeError, archive_name, check_template_name, check_template_source, last_failure, \
+    app_template_names, write_archive
 from app.discovery import sync as discovery_sync
 from app.visibility import visible_to_clause
 from app.local_only import accounts_shown_here_sql, domain_has_owners, user_local_only, without_local_only, without_local_only_actors
@@ -743,6 +743,20 @@ def _code_changed(theme: CustomTheme, action: str, row: SiteDomain, reason: str 
     db.session.commit()
     _log_theme(action, row, theme.name, reason=reason)
     return redirect(url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=theme.id))
+
+
+@bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/export', methods=['POST'])
+@login_required
+def admin_domain_theme_export(domain_id, theme_id):
+    """A custom theme as one zip, code included (theme code spec §3.4). Any theme holder may; it changes nothing."""
+    row = _themes_domain(domain_id)
+    theme = _domain_theme(row, theme_id)
+    data, missing = write_archive(theme)
+    if missing:
+        flash(_('These files of %(theme)s could not be read and were left out of the export: %(files)s',
+                theme=theme.name, files=', '.join(missing)), 'warning')
+    return send_file(BytesIO(data), mimetype='application/zip', as_attachment=True,
+                     download_name=archive_name(theme.name))
 
 
 @bp.route('/domains/<int:domain_id>/themes/<int:theme_id>/template', methods=['GET', 'POST'])

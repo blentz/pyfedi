@@ -10,8 +10,11 @@ resolve a plain template name to the same theme's override, else its base theme'
 Templates run with the app's full context: only holders of `manage theme code` write them (spec §3.1). Nothing here
 sandboxes them, by design (§4).
 """
+import io
+import json
 import os
 import re
+import zipfile
 from datetime import timedelta
 from functools import lru_cache
 
@@ -198,3 +201,41 @@ class ThemeCodeEnvironment(Environment):
         if base and os.path.exists(f'{SHIPPED_DIR}/{base}/{template}'):
             return f'themes/{base}/{template}'
         return template
+
+
+# --- Archives (spec §3.4, §3.5)
+ARCHIVE_FORMAT = 1
+ARCHIVE_SUFFIX = '.piefed-theme.zip'
+_ARCHIVE_TIME = (1980, 1, 1, 0, 0, 0)   # every entry's time: the same theme exports to the same bytes
+_SLUG_UNSAFE = re.compile(r'[^a-z0-9]+')
+
+
+def archive_name(theme_name: str) -> str:
+    """The download name of an export of the theme called `theme_name`."""
+    slug = _SLUG_UNSAFE.sub('-', theme_name.lower()).strip('-')[:60].strip('-') or 'theme'
+    return f'{slug}{ARCHIVE_SUFFIX}'
+
+
+def write_archive(theme) -> tuple[bytes, list[str]]:
+    """`theme` as one zip: manifest.json, styles.css, files/<name>, templates/<name> and scripts.js (spec §3.4).
+    Returns the zip and the names of stored files that could not be read, which it leaves out."""
+    from app.custom_themes import read_stored
+    buffer, missing = io.BytesIO(), []
+
+    with zipfile.ZipFile(buffer, 'w') as archive:
+        def add(name: str, data):
+            archive.writestr(zipfile.ZipInfo(name, date_time=_ARCHIVE_TIME), data, compress_type=zipfile.ZIP_DEFLATED)
+        add('manifest.json', json.dumps({'format': ARCHIVE_FORMAT, 'name': theme.name, 'base_theme': theme.base_theme,
+                                         'exported_at': utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                         'software': 'piefed'}, indent=2))
+        add('styles.css', theme.css)
+        for file in theme.files:
+            try:
+                add(f'files/{file.filename}', read_stored(file.path))
+            except OSError:
+                missing.append(file.filename)
+        for template in theme.templates:
+            add(f'templates/{template.name}', template.source)
+        if theme.script:
+            add('scripts.js', theme.script)
+    return buffer.getvalue(), missing

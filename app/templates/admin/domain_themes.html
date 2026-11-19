@@ -42,8 +42,12 @@
                         <td>{{ own.base_theme }}</td>
                         <td>{{ describe_uses(found) or _('Not in use') }}</td>
                         <td class="text-nowrap">
-                            <a href="{{ url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=own.id) }}" class="btn btn-sm btn-outline-primary">{{ _('Edit CSS') }}</a>
+                            <a href="{{ url_for('admin.admin_domain_theme_edit', domain_id=row.id, theme_id=own.id) }}" class="btn btn-sm btn-outline-primary">{{ _('Edit') }}</a>
                             {{ copy_button('custom:' ~ own.id) }}
+                            <form method="post" action="{{ url_for('admin.admin_domain_theme_export', domain_id=row.id, theme_id=own.id) }}" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Export') }}</button>
+                            </form>
                             {% if on_this_domain %}
                             <form method="post" action="{{ url_for('admin.admin_domain_theme_preview', domain_id=row.id, theme_id=own.id) }}" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
