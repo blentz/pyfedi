@@ -37,7 +37,7 @@ def test_the_catalogue_flags_scopable_and_instance_only_as_the_spec_does():
         'edit domain branding', 'approve registrations', 'administer all users', 'ban users', 'manage users',
         'view user details', 'create local communities', 'moderate all communities', 'remove and restore content',
         'turn comments off', 'administer all communities',
-        'administer communities pages', 'view modlog', 'shown as admin'}
+        'administer communities pages', 'view modlog', 'shown as admin', 'manage theme code'}
     assert INSTANCE_ONLY_PERMISSIONS == {
         'change instance settings', 'manage domains', 'masquerade', 'send newsletter', 'manage remote instances',
         'manage topics', 'manage blocklists', 'view vote analytics', 'manage media', 'edit cms pages',

@@ -134,6 +134,16 @@ def test_the_whole_archive_is_limited_too(app, monkeypatch):
     assert 'templates' in str(refused.value)
 
 
+def test_entries_each_within_their_limit_can_still_be_too_much_together(app, monkeypatch):
+    for key, value in (('CUSTOM_THEME_MAX_FILE_BYTES', 100_000), ('CUSTOM_THEME_MAX_BYTES', 1),
+                       ('CUSTOM_THEME_MAX_CSS_BYTES', 1000), ('CUSTOM_THEME_MAX_SCRIPT_BYTES', 1),
+                       ('CUSTOM_THEME_MAX_TEMPLATES', 0)):
+        monkeypatch.setitem(app.config, key, value)   # altogether: the manifest's 64 KB and about 1 KB more
+    with pytest.raises(ThemeCodeError) as refused:
+        read_archive(make_zip({'files/a.png': b'x' * 90_000}))
+    assert 'more than a theme may' in str(refused.value)
+
+
 def test_the_number_of_entries_is_limited(app, monkeypatch):
     monkeypatch.setitem(app.config, 'CUSTOM_THEME_MAX_FILES', 1)
     monkeypatch.setitem(app.config, 'CUSTOM_THEME_MAX_TEMPLATES', 1)
@@ -244,6 +254,18 @@ def test_an_onion_import_refuses_off_site_css(world):
         archive.writestr('styles.css', 'body { background: url(https://elsewhere.example/x.png); }')
     response = post(world['holder'], world['onion'], data.getvalue())
     assert response.status_code == 400 and 'elsewhere.example' in response.get_data(as_text=True)
+
+
+def test_a_clearnet_import_with_off_site_css_is_taken_with_a_warning(world):
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w') as archive:
+        archive.writestr('manifest.json', json.dumps(MANIFEST))
+        archive.writestr('styles.css', 'body { background: url(https://elsewhere.example/x.png); }')
+    response = post(world['admin'], world['default'], data.getvalue())
+    assert response.status_code == 302 and len(imported(world['default'])) == 1
+    forget_login()
+    page = world['admin'].get(response.headers['Location']).get_data(as_text=True)
+    assert 'elsewhere.example' in page
 
 
 def test_too_many_files_or_too_large_files_for_the_theme_are_refused(app, world, monkeypatch):
