@@ -39,7 +39,7 @@ from app.community.util import search_for_community, actor_to_community, \
     find_potential_moderators, hashtags_used_in_community, publicize_community, \
     community_theme_list, set_community_theme_allowed, get_community_theme_allowed, delete_community_task, \
     notify_admins_of_post_needing_approval
-from app.constants import SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, \
+from app.constants import MICROBLOGS_COMMUNITY_NAME, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, POST_TYPE_LINK, POST_TYPE_ARTICLE, POST_TYPE_IMAGE, \
     SUBSCRIPTION_PENDING, SUBSCRIPTION_MODERATOR, REPORT_STATE_NEW, REPORT_STATE_ESCALATED, REPORT_STATE_RESOLVED, \
     REPORT_STATE_DISCARDED, POST_TYPE_VIDEO, NOTIF_COMMUNITY, POST_TYPE_POLL, SRC_WEB, \
     NOTIF_REPORT, NOTIF_BAN, NOTIF_UNBAN, NOTIF_REPORT_ESCALATION, NOTIF_MENTION, POST_STATUS_REVIEWING, \
@@ -336,7 +336,7 @@ def community_post_query(community: Community, content_type: str, flair: str = '
     # No Post.private filter: private is the microblog marker (Post.new() sets it
     # for any titleless object), not a privacy flag -- non-public objects are
     # refused at ingest by create_post(). Filtering it here hid every microblog
-    # from the community that carries them, e.g. /c/microblogs@piefed.social.
+    # from the community that carries them, e.g. another PieFed's /c/microblogs@<host>.
     posts = without_local_only(Post.query.filter(Post.community_id == community.id, listable_clause(Post)), Post)
     if from_instance is not None:   # a server view: /c/microblogs@<host> (spec 2026-10-08)
         posts = posts.filter(Post.instance_id == from_instance.id)
@@ -553,7 +553,7 @@ def show_community(community: Community, from_instance=None):
         user = None if current_user.is_anonymous else current_user
 
 
-        if community.name == 'microblogs' and microblog_mode == 'following' and current_user.is_authenticated and current_user.num_following:
+        if community.name == MICROBLOGS_COMMUNITY_NAME and microblog_mode == 'following' and current_user.is_authenticated and current_user.num_following:
             # limit posts query to those from people the current user is following, similar to get_deduped_post_ids() does.
             posts = posts.filter(
                 db.session.query(UserFollower.id)
@@ -847,7 +847,7 @@ def show_community(community: Community, from_instance=None):
                                          live=live,
                                          live_button=live_available(community, current_user, content_type, 1),
                                          live_cursor=max((post.id for post in posts.items), default=0) if live else 0,
-                                         user_pronouns=user_pronouns(), hide_community_actions=community.name == 'microblogs',
+                                         user_pronouns=user_pronouns(), hide_community_actions=community.name == MICROBLOGS_COMMUNITY_NAME,
                                          canonical=community.profile_id(), ap_alternate=ap_alternate,
                                          can_upvote_here=can_upvote(user, community),
                                          can_downvote_here=can_downvote(user, community),

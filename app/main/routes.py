@@ -25,7 +25,7 @@ from app.activitypub.signature import default_context, LDSignature, HttpSignatur
 from app.admin.util import topics_for_form
 from app.api.alpha.utils.misc import get_resolve_object
 from app.community.util import hashtags_recent
-from app.constants import SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, \
+from app.constants import MICROBLOGS_COMMUNITY_NAME, SUBSCRIPTION_PENDING, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, \
     POST_STATUS_REVIEWING, VERSION, POST_FORM_TYPES, POST_TYPE_ARTICLE, SRC_WEB
 from app.email import send_email, send_registration_approved_email, mail_name
 from app.inoculation import inoculation
@@ -48,6 +48,7 @@ from app.shared.tasks.maintenance import refresh_instance_chooser
 from app.translation import LibreTranslateAPI
 from app.feed_domains import feed_view_domain, listed_feeds_clause
 from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
+from app.plain_names import plain_communities
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_domain_clause, modlog_local_only_clause, modlog_open_clause, \
     visible_to_clause
@@ -1118,9 +1119,12 @@ def communities_menu():
         favorites = shown_here(Community.query.filter(Community.id.in_(favorite_communities(current_user.id))).all())
     else:
         favorites = None
+    # one entry per community name for a reader without instance details (plain community names spec)
+    favorites, moderating, joined = plain_communities(favorites, shown_here(moderating_communities(current_user.get_id())),
+                                                      shown_here(joined_communities(current_user.get_id())))
     return render_template('communities_menu.html',
-                           moderating_communities=shown_here(moderating_communities(current_user.get_id())),
-                           joined_communities=shown_here(joined_communities(current_user.get_id())),
+                           moderating_communities=moderating,
+                           joined_communities=joined,
                            **community_adding_rights(),
                            default_user_add_remote=get_setting("allow_default_user_add_remote_community", True),
                            favorite_communities=favorites
@@ -1144,9 +1148,10 @@ def explore_menu():
 
 @bp.route('/topics_menu')
 def topics_menu():
+    moderating, joined = plain_communities(shown_here(moderating_communities(current_user.get_id())),
+                                           shown_here(joined_communities(current_user.get_id())))
     return render_template('topics_menu.html', menu_topics=menu_topics(),
-                           moderating_communities=shown_here(moderating_communities(current_user.get_id())),
-                           joined_communities=shown_here(joined_communities(current_user.get_id())))
+                           moderating_communities=moderating, joined_communities=joined)
 
 
 @bp.route('/feeds_menu')
@@ -1210,7 +1215,7 @@ def share():
                                                                             Post.microblog == False,
                                                                             Post.from_bot == False,
                                                                             Post.from_reposter == False,
-                                                                            Community.name != 'microblogs',
+                                                                            Community.name != MICROBLOGS_COMMUNITY_NAME,
                                                                             visible_to_clause(Post, None))
     # and the posts below, so the two still agree; a logged-out visitor is shown no local-only community
     communities = without_local_only_actors(without_local_only(communities, Post), Community).all()

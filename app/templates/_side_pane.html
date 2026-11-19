@@ -169,16 +169,17 @@
                             <li><p><a href="{{ url_for('community.fixup_from_remote', actor=community.ap_id) }}">{{ _("Refresh community information from remote") }}</a></p></li>
                         </ul>
                     {% endif -%}
-                    {% if (current_user.allow_community_themes or current_user.is_anonymous)and not low_bandwidth and community and community.theme and theme_stylesheet_url(community.theme) -%}
+                    {% set themed = theme_community(community) -%}
+                    {% if (current_user.allow_community_themes or current_user.is_anonymous)and not low_bandwidth and themed and themed.theme and theme_stylesheet_url(themed.theme) -%}
                         <hr>
                         <h3>{{ _('Community theme') }}</h3>
-                        <p>This community currently has the {{ theme_label(community.theme) }} theme applied</p>
+                        <p>This community currently has the {{ theme_label(themed.theme) }} theme applied</p>
                         {% if not current_user.is_anonymous %}
                         <a class="w-100 btn btn-primary" href="#"
-                            hx-post="{{ url_for('community.flip_community_theme_allowed', community_id=community.id, user_id=current_user.id) }}"
+                            hx-post="{{ url_for('community.flip_community_theme_allowed', community_id=themed.id, user_id=current_user.id) }}"
                             hx-refresh="true"
                             hx-swap="innerHTML">
-                            {% if current_user.community_theme_allowed(community.id) %} {{ _('Disable theme') }} {% else %} {{ _('Enable theme') }} {% endif %}</a>
+                            {% if current_user.community_theme_allowed(themed.id) %} {{ _('Disable theme') }} {% else %} {{ _('Enable theme') }} {% endif %}</a>
                         {% endif %}
                         <hr>
                     {% endif %}

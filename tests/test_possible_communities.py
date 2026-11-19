@@ -545,6 +545,7 @@ class TestDisplayNameBranch:
         viewer = make_user(None, 'remotedisplayviewer', local=True)
         viewer.hide_nsfw = 0
         viewer.hide_nsfl = 0
+        viewer.show_instance_details = True   # without them the label is the title alone (test_plain_names)
         db.session.commit()
         peer = make_instance('remotedisplaypeer.example')
         community = make_other_community(

@@ -6,7 +6,7 @@ from flask import current_app
 from sqlalchemy import and_, exists, or_, select
 
 from app import celery
-from app.constants import POST_STATUS_REVIEWING
+from app.constants import MICROBLOGS_COMMUNITY_NAME, POST_STATUS_REVIEWING
 from app.models import (Community, CommunityMember, Post, PostBookmark, PostReply, PostVote, Report, User,
                         UserFollower, flush_cdn_cache, utcnow)
 from app.storefront import acting_as_default
@@ -47,7 +47,7 @@ def _kept_clause():
         exists().where(UserFollower.remote_user_id == Post.user_id, UserFollower.is_inward.is_(False),
                        UserFollower.local_user_id.in_(local)),
         exists().where(CommunityMember.community_id == Post.community_id, CommunityMember.user_id.in_(local),
-                       Community.id == Post.community_id, Community.name != 'microblogs'),
+                       Community.id == Post.community_id, Community.name != MICROBLOGS_COMMUNITY_NAME),
     )
 
 

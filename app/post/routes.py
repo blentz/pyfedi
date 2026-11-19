@@ -29,7 +29,7 @@ from app.community.forms import CreateLinkForm, CreateDiscussionForm, CreateVide
     CreateEventForm, CreateGalleryForm, gallery_form_pictures
 from app.community.util import send_to_remote_instance, flair_from_form, hashtags_used_in_community, \
     search_for_community
-from app.constants import NOTIF_REPORT, NOTIF_REPORT_ESCALATION, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
+from app.constants import MICROBLOGS_COMMUNITY_NAME, NOTIF_REPORT, NOTIF_REPORT_ESCALATION, POST_STATUS_SCHEDULED, POST_STATUS_PUBLISHED, \
     POST_STATUS_REVIEWING, POST_TYPE_EVENT, NOTIF_MENTION, NOTIF_ANSWER, SRC_API, POST_TYPE_GALLERY, AP_FETCH_ACCEPT
 from app.constants import SUBSCRIPTION_OWNER, SUBSCRIPTION_MODERATOR, POST_TYPE_LINK, \
     POST_TYPE_IMAGE, \
@@ -473,7 +473,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                                    recipient_language_name=recipient_language_name,
                                    author_banned=author_banned,
                                    user_pronouns=user_pronouns_on_post(post),
-                                   hide_community_actions = community.name == 'microblogs',
+                                   hide_community_actions = community.name == MICROBLOGS_COMMUNITY_NAME,
                                    )
         # D1086. `Headers.set` REPLACES every existing value for the name, so
         # the second of these two calls deleted the first: the page advertised

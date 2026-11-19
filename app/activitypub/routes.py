@@ -50,6 +50,7 @@ import app.chat.util as chat_util
 from app.chat import membership
 import app.community.live as community_live
 import app.community.routes as community_routes
+import app.plain_names as plain_names
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
 from app.discovery import SYNC_ACCEPTED, SYNC_REJECTED
 from app.discovery.instance_answers import instance_actor_answer, record_answer
@@ -802,6 +803,11 @@ def community_profile(actor):
         server_view = community_live.microblog_server_view(actor) if '@' in actor else None
         if server_view is not None:
             return community_routes.show_community(find_microblogging_community(), from_instance=server_view)
+        # A bare name, for a reader without instance details: one they joined, else any (spec 2026-11-19)
+        resolved = None if '@' in actor or is_activitypub_request() or plain_names.instance_details_shown() \
+            else plain_names.resolve_community_name(actor)
+        if resolved is not None:
+            return community_routes.show_community(resolved)
         if is_activitypub_request():
             abort(404)
         elif current_user.is_authenticated and "@" in actor:

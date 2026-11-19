@@ -16,7 +16,7 @@
                     {% for breadcrumb in breadcrumbs -%}
                       <li class="breadcrumb-item">{% if breadcrumb.url -%}<a href="{{ breadcrumb.url }}">{% endif -%}{{ breadcrumb.text }}{% if breadcrumb.url -%}</a>{% endif -%}</li>
                     {% endfor -%}
-                    <li class="breadcrumb-item"><a href="/c/{{ page.community.link() }}">{{ page.community.title }}@{{ page.community.ap_domain }}</a></li>
+                    <li class="breadcrumb-item"><a href="/c/{{ community_href(page.community) }}">{{ community_label(page.community) }}</a></li>
                     <li class="breadcrumb-item active" aria-current="page">{{ page.title|shorten(15) }}</li>
                   </ol>
                 </nav>

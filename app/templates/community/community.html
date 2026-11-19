@@ -32,14 +32,14 @@
                             </li>
                         {% endfor -%}
                         <li class="breadcrumb-item active" aria-current="page">
-                            {{ (view_actor or (community.title + '@' + community.ap_domain))|shorten }}
+                            {{ ((view_actor if instance_details_shown() else none) or community_label(community))|shorten }}
                         </li>
                     </ol>
                 </nav>
             </div>
             <img class="community_icon_big bump_up rounded-circle" src="{{ community.icon_image() }}" alt="Community icon" />
             <h1 class="mt-2"  aria-live="assertive">
-                {{ view_actor or community.title }}
+                {{ (view_actor if instance_details_shown() else none) or community.title }}
                 {% if community.nsfw -%}
                     <span class="warning_badge nsfw" title="{{ _('Not safe for work') }}">nsfw</span>
                 {% endif -%}
@@ -50,7 +50,7 @@
                     <span>{% include 'community/_notification_toggle.html' -%}</span>
                 {% endif -%}
             </h1>
-            <p class="text-muted">{{ community.lemmy_link() }}</p>
+            {% if instance_details_shown() -%}<p class="text-muted">{{ community.lemmy_link() }}</p>{% endif -%}
         {% elif community.icon_id and not low_bandwidth -%}
             <div class="row mb-3">
                 <nav class="mb-3"  id="breadcrumb_nav" title="{{ _('Navigation') }}">
@@ -67,7 +67,7 @@
                             </li>
                         {% endfor -%}
                         <li class="breadcrumb-item active" aria-current="page">
-                            {{ (view_actor or (community.title + '@' + community.ap_domain))|shorten }}
+                            {{ ((view_actor if instance_details_shown() else none) or community_label(community))|shorten }}
                         </li>
                     </ol>
                 </nav>
@@ -76,7 +76,7 @@
                 </div>
                 <div class="col-9 col-md-10">
                     <h1 class="mt-3">
-                        {{ view_actor or community.title }}
+                        {{ (view_actor if instance_details_shown() else none) or community.title }}
                         {% if community.nsfw -%}
                             <span class="warning_badge nsfw" title="{{ _('Not safe for work') }}">nsfw</span>
                         {% endif -%}
@@ -87,7 +87,7 @@
                             {% include 'community/_notification_toggle.html' -%}
                         {% endif -%}
                     </h1>
-                    <p class="text-muted">{{ community.lemmy_link() }}</p>
+                    {% if instance_details_shown() -%}<p class="text-muted">{{ community.lemmy_link() }}</p>{% endif -%}
                 </div>
             </div>
         {% else -%}
@@ -105,12 +105,12 @@
                         </li>
                     {% endfor -%}
                     <li class="breadcrumb-item active" aria-current="page">
-                        {{ (view_actor or (community.title + '@' + community.ap_domain))|shorten }}
+                        {{ ((view_actor if instance_details_shown() else none) or community_label(community))|shorten }}
                     </li>
                 </ol>
             </nav>
             <h1 class="mt-2">
-                {{ view_actor or community.title }}
+                {{ (view_actor if instance_details_shown() else none) or community.title }}
                 {% if community.nsfw -%}
                     <span class="warning_badge nsfw" title="{{ _('Not safe for work') }}">nsfw</span>
                 {% endif -%}
@@ -121,7 +121,7 @@
                     {% include 'community/_notification_toggle.html' -%}
                 {% endif -%}
             </h1>
-            <p class="text-muted">{{ community.lemmy_link() }}</p>
+            {% if instance_details_shown() -%}<p class="text-muted">{{ community.lemmy_link() }}</p>{% endif -%}
         {% endif -%}
         {% include "community/_community_nav.html" -%}
         {% if community.private and (current_user.is_anonymous or not community.is_member(current_user)) -%}

@@ -17,6 +17,8 @@ from tests.app_source import APP, app_trees
 
 ALLOWED = {
     # (path under the repo, enclosing function): reason
+    ('app/plain_names.py', '_resolve'): "a remote-row lookup: the local one is found through local_clause first, then "
+                                        "remote communities of the name (ap_id set) on any domain",
     ('app/user/utils.py', '_get_user_same_name'): "not a lookup of one account: v1.8.10's admin report lists every "
                                                  "account, local or remote, that shares the name",
     ('app/api/alpha/utils/post.py', 'get_post_list'): 'scoped by ap_domain: a community named with its instance',

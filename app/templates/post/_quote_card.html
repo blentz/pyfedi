@@ -6,7 +6,7 @@
 <blockquote class="quote_card{{ ' blur' if blur }}">
     <div class="quote_card_meta">
         <a href="/u/{{ quote.author.link() }}">{{ quote.author.display_name() }}</a>
-        {%- if quote.community %} · <a href="/c/{{ quote.community.link() }}">{{ quote.community.display_name() }}</a>{% endif %}
+        {%- if quote.community %} · <a href="/c/{{ community_href(quote.community) }}">{{ quote.community.display_name() }}</a>{% endif %}
         · <time datetime="{{ quote.posted_at.isoformat() }}">{{ localize_datetime(quote.posted_at, locale or 'en') }}</time>
     </div>
     <a class="quote_card_text" href="{{ quote.href }}">{{ quote.text }}</a>

@@ -22,8 +22,8 @@
                     </a>
                 </li>
                 <li class="breadcrumb-item">
-                    <a href="{{ url_for('activitypub.community_profile', actor=community.link()) }}">
-                        {{ (community.title + '@' + community.ap_domain)|shorten }}
+                    <a href="{{ url_for('activitypub.community_profile', actor=community_href(community)) }}">
+                        {{ community_label(community)|shorten }}
                     </a>
                 </li>
                 <li class="breadcrumb-item">

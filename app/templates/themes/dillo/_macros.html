@@ -40,7 +40,7 @@
 
 {% macro render_communityname(community, add_domain=True, low_bandwidth=False, collapsed=False) -%}
     <span class="render_community">
-        <a href="/c/{{ community.link() }}">
+        <a href="/c/{{ community_href(community) }}">
             {{ community.title }}{% if add_domain and not community.is_local() %}<span class="text-muted">@{{ community.ap_domain }}</span>{% endif %}
         </a>
     </span>

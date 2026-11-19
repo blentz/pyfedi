@@ -25,7 +25,7 @@
                                             </tr>
                                         {% else %}
                                             <tr>
-                                                <th class="pl-2"><a class="choose_topic" data-id="{{ community.id }}" href="/c/{{ community.link() }}" rel="nofollow" aria-label="{{ _('View %(name)s', name=community.display_name()) }}"><img src="{{ community.icon_image('tiny') }}" class="community_icon rounded-circle" loading="lazy" alt="" />
+                                                <th class="pl-2"><a class="choose_topic" data-id="{{ community.id }}" href="/c/{{ community_href(community) }}" rel="nofollow" aria-label="{{ _('View %(name)s', name=community.display_name()) }}"><img src="{{ community.icon_image('tiny') }}" class="community_icon rounded-circle" loading="lazy" alt="" />
                                                 {{ community.display_name() }}</a></th><th>(Posts are restricted to Mods)</th>
                                             </tr>
                                         {% endif %}
@@ -40,7 +40,7 @@
                                             </tr>
                                         {% else %}
                                             <tr>
-                                                <th class="pl-2"><a class="choose_topic" data-id="{{ community.id }}" href="/c/{{ community.link() }}" rel="nofollow" aria-label="{{ _('View %(name)s', name=community.display_name()) }}"><img src="{{ community.icon_image('tiny') }}" class="community_icon rounded-circle" loading="lazy" alt="" />
+                                                <th class="pl-2"><a class="choose_topic" data-id="{{ community.id }}" href="/c/{{ community_href(community) }}" rel="nofollow" aria-label="{{ _('View %(name)s', name=community.display_name()) }}"><img src="{{ community.icon_image('tiny') }}" class="community_icon rounded-circle" loading="lazy" alt="" />
                                                 {{ community.display_name() }}</a></th><th>(Posts are restricted to Mods)</th>
                                             </tr>
                                         {% endif %}

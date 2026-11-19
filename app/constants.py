@@ -42,6 +42,9 @@ VISIBILITIES = (VISIBILITY_PUBLIC, VISIBILITY_UNLISTED, VISIBILITY_FOLLOWERS, VI
 # Community.kind (spec 2026-10-14 §3.1). Only video_channel is read so far: its Group names the owner Person (§6.2).
 COMMUNITY_KIND_DISCUSSION = 'discussion'
 COMMUNITY_KIND_MICROBLOGS = 'microblogs'
+# The name of the microblogs community, where titleless notes land (find_microblogging_community), and of every
+# server view of it (/c/microblogs@<host>). Kind and name happen to match; they are separate things.
+MICROBLOGS_COMMUNITY_NAME = 'microblogs'
 COMMUNITY_KIND_VIDEO_CHANNEL = 'video_channel'
 COMMUNITY_KIND_PODCAST = 'podcast'
 COMMUNITY_KINDS_OFFERED = (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_VIDEO_CHANNEL, COMMUNITY_KIND_PODCAST)

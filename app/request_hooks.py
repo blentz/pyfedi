@@ -7,6 +7,7 @@ from flask_login import current_user
 from flask_wtf.csrf import generate_csrf
 
 from app import db
+from app import plain_names
 from app.cms import cms_nav_links, plans_page_url
 from app.login_gate import refuse_lapsed, refuse_logged_out
 from app.payments.offers import donations_menu_shown, money, money_major, subscription_settings_shown
@@ -23,7 +24,7 @@ from app.community.util import actor_to_community
 import pendulum
 from flask import before_render_template, session, g, json, request, current_app
 from sqlalchemy import text
-from app.constants import POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
+from app.constants import MICROBLOGS_COMMUNITY_NAME, POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, VERSION, \
     POST_TYPE_EVENT, POST_TYPE_GALLERY, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
 from app.models import Site, utcnow
@@ -38,7 +39,7 @@ from app.storefront import adopt_host_storefront, check_default_domain, current_
     is_local_link, resolve_storefront, rewrite_response_for_storefront, storefront_host, storefront_link, storefront_url
 from app.shared.media import can_upload_media, media_kind_for, media_of, upload_byte_limit
 from app.utils import can_moderate, getmtime, gibberish, shorten_string, shorten_url, digits, user_access, community_membership, joined_server_views, \
-    can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, community_link_to_href, \
+    can_upvote, can_downvote, shorten_number, ap_datetime, current_theme, \
     custom_stylesheet_url, template_theme, theme_label, theme_preview_name, theme_script_url, theme_stylesheet_url, \
     in_sorted_list, role_access, first_paragraph, person_link_to_href, feed_membership, html_to_text, remove_images, \
     notif_id_to_string, feed_link_to_href, get_setting, set_setting, show_explore, human_filesize, can_upload_video, can_upload_audio, \
@@ -206,7 +207,9 @@ def register_request_hooks(app):
     app.jinja_env.globals['joined_server_views'] = joined_server_views
     app.jinja_env.globals['hosted_instance_ids'] = hosted_instance_ids   # stored on one of our domains
     app.jinja_env.globals['user_local_only'] = user_local_only
-    app.jinja_env.filters['community_links'] = community_link_to_href
+    app.jinja_env.filters['community_links'] = plain_names.community_links   # plain mentions without instance details
+    plain_names.install(app)
+    app.jinja_env.globals['MICROBLOGS_COMMUNITY_NAME'] = MICROBLOGS_COMMUNITY_NAME
     app.jinja_env.filters['feed_links'] = feed_link_to_href
     app.jinja_env.filters['person_links'] = person_link_to_href
     app.jinja_env.filters['shorten'] = shorten_string

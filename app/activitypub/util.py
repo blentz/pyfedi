@@ -7439,20 +7439,20 @@ def find_community(request_json, author=None):
 def find_microblogging_community():
     """ Make a special community to put posts without a community into, e.g. microblog posts """
     community = db.session.query(Community).filter(Community.instance_id == 1, Community.user_id == 1,
-                                                   local_named(Community, 'microblogs', default_domain())).first()
+                                                   local_named(Community, MICROBLOGS_COMMUNITY_NAME, default_domain())).first()
     if community is None:
         private_key, public_key = RsaKeys.generate_keypair()
         home = default_domain()
         base_url = domain_base_url(home)
-        community = Community(title=_('Microblogs'), name='microblogs',
+        community = Community(title=_('Microblogs'), name=MICROBLOGS_COMMUNITY_NAME,
                               description=_('Microblog posts from around the fediverse.'),
                               nsfw=False, private_key=private_key,
                               public_key=public_key, description_html=markdown_to_html(_('Microblog posts from around the fediverse.')),
                               local_only=False, show_popular=False, show_all=False,
-                              ap_profile_id=base_url + '/c/microblogs',
-                              ap_public_url=base_url + '/c/microblogs',
-                              ap_followers_url=base_url + '/c/microblogs/followers',
-                              ap_moderators_url=base_url + '/c/microblogs/moderators',
+                              ap_profile_id=f'{base_url}/c/{MICROBLOGS_COMMUNITY_NAME}',
+                              ap_public_url=f'{base_url}/c/{MICROBLOGS_COMMUNITY_NAME}',
+                              ap_followers_url=f'{base_url}/c/{MICROBLOGS_COMMUNITY_NAME}/followers',
+                              ap_moderators_url=f'{base_url}/c/{MICROBLOGS_COMMUNITY_NAME}/moderators',
                               ap_domain=domain_authority(home), site_domain_id=home.id,
                               subscriptions_count=0, instance_id=instance_id_of(home), user_id=1, ai_generated=False,
                               first_federated_at=utcnow(), kind=COMMUNITY_KIND_MICROBLOGS)

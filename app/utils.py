@@ -65,6 +65,7 @@ from app.pinned_http import fetch_deadline, is_refused_address
 from app.rsa_keys import RsaKeys
 from app.feed_domains import feeds_on_domain_clause
 from app.local_only import hidden_here, hidden_here_clause, hidden_here_sql, shown_here, without_local_only_actors
+from app import plain_names   # its names are read at call time: it imports this module too
 from app.visibility import OPEN_VISIBILITIES, listable_sql, visible_to_sql
 from app.constants import *
 import re
@@ -6422,7 +6423,7 @@ MICROBLOG_GATE = 'p.private is false'
 JOINED_SERVER_SQL = """(EXISTS (SELECT 1 FROM server_view_member svm
                                 WHERE svm.user_id = :local_user_id
                                 AND svm.instance_id = p.instance_id)
-                                AND c.instance_id = 1 AND c.user_id = 1 AND c.name = 'microblogs' AND """ + listable_sql('p') + ')'
+                                AND c.instance_id = 1 AND c.user_id = 1 AND c.name = '""" + MICROBLOGS_COMMUNITY_NAME + """' AND """ + listable_sql('p') + ')'
 
 
 # The home Media tab's galleries (spec 2026-10-30 G2): image and gallery posts (spec 2026-11-01 G-7) in a community
@@ -7192,9 +7193,11 @@ def post_destination_sections():
     moderating and joined. Every one is also in possible_communities(), which main.add_post checks a pick against."""
     user_id = current_user.get_id()
     favorites = Community.query.filter(Community.id.in_(favorite_communities(user_id))).order_by(Community.title).all()
-    return [('favorites', _('Favorites'), shown_here(favorites)),   # none hidden here (follow-up F6)
-            ('moderating', _('Moderating'), shown_here(moderating_communities(user_id))),
-            ('joined', _('Joined communities'), shown_here(joined_communities(user_id)))]
+    favorites, moderating, joined = plain_names.plain_communities(   # none hidden here (follow-up F6); one per name if plain
+        shown_here(favorites), shown_here(moderating_communities(user_id)), shown_here(joined_communities(user_id)))
+    return [('favorites', _('Favorites'), favorites),
+            ('moderating', _('Moderating'), moderating),
+            ('joined', _('Joined communities'), joined)]
 
 
 def possible_communities():
@@ -7206,10 +7209,12 @@ def possible_communities():
     moderating = shown_here(moderating_communities(current_user.get_id()))
     comms = []
     already_added = set()
+    facts = {}   # id: (name, title, is_local, subscribers), for plain_choices
     for c in favorites:
         if c.id not in already_added:
             comms.append((c.id, c.display_name()))
             already_added.add(c.id)
+            facts[c.id] = (c.name, c.title, c.ap_id is None, plain_names.subscribers(c))
     if len(comms) > 0:
         which_community['Favorites'] = comms
     comms = []
@@ -7217,6 +7222,7 @@ def possible_communities():
         if c.id not in already_added:
             comms.append((c.id, c.display_name()))
             already_added.add(c.id)
+            facts[c.id] = (c.name, c.title, c.ap_id is None, plain_names.subscribers(c))
     if len(comms) > 0:
         which_community['Moderating'] = comms
     comms = []
@@ -7224,6 +7230,7 @@ def possible_communities():
         if c.id not in already_added:
             comms.append((c.id, c.display_name()))
             already_added.add(c.id)
+            facts[c.id] = (c.name, c.title, c.ap_id is None, plain_names.subscribers(c))
     if len(comms) > 0:
         which_community['Joined communities'] = comms
     comms = []
@@ -7234,9 +7241,10 @@ def possible_communities():
     # branch could drop the restriction out of. can_create_post carries the
     # matching authorisation check; the form field is client-supplied, so hiding
     # them here is not on its own enough.
-    others = db.session.query(Community.id, Community.ap_id, Community.title, Community.ap_domain).\
+    others = db.session.query(Community.id, Community.ap_id, Community.title, Community.ap_domain, Community.name,
+                              Community.subscriptions_count, Community.total_subscriptions_count).\
         filter(Community.banned == False).join(Instance, Instance.id == Community.instance_id).\
-        filter(Instance.gone_forever == False, Community.name != 'microblogs').\
+        filter(Instance.gone_forever == False, Community.name != MICROBLOGS_COMMUNITY_NAME).\
         filter(or_(Community.private == False,
                    Community.id.in_(community_membership_private(current_user.get_id()))))
     # a logged-out visitor (the share page) is offered no local-only community
@@ -7248,9 +7256,10 @@ def possible_communities():
                 display_name = f"{c.title}@{c.ap_domain}"
             comms.append((c.id, display_name))
             already_added.add(c.id)
+            facts[c.id] = (c.name, c.title, c.ap_id is None, plain_names.subscribers(c))
     if len(comms) > 0:
         which_community['Others'] = comms
-    return which_community
+    return plain_names.plain_choices(which_community, facts)   # one per name for a reader without instance details
 
 
 @cache.memoize(timeout=300)

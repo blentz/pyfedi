@@ -135,6 +135,25 @@ def test_saving_the_settings(app, env):
     assert viewer.page_length == 15
 
 
+def test_instance_details_are_off_until_enabled(app, env):
+    """Plain community names (spec 2026-11-19): the setting is off by default, opens on its stored value and saves."""
+    client, viewer, other = env
+    assert viewer.show_instance_details is False
+
+    token = csrf(app, client)
+    with patch('app.user.routes.render_template', return_value='rendered') as render:
+        client.post('/user/settings', data=settings_payload(token, show_instance_details='y'))
+        db.session.refresh(viewer)
+        assert viewer.show_instance_details is True
+
+        client.get('/user/settings')
+        assert render.call_args.kwargs['form'].show_instance_details.data is True
+
+        client.post('/user/settings', data=settings_payload(token))
+    db.session.refresh(viewer)
+    assert viewer.show_instance_details is False
+
+
 def test_the_page_length_is_capped_by_the_instance(app, env):
     """`if current_user.page_length > current_app.config['PAGE_LENGTH']` --
     the preference may shorten the page, never lengthen it past what the

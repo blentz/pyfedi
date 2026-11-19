@@ -13,14 +13,14 @@
     <li><hr class="dropdown-divider"></li>
     <li><h6 class="dropdown-header">{{ _('Moderating') }}</h6></li>
     {% for community_menu_item in moderating_communities -%}
-        <li class="pl-2"><a class="dropdown-item{% if community and community.id == community_menu_item.id%} active{% endif %}" href="/c/{{ community_menu_item.link() }}">{{ community_menu_item.title }}</a></li>
+        <li class="pl-2"><a class="dropdown-item{% if community and community.id == community_menu_item.id%} active{% endif %}" href="/c/{{ community_href(community_menu_item) }}">{{ community_menu_item.title }}</a></li>
     {% endfor -%}
   {% endif %}
   {% if joined_communities %}
     <li><hr class="dropdown-divider"></li>
     <li><h6 class="dropdown-header">{{ _('Joined communities') }}</h6></li>
     {% for community_menu_item in joined_communities -%}
-        <li class="pl-2"><a class="dropdown-item{% if community and community.id == community_menu_item.id%} active{% endif %}" href="/c/{{ community_menu_item.link() }}">{{ community_menu_item.title }}</a></li>
+        <li class="pl-2"><a class="dropdown-item{% if community and community.id == community_menu_item.id%} active{% endif %}" href="/c/{{ community_href(community_menu_item) }}">{{ community_menu_item.title }}</a></li>
     {% endfor -%}
   {% endif %}
 </ul>

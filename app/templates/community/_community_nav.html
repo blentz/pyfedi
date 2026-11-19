@@ -175,7 +175,7 @@
                                 </select>
                             </div>
                             <div class="mb-3">
-                                {% if community.name == 'microblogs' -%}
+                                {% if community.name == MICROBLOGS_COMMUNITY_NAME -%}
                                     <label for="microblog_mode" class="form-label">
                                         {{ _('Posts from') }}
                                     </label>
@@ -484,7 +484,7 @@
         ('?content_type=comments&sort=' ~ (sort or 'new') ~ '&layout=' ~ post_layout, 'message-circle', _('Comments'), _('Show comments'), content_type == 'comments')] %}
     {%- if has_events %}{% set appended = content_choices.append(('?content_type=events&sort=' ~ sort ~ '&layout=' ~ post_layout, 'event', _('Events'), _('Show events'), content_type == 'events')) %}{% endif %}
     {%- if show_galleries %}{% set appended = content_choices.append(('?content_type=galleries&sort=' ~ sort ~ '&layout=' ~ post_layout, 'image', _('Galleries'), _('Show image posts'), content_type == 'galleries')) %}{% endif %}
-    {%- if community and community.name == 'microblogs' %}
+    {%- if community and community.name == MICROBLOGS_COMMUNITY_NAME %}
     {{ filter_nav([
         ('?microblog_mode=following&sort=' ~ sort ~ '&layout=' ~ post_layout, 'subscription', _('Following'), _('Show posts from people you are following'), microblog_mode == '' or microblog_mode == 'following'),
         ('?microblog_mode=firehose&sort=' ~ sort ~ '&layout=' ~ post_layout, 'all', _('Everyone'), _('Show posts from everyone'), microblog_mode == 'firehose')], _('Whose posts'), 'me-lg-1') }}

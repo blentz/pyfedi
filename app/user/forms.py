@@ -129,6 +129,7 @@ class SettingsForm(FlaskForm):
     font = SelectField(_l('Font'), choices=select_choices(fonts), validators=[Optional()], coerce=str,
                        render_kw={'class': 'form-select'})
     allow_community_themes = BooleanField(_l('Allow community themes'))
+    show_instance_details = BooleanField(_l('Enable FediVerse instance details'))
     code_styles = ['autumn', 'borland', 'bw', 'colorful', 'default', 'emacs', 'friendly', 'fruity', 'manni', 'monokai',
                    'murphy', 'native', 'pastie', 'perldoc', 'tango', 'trac', 'vim', 'vs']
     code_style = SelectField(_l('Code syntax highlighting color scheme'), choices=select_choices(code_styles), coerce=str,

@@ -42,7 +42,7 @@ from app import db, login, cache, celery, httpx_client, constants, app_bcrypt, s
 from app.permission_cache import permission_version
 from app.permissions import holds_any_grant, recipient_ids, user_access
 from app.oauth_scopes import covers
-from app.constants import AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
+from app.constants import MICROBLOGS_COMMUNITY_NAME, AUTOMATED_REPORTER, SUBSCRIPTION_NONMEMBER, SUBSCRIPTION_MEMBER, SUBSCRIPTION_MODERATOR, SUBSCRIPTION_OWNER, \
     SUBSCRIPTION_BANNED, SUBSCRIPTION_PENDING, NOTIF_USER, NOTIF_COMMUNITY, NOTIF_TOPIC, NOTIF_POST, NOTIF_REPLY, \
     NOTIF_FEED, NOTIF_DEFAULT, NOTIF_REPORT, NOTIF_MENTION, POST_STATUS_REVIEWING, \
     POST_STATUS_PUBLISHED, POST_TYPE_VIDEO, INVITE_MEMBERS_ONLY, INVITE_MODS_ONLY, INVITE_OWNER_ONLY, POST_TYPE_GALLERY, \
@@ -1938,8 +1938,9 @@ class Community(db.Model):
     def display_name(self) -> str:
         if self.ap_id is None:
             return self.title
-        else:
-            return f"{self.title}@{self.ap_domain}"
+        if has_request_context() and g.get('_plain_hide_domains'):   # app.plain_names.HIDE_DOMAINS_FLAG: a web page
+            return self.title                                         # for a reader without instance details
+        return f"{self.title}@{self.ap_domain}"
 
     def link(self) -> str:
         return storefront.path_name(self.name, self.site_domain_id) if self.ap_id is None else self.ap_id.lower()
@@ -2453,6 +2454,8 @@ class User(UserMixin, db.Model):
     theme = db.Column(db.String(20), default='')
     font = db.Column(db.String(25), default='')
     allow_community_themes = db.Column(db.Boolean, default=True, server_default="1")
+    # Plain community names (spec 2026-11-19): off hides instance details from the web view
+    show_instance_details = db.Column(db.Boolean, default=False, server_default="0")
     community_keyword_filter = db.Column(db.String(150))
     referrer = db.Column(db.String(256))
     # Referral codes (spec 2026-10-31): NULL until the user generates one; regenerating replaces both (app/referral.py)
@@ -4462,7 +4465,7 @@ class Post(db.Model):
             return self.url.replace('/videos/watch/', '/videos/embed/', 1)
 
     def is_microblog(self):
-        return self.microblog and self.community.name == 'microblogs'
+        return self.microblog and self.community.name == MICROBLOGS_COMMUNITY_NAME
 
     def is_event(self):
         return self.type == constants.POST_TYPE_EVENT

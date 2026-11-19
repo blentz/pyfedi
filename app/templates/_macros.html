@@ -78,11 +78,11 @@
 
 {% macro render_communityname(community, add_domain=True, low_bandwidth=False, collapsed=False) -%}
     <span class="render_community">
-        <a href="/c/{{ community.link() }}">
+        <a href="/c/{{ community_href(community) }}">
             {% if community.icon_id and not low_bandwidth and not collapsed -%}
                 <img src="{{ community.icon_image('tiny') }}" class="community_icon rounded-circle" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
             {% endif -%}
-            {{ community.title }}{% if add_domain and not community.is_local() %}<span class="text-muted">@{{ community.ap_domain }}</span>{% endif %}
+            {{ community.title }}{% if add_domain and not community.is_local() and instance_details_shown() %}<span class="text-muted">@{{ community.ap_domain }}</span>{% endif %}
         </a>
     </span>
 {%- endmacro %}

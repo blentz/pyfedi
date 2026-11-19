@@ -9,7 +9,7 @@ from flask import current_app
 from sqlalchemy import desc, func
 
 from app import cache, db
-from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, POST_TYPE_GALLERY, POST_TYPE_IMAGE, VISIBILITY_PUBLIC
+from app.constants import MICROBLOGS_COMMUNITY_NAME, COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, POST_TYPE_GALLERY, POST_TYPE_IMAGE, VISIBILITY_PUBLIC
 from app.models import Community, Instance, Post, ServerViewMember, post_stored_hooks
 from app import utils
 from app.storefront import hosted_instance_ids, is_local_host
@@ -17,7 +17,7 @@ from app.utils import instance_banned, utcnow
 
 from app.discovery import MEDIA_SOFTWARE
 
-LIVE_COMMUNITY = 'microblogs'
+LIVE_COMMUNITY = MICROBLOGS_COMMUNITY_NAME
 LIVE_KEY_PATTERN = r'^(any|local|popular|media|community:\d+|instance:\d+)$'
 # A backfilled post is old but gets a new, high id; this window keeps it out of the stream
 # while still admitting a post that federated in a few minutes late.
@@ -50,7 +50,7 @@ def server_view_instance(host: str):
     `host` is lower-cased by the caller."""
     if not host or is_local_host(host):
         return None
-    # A real community always wins: /c/microblogs@piefed.social stays PieFed's own community.
+    # A real community always wins: a remote PieFed's own microblogs@<host> stays that community, not a view.
     if db.session.query(Community.id).filter(Community.ap_id == f'{LIVE_COMMUNITY}@{host}').first():
         return None
     instance = db.session.query(Instance).filter(func.lower(Instance.domain) == host).first()

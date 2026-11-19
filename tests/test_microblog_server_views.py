@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import pytest
 from flask import render_template_string
+from flask_login import login_user
 
 from app import db
 from app.community.live import is_local_microblogs, microblog_server_view, server_view_actor
@@ -19,6 +20,14 @@ from tests.test_microblog_live import client, live, login, teaser_ids  # noqa: F
 pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 
 VIEW = '/c/microblogs@mastodon.example'
+
+
+def with_instance_details(client, live):
+    """Sign in a viewer who enabled instance details: server views name their host only for them (spec 2026-11-19)."""
+    live.viewer.show_instance_details = True
+    live.viewer.private_key = 'a key'   # approval_required sends a keyless account to please_wait on a closed site
+    db.session.commit()
+    login(client, live.viewer)
 
 
 def other_toot(live, n=1):
@@ -97,10 +106,17 @@ class TestServerViewPage:
         assert set(teaser_ids(html)) == {mine.id}
 
     def test_the_title_and_heading_name_the_view(self, client, live):
+        with_instance_details(client, live)
+
         html = client.get(VIEW).get_data(as_text=True)
 
         assert 'microblogs@mastodon.example' in re.search(r'<title>([^<]*)</title>', html).group(1)
         assert re.search(r'<h1[^>]*>\s*microblogs@mastodon.example', html)
+
+    def test_without_instance_details_the_heading_has_no_host(self, client, live):
+        html = client.get(VIEW).get_data(as_text=True)   # plain community names (spec 2026-11-19)
+
+        assert not re.search(r'<h1[^>]*>\s*microblogs@mastodon.example', html)
 
     def test_case_is_ignored(self, client, live):
         assert client.get('/c/Microblogs@Mastodon.Example').status_code == 200
@@ -306,7 +322,9 @@ class TestPostLinks:
 
         assert server_view_actor.cache_timeout == 300
 
-    def test_the_post_page_breadcrumb_names_the_view(self, client, live):
+    def test_the_post_page_breadcrumb_names_the_view(self, app, client, live, monkeypatch):
+        monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # a signed-in post page renders the reply form
+        with_instance_details(client, live)
         post = live.toot()
 
         html = client.get(f'/post/{post.id}').get_data(as_text=True)
@@ -317,7 +335,10 @@ class TestPostLinks:
         # The byline is the non-microblog layout; a titled post by a remote author reaches it.
         post = live.toot(microblog=False)
 
+        live.viewer.show_instance_details = True
+        db.session.commit()
         with app.test_request_context():
+            login_user(live.viewer)
             rendered = render_template_string(
                 "{% from 'post/post_teaser/_macros.html' import render_title %}"
                 "{{ render_title(post, show_post_community=True, request=request, user_pronouns={}, user_flair={}, reported_posts=[]) }}", post=post)
