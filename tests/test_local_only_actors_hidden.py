@@ -15,28 +15,14 @@ from app import db
 from app.models import CommunityMember, CommunityWikiPage, File, ModLog, Role, Topic, utcnow
 from tests.conftest import forget_login
 from tests.factories import make_feed_item, make_local_feed, make_post, make_post_reply
-from tests.test_instance_visible_here import HOSTS, get, scene  # noqa: F401 -- scene is a fixture
-from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+from tests.test_instance_visible_here import HOSTS, get
+from tests.test_per_domain_ap_routes import onion_proxy
+from tests.two_domains import FIRST, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
 ONION_BOB = f'bob@{ONION}'
 ONION_ART = f'art@{ONION}'
-
-
-@pytest.fixture
-def world(app, scene, twins):  # noqa: F811
-    first_bob, first_art, onion_bob, onion_art, *_ = twins
-    avatar = File(file_path='app/static/media/avatar.png')
-    db.session.add(avatar)
-    db.session.flush()
-    for user in (first_bob, onion_bob):   # what /instance/people/interesting asks of an account
-        user.post_count = user.post_reply_count = user.reputation = 5
-        user.last_seen = utcnow()
-        user.avatar_id = avatar.id
-    db.session.commit()
-    return SimpleNamespace(first_bob=first_bob, first_art=first_art, onion_bob=onion_bob, onion_art=onion_art)
 
 
 def visit(app, path, signed_in, world, host=FIRST):
@@ -57,45 +43,45 @@ def on_onion(path: str) -> str:
 # --- the modlog ---------------------------------------------------------------------------------------------------
 
 @pytest.fixture
-def entries(world):
+def entries(local_only_actors_hidden_world):
     """Public `add_mod` entries, their link text a mark: one in the onion's community, one about an onion account in
     The first domain's community, and the first domain's own."""
-    rows = [ModLog(community_id=world.onion_art.id, user_id=world.onion_bob.id, target_user_id=world.first_bob.id,
+    rows = [ModLog(community_id=local_only_actors_hidden_world.onion_art.id, user_id=local_only_actors_hidden_world.onion_bob.id, target_user_id=local_only_actors_hidden_world.first_bob.id,
                    action='add_mod', link='u/bob', link_text='MARK-ONION-COMMUNITY', public=True, type='mod'),
-            ModLog(community_id=world.first_art.id, user_id=world.first_bob.id, target_user_id=world.onion_bob.id,
+            ModLog(community_id=local_only_actors_hidden_world.first_art.id, user_id=local_only_actors_hidden_world.first_bob.id, target_user_id=local_only_actors_hidden_world.onion_bob.id,
                    action='add_mod', link=f'u/{ONION_BOB}', link_text='MARK-ONION-TARGET', public=True, type='mod'),
-            ModLog(community_id=world.first_art.id, user_id=world.first_bob.id, target_user_id=world.first_bob.id,
+            ModLog(community_id=local_only_actors_hidden_world.first_art.id, user_id=local_only_actors_hidden_world.first_bob.id, target_user_id=local_only_actors_hidden_world.first_bob.id,
                    action='add_mod', link='u/bob', link_text='MARK-FIRST', public=True, type='mod')]
     db.session.add_all(rows)
     db.session.commit()
     return rows
 
 
-def test_a_logged_out_modlog_lists_nothing_about_a_local_only_community_or_account(app, world, entries):
-    body = visit(app, '/modlog', False, world).get_data(as_text=True)
+def test_a_logged_out_modlog_lists_nothing_about_a_local_only_community_or_account(app, local_only_actors_hidden_world, entries):
+    body = visit(app, '/modlog', False, local_only_actors_hidden_world).get_data(as_text=True)
     assert 'MARK-FIRST' in body
     assert 'MARK-ONION-COMMUNITY' not in body and 'MARK-ONION-TARGET' not in body
     assert ONION not in body
     assert 'Onion art' not in body   # nor in the community chooser
 
 
-def test_a_logged_in_modlog_lists_them_on_the_onion_only(app, world, entries):
+def test_a_logged_in_modlog_lists_them_on_the_onion_only(app, local_only_actors_hidden_world, entries):
     """Follow-up F6: no longer on the first domain."""
-    body = visit(app, '/modlog', True, world).get_data(as_text=True)
+    body = visit(app, '/modlog', True, local_only_actors_hidden_world).get_data(as_text=True)
     assert 'MARK-FIRST' in body
     assert 'MARK-ONION-COMMUNITY' not in body and 'MARK-ONION-TARGET' not in body and ONION not in body
-    body = visit(app, '/modlog', True, world, host=ONION).get_data(as_text=True)
+    body = visit(app, '/modlog', True, local_only_actors_hidden_world, host=ONION).get_data(as_text=True)
     assert {'MARK-FIRST', 'MARK-ONION-COMMUNITY', 'MARK-ONION-TARGET'} <= set(body.split())
 
 
 @pytest.mark.parametrize('signed_in, host, listed', [(False, FIRST, 1), (True, FIRST, 1), (False, ONION, 1),
                                                    (True, ONION, 3)])
-def test_the_api_modlog_follows_the_same_rule(app, world, entries, monkeypatch, signed_in, host, listed):
+def test_the_api_modlog_follows_the_same_rule(app, local_only_actors_hidden_world, entries, monkeypatch, signed_in, host, listed):
     """Follow-up F6: a signed-in caller is shown them on the onion only."""
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
     forget_login()
     from_api = app.test_client().get('/api/alpha/modlog', base_url=HOSTS[host],
-                                     headers={'Authorization': f'Bearer {world.first_bob.encode_jwt_token()}'}
+                                     headers={'Authorization': f'Bearer {local_only_actors_hidden_world.first_bob.encode_jwt_token()}'}
                                      if signed_in else {})
     assert from_api.status_code == 200
     assert len(from_api.get_json()['added_to_community']) == listed
@@ -103,7 +89,7 @@ def test_the_api_modlog_follows_the_same_rule(app, world, entries, monkeypatch, 
         assert ONION not in from_api.get_data(as_text=True)
 
 
-def test_the_api_modlog_plans_the_hidden_clause_once(app, world, entries, monkeypatch):
+def test_the_api_modlog_plans_the_hidden_clause_once(app, local_only_actors_hidden_world, entries, monkeypatch):
     """Round 5: each of the nine categories' paginated queries carried the whole hidden-here clause, and planning it
     eighteen times cost about a second a call. The hidden entries are read once; the categories filter by their ids."""
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
@@ -113,14 +99,14 @@ def test_the_api_modlog_plans_the_hidden_clause_once(app, world, entries, monkey
     event.listen(db.engine, 'before_cursor_execute', listener)
     try:
         answer = app.test_client().get('/api/alpha/modlog', base_url=HOSTS[FIRST],
-                                       headers={'Authorization': f'Bearer {world.first_bob.encode_jwt_token()}'})
+                                       headers={'Authorization': f'Bearer {local_only_actors_hidden_world.first_bob.encode_jwt_token()}'})
     finally:
         event.remove(db.engine, 'before_cursor_execute', listener)
     assert answer.status_code == 200 and len(answer.get_json()['added_to_community']) == 1
     assert sum('unnest' in statement for statement in statements) == 1
 
 
-def test_the_modlog_name_suggestions_leave_out_local_only_accounts_when_logged_out(app, world):
+def test_the_modlog_name_suggestions_leave_out_local_only_accounts_when_logged_out(app, local_only_actors_hidden_world):
     forget_login()
     logged_out = app.test_client().post('/modlog/search_suggestions', data={'user_name': 'bob'},
                                         base_url=HOSTS[FIRST]).get_data(as_text=True)
@@ -130,34 +116,34 @@ def test_the_modlog_name_suggestions_leave_out_local_only_accounts_when_logged_o
 # --- people -------------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('path', ['/instance/all/people', '/instance/people/interesting'])
-def test_logged_out_people_lists_leave_out_local_only_accounts(app, world, path):
-    body = visit(app, path, False, world).get_data(as_text=True)
+def test_logged_out_people_lists_leave_out_local_only_accounts(app, local_only_actors_hidden_world, path):
+    body = visit(app, path, False, local_only_actors_hidden_world).get_data(as_text=True)
     assert 'href="/u/bob"' in body
     assert ONION not in body
 
 
 @pytest.mark.parametrize('path', ['/instance/all/people', '/instance/people/interesting'])
-def test_logged_in_people_lists_show_them_on_the_onion_only(app, world, path):
+def test_logged_in_people_lists_show_them_on_the_onion_only(app, local_only_actors_hidden_world, path):
     """Follow-up F6: no longer on the first domain."""
-    assert ONION not in visit(app, path, True, world).get_data(as_text=True)
-    assert 'href="/u/bob"' in visit(app, path, True, world, host=ONION).get_data(as_text=True)
+    assert ONION not in visit(app, path, True, local_only_actors_hidden_world).get_data(as_text=True)
+    assert 'href="/u/bob"' in visit(app, path, True, local_only_actors_hidden_world, host=ONION).get_data(as_text=True)
 
 
 # --- communities --------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('path', ['/communities', '/'])
-def test_logged_out_community_lists_and_sidebars_leave_out_local_only_communities(app, world, path):
-    body = visit(app, path, False, world).get_data(as_text=True)
+def test_logged_out_community_lists_and_sidebars_leave_out_local_only_communities(app, local_only_actors_hidden_world, path):
+    body = visit(app, path, False, local_only_actors_hidden_world).get_data(as_text=True)
     assert '/c/art"' in body or "/c/art'" in body   # The first domain's own
     assert ONION not in body
 
 
 @pytest.mark.parametrize('path', ['/communities', '/'])
-def test_logged_in_community_lists_and_sidebars_show_them_on_the_onion_only(app, world, path):
+def test_logged_in_community_lists_and_sidebars_show_them_on_the_onion_only(app, local_only_actors_hidden_world, path):
     """Follow-up F6: no longer on the first domain."""
-    body = visit(app, path, True, world).get_data(as_text=True)
+    body = visit(app, path, True, local_only_actors_hidden_world).get_data(as_text=True)
     assert ONION not in body, around(body, ONION)
-    body = visit(app, path, True, world, host=ONION).get_data(as_text=True)
+    body = visit(app, path, True, local_only_actors_hidden_world, host=ONION).get_data(as_text=True)
     assert '/c/art"' in body or "/c/art'" in body
 
 
@@ -168,50 +154,50 @@ PAGES = [f'/c/{ONION_ART}', f'/community/{ONION_ART}/feed', f'/community/{ONION_
 
 
 @pytest.mark.parametrize('path', PAGES)
-def test_a_local_only_community_or_profile_page_is_not_found_when_logged_out(app, world, path):
-    response = visit(app, path, False, world)
+def test_a_local_only_community_or_profile_page_is_not_found_when_logged_out(app, local_only_actors_hidden_world, path):
+    response = visit(app, path, False, local_only_actors_hidden_world)
     assert response.status_code == 404
     assert ONION not in response.get_data(as_text=True)
 
 
 @pytest.mark.parametrize('path', [p for p in PAGES if not p.endswith('/feed')])
-def test_a_local_only_community_or_profile_page_renders_when_logged_in_on_its_own_domain_only(app, world, path):
+def test_a_local_only_community_or_profile_page_renders_when_logged_in_on_its_own_domain_only(app, local_only_actors_hidden_world, path):
     """C2 let a logged-in user reach them on the first domain. Follow-up F6 ("yes, hide onion from logged-in clearnet
     viewers too", owner ruling 2026-10-26) supersedes that: off the onion they are 404 to everyone."""
-    assert visit(app, path, True, world).status_code == 404
-    assert visit(app, on_onion(path), True, world, host=ONION).status_code == 200
+    assert visit(app, path, True, local_only_actors_hidden_world).status_code == 404
+    assert visit(app, on_onion(path), True, local_only_actors_hidden_world, host=ONION).status_code == 200
 
 
 @pytest.mark.parametrize('path', [f'/community/{ONION_ART}/feed', f'/u/{ONION_BOB}/feed'])
-def test_a_local_only_feed_answers_an_rss_token_on_its_own_domain_only(app, world, path):
+def test_a_local_only_feed_answers_an_rss_token_on_its_own_domain_only(app, local_only_actors_hidden_world, path):
     """Follow-up F6: an RSS token is a signed-in reader, so it is answered on the onion and nowhere else."""
-    world.first_bob.rss_token = 'first-bob-rss-token'
+    local_only_actors_hidden_world.first_bob.rss_token = 'first-bob-rss-token'
     db.session.commit()
-    assert visit(app, f'{path}?token=first-bob-rss-token', False, world).status_code == 404
-    assert visit(app, f'{on_onion(path)}?token=first-bob-rss-token', False, world, host=ONION).status_code == 200
+    assert visit(app, f'{path}?token=first-bob-rss-token', False, local_only_actors_hidden_world).status_code == 404
+    assert visit(app, f'{on_onion(path)}?token=first-bob-rss-token', False, local_only_actors_hidden_world, host=ONION).status_code == 200
 
 
 @pytest.mark.parametrize('path', [p.replace(f'@{ONION}', '') for p in PAGES])
-def test_first_domains_own_community_and_profile_pages_are_unchanged_when_logged_out(app, world, path):
-    assert visit(app, path, False, world).status_code == 200
+def test_first_domains_own_community_and_profile_pages_are_unchanged_when_logged_out(app, local_only_actors_hidden_world, path):
+    assert visit(app, path, False, local_only_actors_hidden_world).status_code == 200
 
 
 # --- topic and feed pages (fix round 2) ---------------------------------------------------------------------------
 
 @pytest.fixture
-def grouped(world):
+def grouped(local_only_actors_hidden_world):
     """The first domain's and the onion's community, both in one topic and one public feed, each with a subscriber."""
     topic = Topic(machine_name='arts', name='Arts')
     db.session.add(topic)
     db.session.flush()
     feed = make_local_feed('artfeed', public=True)
-    feed.user_id = world.first_bob.id
-    for community in (world.first_art, world.onion_art):
+    feed.user_id = local_only_actors_hidden_world.first_bob.id
+    for community in (local_only_actors_hidden_world.first_art, local_only_actors_hidden_world.onion_art):
         community.topic_id = topic.id
         community.total_subscriptions_count = 3
         make_feed_item(feed, community)
     db.session.commit()
-    return world
+    return local_only_actors_hidden_world
 
 
 @pytest.mark.parametrize('path', ['/topic/arts', '/f/artfeed'])
@@ -237,14 +223,14 @@ SHARED = 'https://example.com/shared-story'
 
 
 @pytest.fixture
-def shared(world):
+def shared(local_only_actors_hidden_world):
     """A post of the same link in the first domain's community and in the onion's (one written before its domain stopped
     federating, so the post itself is not stamped local-only: only its community is)."""
-    for community, author in ((world.first_art, world.first_bob), (world.onion_art, world.onion_bob)):
+    for community, author in ((local_only_actors_hidden_world.first_art, local_only_actors_hidden_world.first_bob), (local_only_actors_hidden_world.onion_art, local_only_actors_hidden_world.onion_bob)):
         post = make_post(community, author, f'https://{FIRST}/post/{community.id}-shared', title='a shared story')
         post.url = SHARED
     db.session.commit()
-    return world
+    return local_only_actors_hidden_world
 
 
 def test_logged_out_share_lists_no_local_only_community(app, shared):
@@ -277,11 +263,11 @@ def api_get(app, path, world, signed_in, host=FIRST):
 
 
 @pytest.fixture
-def api(app, world, monkeypatch):
+def api(app, local_only_actors_hidden_world, monkeypatch):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    world.onion_bob.roles.append(Role.query.filter_by(name='Admin').first() or Role(name='Admin', built_in=True))
+    local_only_actors_hidden_world.onion_bob.roles.append(Role.query.filter_by(name='Admin').first() or Role(name='Admin', built_in=True))
     db.session.commit()   # an onion admin, for the site view's admin list
-    return world
+    return local_only_actors_hidden_world
 
 
 @pytest.mark.parametrize('path', API_LISTS)
@@ -351,13 +337,13 @@ def test_the_alpha_apis_single_views_refuse_a_local_only_row_to_a_logged_out_cal
 # --- subpages (fix round 2) ---------------------------------------------------------------------------------------
 
 @pytest.fixture
-def subpages(world):
-    db.session.add(CommunityWikiPage(community_id=world.onion_art.id, slug='rules', title='Rules', body='be kind',
+def subpages(local_only_actors_hidden_world):
+    db.session.add(CommunityWikiPage(community_id=local_only_actors_hidden_world.onion_art.id, slug='rules', title='Rules', body='be kind',
                                      body_html='<p>be kind</p>', who_can_edit=0))
-    db.session.add(CommunityWikiPage(community_id=world.first_art.id, slug='rules', title='Rules', body='be kind',
+    db.session.add(CommunityWikiPage(community_id=local_only_actors_hidden_world.first_art.id, slug='rules', title='Rules', body='be kind',
                                      body_html='<p>be kind</p>', who_can_edit=0))
     db.session.commit()
-    return world
+    return local_only_actors_hidden_world
 
 
 def subpage_paths(world, onion=True):

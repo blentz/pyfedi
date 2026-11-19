@@ -6,7 +6,6 @@ from flask import current_app
 
 from app import cache, db
 from app.models import Site
-from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
 
 @pytest.fixture

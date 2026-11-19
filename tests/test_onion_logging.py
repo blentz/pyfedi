@@ -23,9 +23,7 @@ from app.onion_store import read_other_store
 from app.utils import log_login_failure, log_probe_refused, log_register_attempt
 from tests.conftest import TestConfig
 from tests.test_login_failure_log import CLEARNET, clearnet_login, failures, only_failure
-from tests.test_onion_guard_limits import (LOGIN, PASSWORD, a_session, alice, directory, ldap_off,  # noqa: F401
-                                           login_form, onion, onion_context, onion_get, onion_post, proof_given,
-                                           web_login)
+from tests.test_onion_guard_limits import LOGIN, PASSWORD, a_session, login_form, onion_context, onion_get, onion_post, proof_given, web_login
 
 SECRET = 'alice-secret-name'
 ERROR_PATH = '/some/path?token=hunter2'
@@ -64,7 +62,7 @@ def raise_in(app, context, message=f'no such user {SECRET}'):
             app.log_exception(sys.exc_info())
 
 
-def test_onion_login_failure_writes_no_log_line(app, alice, ldap_off, caplog):
+def test_onion_login_failure_writes_no_log_line(app, onion_guard_limits_alice, ldap_off, caplog):
     client = app.test_client()
     a_session(client)
     web_login(client, 'alice', 'a wrong password')
@@ -72,7 +70,7 @@ def test_onion_login_failure_writes_no_log_line(app, alice, ldap_off, caplog):
     assert [r for r in caplog.records if r.name == 'app'] == []     # nor a scrubbed stand-in that still says "onion"
 
 
-def test_onion_register_and_probe_write_no_log_line(app, onion, caplog):
+def test_onion_register_and_probe_write_no_log_line(app, onion_guard_limits_onion, caplog):
     client = app.test_client()
     a_session(client)
     onion_post(client, '/auth/register', data={})
@@ -92,7 +90,7 @@ def test_clearnet_fail2ban_lines_are_byte_identical(app, caplog):
     ]
 
 
-def test_onion_error_mail_has_no_path_host_query_user_or_message(app, onion, mail_handler):
+def test_onion_error_mail_has_no_path_host_query_user_or_message(app, onion_guard_limits_onion, mail_handler):
     raise_in(app, onion_context(app, ERROR_PATH))
     assert len(mail_handler) == 1
     mail = mail_handler[0]
@@ -104,7 +102,7 @@ def test_onion_error_mail_has_no_path_host_query_user_or_message(app, onion, mai
     assert 'Exception on /some' not in mail
 
 
-def test_onion_error_goes_to_every_handler_scrubbed(app, onion, caplog):
+def test_onion_error_goes_to_every_handler_scrubbed(app, onion_guard_limits_onion, caplog):
     raise_in(app, onion_context(app, ERROR_PATH))
     text = caplog.text
     assert SECRET not in text and 'hunter2' not in text and 'abc.onion' not in text
@@ -119,13 +117,13 @@ def test_clearnet_error_mail_unchanged(app, mail_handler):
     assert 'raise ValueError(message)' in mail
 
 
-def test_an_onion_error_without_an_exception_is_generic(app, onion, mail_handler):
+def test_an_onion_error_without_an_exception_is_generic(app, onion_guard_limits_onion, mail_handler):
     with onion_context(app):
         app.logger.error('failed for %s', SECRET)
     assert mail_handler == ['error on an onion request']
 
 
-def test_the_filter_is_idempotent_and_passes_clearnet_and_non_request_records(app, onion):
+def test_the_filter_is_idempotent_and_passes_clearnet_and_non_request_records(app, onion_guard_limits_onion):
     scrub = OnionScrubFilter()
     record = logging.LogRecord('app', logging.ERROR, __file__, 1, 'plain %s', ('x',), None)
     assert scrub.filter(record) is True and (record.msg, record.args) == ('plain %s', ('x',))
@@ -136,7 +134,7 @@ def test_the_filter_is_idempotent_and_passes_clearnet_and_non_request_records(ap
         assert scrub.filter(record) is True and record.msg == 'error on an onion request'
 
 
-def test_onion_safe_records_pass_unchanged(app, onion):
+def test_onion_safe_records_pass_unchanged(app, onion_guard_limits_onion):
     record = logging.LogRecord('app', logging.WARNING, __file__, 1, 'onion store unavailable', (), None)
     record.onion_safe = True
     with onion_context(app):
@@ -156,7 +154,7 @@ def test_an_unavailable_onion_store_line_names_no_user_ip_or_path(app, caplog):
     assert lines and all('alice' not in line and '203.0.113.9' not in line and '/' not in line for line in lines)
 
 
-def test_ldap_sync_failure_on_the_onion_names_no_user(app, onion, caplog):
+def test_ldap_sync_failure_on_the_onion_names_no_user(app, onion_guard_limits_onion, caplog):
     user = SimpleNamespace(user_name=SECRET, email='x@example.com', home_domain=default_domain)
     with patch('app.auth.util.sync_user_to_ldap', side_effect=RuntimeError(f'bind failed for {SECRET}')), \
             onion_context(app):
@@ -183,7 +181,7 @@ def test_the_app_factory_attaches_the_scrub_to_the_mail_handler(restores_the_sha
     assert mail and all(any(isinstance(f, OnionScrubFilter) for f in h.filters) for h in mail)
 
 
-def test_sentry_drops_an_event_of_an_onion_request(app, onion):
+def test_sentry_drops_an_event_of_an_onion_request(app, onion_guard_limits_onion):
     with onion_context(app):
         assert drop_onion_event({'message': 'x'}, {}) is None
 
@@ -222,7 +220,7 @@ class FakeSMTP:
 
 
 @pytest.fixture
-def factory_mail(restores_the_shared_logger, onion, monkeypatch):
+def factory_mail(restores_the_shared_logger, onion_guard_limits_onion, monkeypatch):
     """An app built by the real create_app with ERRORS_TO and the onion proxy configured, a route that fails with
     a message naming a user and an URL, and the mail the factory's own error mailer would have sent."""
     FakeSMTP.sent = []

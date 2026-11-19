@@ -28,10 +28,10 @@ from app.hidden_routes import hidden_notifications, notification_hidden
 from app.post.routes import refuse_invisible_unless_moderating
 from tests.test_hidden_here import reply_chain
 from tests.test_per_domain_html_routes import Visitor
-from tests.test_instance_visible_here import HOSTS, get, scene  # noqa: F401 -- scene is a fixture
-from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
-from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
-from tests.two_domains import FIRST, ONION, onion_request, default_request, two_domains  # noqa: F401
+from tests.test_instance_visible_here import HOSTS, get
+from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB
+from tests.test_per_domain_ap_routes import onion_proxy
+from tests.two_domains import FIRST, ONION, onion_request, default_request
 from tests.conftest import forget_login
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -57,41 +57,6 @@ def stamped(post_or_reply, author, community, *parents):
     return post_or_reply
 
 
-@pytest.fixture
-def onion(app, world, scene, two_domains):  # noqa: F811
-    """The onion's bob and art, his post ONIONPOST in art (from `scene`) with a reply, and his post ONIONINFIRST in the
-    first domain's art; the first domain's bob, its admin, and the first domain's own post FIRSTPOST."""
-    first = two_domains.domains[0]
-    world.post = Post.query.filter_by(title='ONIONPOST').one()
-    world.reply = stamped(make_post_reply(world.post, world.onion_bob), world.onion_bob, world.onion_art, None,
-                          world.post)
-    world.reply.body_html = '<p>ONIONREPLY</p>'
-    world.in_first = stamped(make_post(world.first_art, world.onion_bob, f'http://{ONION}/post/in-first',
-                                       title='ONIONINFIRST'), world.onion_bob, world.first_art)
-    world.first_post = make_post(world.first_art, world.first_bob, f'https://{FIRST}/post/first', title='FIRSTPOST')
-    world.admin = two_domains.local_user('boss', first)
-    world.admin.private_key = 'a key'
-    world.admin.roles.append(Role.query.filter_by(name='Admin').first() or Role(name='Admin', built_in=True))
-    for user in (world.first_bob, world.admin):
-        user.rss_token = f'{TOKEN}-{user.id}'
-    db.session.commit()
-    grant_permission(world.admin, 'administer all users')
-    for post in (world.post, world.in_first, world.first_post):
-        post.posted_at = post.created_at = post.last_active = utcnow()
-        post.score = post.up_votes = 50
-        post.ranking = post.ranking_scaled = 1000
-    topic = Topic(machine_name='arts', name='Arts')
-    db.session.add(topic)
-    db.session.flush()
-    for community in (world.first_art, world.onion_art):   # in every feed: all, popular, a topic, the subscribed
-        community.show_all = community.show_popular = True
-        community.topic_id = topic.id
-        for user in (world.first_bob, world.admin):
-            db.session.add(CommunityMember(user_id=user.id, community_id=community.id))
-    db.session.commit()
-    return world
-
-
 def viewers(world):
     return {'user': world.first_bob, 'admin': world.admin}
 
@@ -112,11 +77,11 @@ def feeds(world, viewer, on_onion=False):
 
 
 @pytest.mark.parametrize('who', ['user', 'admin'])
-def test_on_the_first_domain_every_onion_page_is_not_found_for_a_signed_in_user_or_an_admin(app, onion, who):
-    viewer = viewers(onion)[who]
+def test_on_the_first_domain_every_onion_page_is_not_found_for_a_signed_in_user_or_an_admin(app, onion_hidden_on_clearnet_onion, who):
+    viewer = viewers(onion_hidden_on_clearnet_onion)[who]
     nobody = get(app, '/u/nobody', user=viewer)
     assert nobody.status_code == 404
-    for path in pages(onion) + feeds(onion, viewer):
+    for path in pages(onion_hidden_on_clearnet_onion) + feeds(onion_hidden_on_clearnet_onion, viewer):
         response = get(app, path, user=viewer)
         assert response.status_code == 404, path
         body = response.get_data(as_text=True)
@@ -124,14 +89,14 @@ def test_on_the_first_domain_every_onion_page_is_not_found_for_a_signed_in_user_
 
 
 @pytest.mark.parametrize('who', ['user', 'admin'])
-def test_on_the_onion_the_same_viewers_see_them_all(app, onion, monkeypatch, who):
+def test_on_the_onion_the_same_viewers_see_them_all(app, onion_hidden_on_clearnet_onion, monkeypatch, who):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the signed-in reply form renders its token
-    viewer = viewers(onion)[who]
-    for path in pages(onion, on_onion=True):
+    viewer = viewers(onion_hidden_on_clearnet_onion)[who]
+    for path in pages(onion_hidden_on_clearnet_onion, on_onion=True):
         if path.endswith('/moderate') and who == 'user':
             continue   # a moderator's page: the user moderates nothing there
         assert get(app, path, host=ONION, user=viewer).status_code == 200, path
-    for path in feeds(onion, viewer, on_onion=True):
+    for path in feeds(onion_hidden_on_clearnet_onion, viewer, on_onion=True):
         assert get(app, path, host=ONION, user=viewer).status_code == 200, path   # the token is the reader
 
 
@@ -139,8 +104,8 @@ def test_on_the_onion_the_same_viewers_see_them_all(app, onion, monkeypatch, who
 @pytest.mark.parametrize('path', ['/c/art', '/', '/home/new/popular', '/home/new/all', '/home/new/subscribed',
                                   '/community/art/feed', '/topic/arts',
                                   '/topic/arts.rss'])
-def test_an_onion_accounts_post_in_a_first_domain_community_is_absent_there(app, onion, who, path):
-    viewer = viewers(onion)[who]
+def test_an_onion_accounts_post_in_a_first_domain_community_is_absent_there(app, onion_hidden_on_clearnet_onion, who, path):
+    viewer = viewers(onion_hidden_on_clearnet_onion)[who]
     if path.endswith('/feed'):
         path = f'{path}?token={viewer.rss_token}'
     body = get(app, path, user=viewer).get_data(as_text=True)
@@ -148,8 +113,8 @@ def test_an_onion_accounts_post_in_a_first_domain_community_is_absent_there(app,
     assert 'FIRSTPOST' in body, path   # the control: the list does show posts
 
 
-def test_on_the_onion_it_is_present_in_the_first_domains_community(app, onion):
-    body = get(app, f'/c/art@{FIRST}', host=ONION, user=onion.first_bob).get_data(as_text=True)
+def test_on_the_onion_it_is_present_in_the_first_domains_community(app, onion_hidden_on_clearnet_onion):
+    body = get(app, f'/c/art@{FIRST}', host=ONION, user=onion_hidden_on_clearnet_onion.first_bob).get_data(as_text=True)
     assert 'ONIONINFIRST' in body and 'FIRSTPOST' in body
 
 
@@ -163,12 +128,12 @@ SEARCHES = [  # what is searched for, the onion's term, and the first domain's t
 
 
 @pytest.fixture
-def searchable(onion):
-    onion.first_reply = make_post_reply(onion.first_post, onion.first_bob, 'FIRSTREPLY')
-    onion.first_reply.body_html = '<p>FIRSTREPLY</p>'
-    onion.reply.body = 'ONIONREPLY'   # what a reply is searched by
+def searchable(onion_hidden_on_clearnet_onion):
+    onion_hidden_on_clearnet_onion.first_reply = make_post_reply(onion_hidden_on_clearnet_onion.first_post, onion_hidden_on_clearnet_onion.first_bob, 'FIRSTREPLY')
+    onion_hidden_on_clearnet_onion.first_reply.body_html = '<p>FIRSTREPLY</p>'
+    onion_hidden_on_clearnet_onion.reply.body = 'ONIONREPLY'   # what a reply is searched by
     db.session.commit()
-    return onion
+    return onion_hidden_on_clearnet_onion
 
 
 @pytest.mark.parametrize('who', ['user', 'admin'])
@@ -217,20 +182,14 @@ def api(app, path, viewer, host=FIRST):
                                  headers={'Authorization': f'Bearer {viewer.encode_jwt_token()}'})
 
 
-@pytest.fixture
-def alpha(app, onion, monkeypatch):
-    monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    return onion
-
-
 @pytest.mark.parametrize('who', ['user', 'admin'])
-def test_the_api_on_the_first_domain_lists_none_of_them(app, alpha, who):
-    viewer = viewers(alpha)[who]
-    for path in ('/api/alpha/post/list?sort=New', f'/api/alpha/post/list?community_id={alpha.first_art.id}',
+def test_the_api_on_the_first_domain_lists_none_of_them(app, onion_hidden_on_clearnet_alpha, who):
+    viewer = viewers(onion_hidden_on_clearnet_alpha)[who]
+    for path in ('/api/alpha/post/list?sort=New', f'/api/alpha/post/list?community_id={onion_hidden_on_clearnet_alpha.first_art.id}',
                  '/api/alpha/search?q=ONION&type_=Posts', '/api/alpha/search?q=ONIONREPLY&type_=Comments',
                  '/api/alpha/search?q=bob&type_=Users',
                  '/api/alpha/search?q=art&type_=Communities', '/api/alpha/community/list',
-                 f'/api/alpha/comment/list?post_id={alpha.first_post.id}'):
+                 f'/api/alpha/comment/list?post_id={onion_hidden_on_clearnet_alpha.first_post.id}'):
         response = api(app, path, viewer)
         assert response.status_code == 200, path
         body = response.get_data(as_text=True)
@@ -238,15 +197,15 @@ def test_the_api_on_the_first_domain_lists_none_of_them(app, alpha, who):
 
 
 @pytest.mark.parametrize('who', ['user', 'admin'])
-def test_the_apis_not_found_for_a_hidden_object_is_the_one_for_an_id_nobody_holds(app, alpha, who):
-    viewer = viewers(alpha)[who]
+def test_the_apis_not_found_for_a_hidden_object_is_the_one_for_an_id_nobody_holds(app, onion_hidden_on_clearnet_alpha, who):
+    viewer = viewers(onion_hidden_on_clearnet_alpha)[who]
     nobody = 2 ** 30
-    pairs = [(f'/api/alpha/post?id={alpha.post.id}', f'/api/alpha/post?id={nobody}'),
-             (f'/api/alpha/post?id={alpha.in_first.id}', f'/api/alpha/post?id={nobody}'),
-             (f'/api/alpha/comment?id={alpha.reply.id}', f'/api/alpha/comment?id={nobody}'),
-             (f'/api/alpha/community?id={alpha.onion_art.id}', f'/api/alpha/community?id={nobody}'),
-             (f'/api/alpha/user?person_id={alpha.onion_bob.id}', f'/api/alpha/user?person_id={nobody}'),
-             (f'/api/alpha/resolve_object?q=http://{ONION}/post/{alpha.post.id}',
+    pairs = [(f'/api/alpha/post?id={onion_hidden_on_clearnet_alpha.post.id}', f'/api/alpha/post?id={nobody}'),
+             (f'/api/alpha/post?id={onion_hidden_on_clearnet_alpha.in_first.id}', f'/api/alpha/post?id={nobody}'),
+             (f'/api/alpha/comment?id={onion_hidden_on_clearnet_alpha.reply.id}', f'/api/alpha/comment?id={nobody}'),
+             (f'/api/alpha/community?id={onion_hidden_on_clearnet_alpha.onion_art.id}', f'/api/alpha/community?id={nobody}'),
+             (f'/api/alpha/user?person_id={onion_hidden_on_clearnet_alpha.onion_bob.id}', f'/api/alpha/user?person_id={nobody}'),
+             (f'/api/alpha/resolve_object?q=http://{ONION}/post/{onion_hidden_on_clearnet_alpha.post.id}',
               f'/api/alpha/resolve_object?q=http://{ONION}/post/{nobody}'),
              (f'/api/alpha/resolve_object?q=http://{ONION}/u/bob', f'/api/alpha/resolve_object?q=http://{ONION}/u/nobody')]
     for hidden, missing in pairs:
@@ -255,27 +214,27 @@ def test_the_apis_not_found_for_a_hidden_object_is_the_one_for_an_id_nobody_hold
         assert found.status_code in (400, 404), hidden
 
 
-def test_the_api_on_the_onion_still_shows_them(app, alpha):
-    for path in (f'/api/alpha/post?id={alpha.post.id}', f'/api/alpha/community?id={alpha.onion_art.id}',
-                 f'/api/alpha/user?person_id={alpha.onion_bob.id}', f'/api/alpha/comment?id={alpha.reply.id}'):
-        assert api(app, path, alpha.first_bob, host=ONION).status_code == 200, path
+def test_the_api_on_the_onion_still_shows_them(app, onion_hidden_on_clearnet_alpha):
+    for path in (f'/api/alpha/post?id={onion_hidden_on_clearnet_alpha.post.id}', f'/api/alpha/community?id={onion_hidden_on_clearnet_alpha.onion_art.id}',
+                 f'/api/alpha/user?person_id={onion_hidden_on_clearnet_alpha.onion_bob.id}', f'/api/alpha/comment?id={onion_hidden_on_clearnet_alpha.reply.id}'):
+        assert api(app, path, onion_hidden_on_clearnet_alpha.first_bob, host=ONION).status_code == 200, path
 
 
 # --- reports and notifications -----------------------------------------------------------------------------------
 
 @pytest.fixture
-def reported(onion):
-    onion.report = Report(reasons='spam', description='about onion bob', type=0, reporter_id=onion.first_bob.id,
-                          suspect_user_id=onion.onion_bob.id, source_instance_id=1,
-                          targets={'suspect_user_user_name': ONION_BOB, 'suspect_user_id': onion.onion_bob.id,
-                                   'reporter_user_name': 'bob', 'reporter_id': onion.first_bob.id})
-    onion.post_report = Report(reasons='spam', description='about ONIONPOST', type=1, reporter_id=onion.first_bob.id,
-                               suspect_post_id=onion.post.id, source_instance_id=1,
-                               targets={'suspect_post_id': onion.post.id, 'orig_post_title': 'the onion post',
-                                        'suspect_user_user_name': ONION_BOB, 'suspect_user_id': onion.onion_bob.id})
-    db.session.add_all([onion.report, onion.post_report])
+def reported(onion_hidden_on_clearnet_onion):
+    onion_hidden_on_clearnet_onion.report = Report(reasons='spam', description='about onion bob', type=0, reporter_id=onion_hidden_on_clearnet_onion.first_bob.id,
+                          suspect_user_id=onion_hidden_on_clearnet_onion.onion_bob.id, source_instance_id=1,
+                          targets={'suspect_user_user_name': ONION_BOB, 'suspect_user_id': onion_hidden_on_clearnet_onion.onion_bob.id,
+                                   'reporter_user_name': 'bob', 'reporter_id': onion_hidden_on_clearnet_onion.first_bob.id})
+    onion_hidden_on_clearnet_onion.post_report = Report(reasons='spam', description='about ONIONPOST', type=1, reporter_id=onion_hidden_on_clearnet_onion.first_bob.id,
+                               suspect_post_id=onion_hidden_on_clearnet_onion.post.id, source_instance_id=1,
+                               targets={'suspect_post_id': onion_hidden_on_clearnet_onion.post.id, 'orig_post_title': 'the onion post',
+                                        'suspect_user_user_name': ONION_BOB, 'suspect_user_id': onion_hidden_on_clearnet_onion.onion_bob.id})
+    db.session.add_all([onion_hidden_on_clearnet_onion.report, onion_hidden_on_clearnet_onion.post_report])
     db.session.commit()
-    return onion
+    return onion_hidden_on_clearnet_onion
 
 
 def test_a_first_domain_admins_report_page_names_onion_bob_as_text_with_the_note(app, reported):
@@ -295,19 +254,19 @@ def test_on_the_onion_the_report_links_them(app, reported):
     assert NOTE not in html
 
 
-def test_a_notification_on_the_first_domain_names_an_onion_author_as_text_with_the_note(app, onion):
+def test_a_notification_on_the_first_domain_names_an_onion_author_as_text_with_the_note(app, onion_hidden_on_clearnet_onion):
     notification = SimpleNamespace(
         id=1, read=False, created_at=None, subtype=None,
-        targets={'author_user_name': ONION_BOB, 'author_id': onion.onion_bob.id, 'community_name': 'art',
-                 'community_id': onion.first_art.id, 'post_id': onion.first_post.id, 'post_title': 'a post'})
+        targets={'author_user_name': ONION_BOB, 'author_id': onion_hidden_on_clearnet_onion.onion_bob.id, 'community_name': 'art',
+                 'community_id': onion_hidden_on_clearnet_onion.first_art.id, 'post_id': onion_hidden_on_clearnet_onion.first_post.id, 'post_title': 'a post'})
     with default_request(app):
         html = render_template('user/notifs/0.html', notification=notification, localize_datetime=lambda *a: '',
                                locale='en')
-    assert NOTE in html and f'/user/{onion.onion_bob.id}"' not in html
-    assert f'href="/community/{onion.first_art.id}"' in html
+    assert NOTE in html and f'/user/{onion_hidden_on_clearnet_onion.onion_bob.id}"' not in html
+    assert f'href="/community/{onion_hidden_on_clearnet_onion.first_art.id}"' in html
 
 
-def test_a_report_with_no_usable_post_id_shows_its_text(app, onion):
+def test_a_report_with_no_usable_post_id_shows_its_text(app, onion_hidden_on_clearnet_onion):
     report = SimpleNamespace(id=1, reasons='spam', description='', is_local=lambda *a, **k: True,
                              created_at=datetime(2026, 1, 1), updated=datetime(2026, 1, 1), targets={'orig_post_title': 'a title'})
     with default_request(app):
@@ -315,8 +274,8 @@ def test_a_report_with_no_usable_post_id_shows_its_text(app, onion):
     assert 'a title' in html and 'href="/post/' not in html
 
 
-def test_a_first_domain_reply_in_a_report_is_still_a_link(app, onion):
-    reply = make_post_reply(onion.first_post, onion.first_bob)
+def test_a_first_domain_reply_in_a_report_is_still_a_link(app, onion_hidden_on_clearnet_onion):
+    reply = make_post_reply(onion_hidden_on_clearnet_onion.first_post, onion_hidden_on_clearnet_onion.first_bob)
     report = SimpleNamespace(id=1, reasons='spam', description='', is_local=lambda *a, **k: True,
                              created_at=datetime(2026, 1, 1), updated=datetime(2026, 1, 1),
                              targets={'suspect_comment_id': reply.id, 'orig_comment_body': 'body',
@@ -333,13 +292,13 @@ def report_of(kind, **targets):
                            targets={'source_instance_domain': ONION, **targets})
 
 
-def test_a_report_of_a_hidden_post_keeps_its_title_but_not_its_body_or_the_onions_instance_link(app, onion):
-    reports = {'post_report': report_of('post', suspect_post_id=onion.post.id, orig_post_title='ONIONTITLE',
+def test_a_report_of_a_hidden_post_keeps_its_title_but_not_its_body_or_the_onions_instance_link(app, onion_hidden_on_clearnet_onion):
+    reports = {'post_report': report_of('post', suspect_post_id=onion_hidden_on_clearnet_onion.post.id, orig_post_title='ONIONTITLE',
                                         orig_post_body='ONIONBODY'),
-               'comment_report': report_of('comment', suspect_comment_id=onion.reply.id, orig_comment_body='ONIONTEXT'),
-               'user_report': report_of('user', suspect_user_user_name=ONION_BOB, suspect_user_id=onion.onion_bob.id),
+               'comment_report': report_of('comment', suspect_comment_id=onion_hidden_on_clearnet_onion.reply.id, orig_comment_body='ONIONTEXT'),
+               'user_report': report_of('user', suspect_user_user_name=ONION_BOB, suspect_user_id=onion_hidden_on_clearnet_onion.onion_bob.id),
                'community_report': report_of('community', suspect_community_name=ONION_ART,
-                                             suspect_community_id=onion.onion_art.id)}
+                                             suspect_community_id=onion_hidden_on_clearnet_onion.onion_art.id)}
     for template, report in reports.items():
         with default_request(app):
             html = render_template(f'admin/reports/{template}.html', report=report)
@@ -356,17 +315,17 @@ def test_a_report_of_a_hidden_post_keeps_its_title_but_not_its_body_or_the_onion
     assert 'ONIONBODY' in html and f'href="/instance/{ONION}"' in html
 
 
-def test_a_community_moderators_report_list_does_not_link_a_hidden_target(app, onion):
-    for suspect in ({'suspect_post_id': onion.in_first.id}, {'suspect_user_id': onion.onion_bob.id},
-                    {'suspect_post_id': onion.first_post.id}):
-        db.session.add(Report(reasons='spam', description='REPORTED', type=1, reporter_id=onion.first_bob.id,
-                              in_community_id=onion.first_art.id, status=0, source_instance_id=1, targets={},
+def test_a_community_moderators_report_list_does_not_link_a_hidden_target(app, onion_hidden_on_clearnet_onion):
+    for suspect in ({'suspect_post_id': onion_hidden_on_clearnet_onion.in_first.id}, {'suspect_user_id': onion_hidden_on_clearnet_onion.onion_bob.id},
+                    {'suspect_post_id': onion_hidden_on_clearnet_onion.first_post.id}):
+        db.session.add(Report(reasons='spam', description='REPORTED', type=1, reporter_id=onion_hidden_on_clearnet_onion.first_bob.id,
+                              in_community_id=onion_hidden_on_clearnet_onion.first_art.id, status=0, source_instance_id=1, targets={},
                               **suspect))
     db.session.commit()
-    body = get(app, '/community/art/moderate', user=onion.admin).get_data(as_text=True)
-    assert f'href="/post/{onion.in_first.id}"' not in body and f'href="/user/{onion.onion_bob.id}"' not in body
+    body = get(app, '/community/art/moderate', user=onion_hidden_on_clearnet_onion.admin).get_data(as_text=True)
+    assert f'href="/post/{onion_hidden_on_clearnet_onion.in_first.id}"' not in body and f'href="/user/{onion_hidden_on_clearnet_onion.onion_bob.id}"' not in body
     assert body.count(NOTE) == 2
-    assert f'href="/post/{onion.first_post.id}"' in body   # the control
+    assert f'href="/post/{onion_hidden_on_clearnet_onion.first_post.id}"' in body   # the control
 
 
 # --- lists of people ---------------------------------------------------------------------------------------------
@@ -374,33 +333,33 @@ def test_a_community_moderators_report_list_does_not_link_a_hidden_target(app, o
 @pytest.mark.parametrize('who', ['user', 'admin'])
 @pytest.mark.parametrize('path', ['/instance/all/people', '/instance/people/interesting', '/communities', '/modlog',
                                   '/about'])
-def test_first_domain_lists_name_no_onion_row_for_any_viewer(app, onion, who, path):
-    body = get(app, path, user=viewers(onion)[who]).get_data(as_text=True)
+def test_first_domain_lists_name_no_onion_row_for_any_viewer(app, onion_hidden_on_clearnet_onion, who, path):
+    body = get(app, path, user=viewers(onion_hidden_on_clearnet_onion)[who]).get_data(as_text=True)
     assert not near(body, ONION, 'Onion art'), (path, near(body, ONION, 'Onion art'))
 
 
-def test_a_first_domain_posts_voters_leave_out_an_onion_voter(app, onion):
-    db.session.add(PostVote(user_id=onion.onion_bob.id, author_id=onion.first_bob.id, post_id=onion.first_post.id,
+def test_a_first_domain_posts_voters_leave_out_an_onion_voter(app, onion_hidden_on_clearnet_onion):
+    db.session.add(PostVote(user_id=onion_hidden_on_clearnet_onion.onion_bob.id, author_id=onion_hidden_on_clearnet_onion.first_bob.id, post_id=onion_hidden_on_clearnet_onion.first_post.id,
                             effect=1.0))
     db.session.commit()
-    body = get(app, f'/post/{onion.first_post.id}/voting_activity', user=onion.admin).get_data(as_text=True)
+    body = get(app, f'/post/{onion_hidden_on_clearnet_onion.first_post.id}/voting_activity', user=onion_hidden_on_clearnet_onion.admin).get_data(as_text=True)
     assert ONION not in body
-    on_onion = get(app, f'/post/{onion.first_post.id}/voting_activity', host=ONION, user=onion.admin)
+    on_onion = get(app, f'/post/{onion_hidden_on_clearnet_onion.first_post.id}/voting_activity', host=ONION, user=onion_hidden_on_clearnet_onion.admin)
     assert on_onion.status_code == 200 and 'bob' in on_onion.get_data(as_text=True)
 
 
 # --- a reply further down an onion reply (review I6) ---------------------------------------------------------------
 
 @pytest.fixture
-def deep(app, onion):
+def deep(app, onion_hidden_on_clearnet_onion):
     """The onion's bob replies to the first domain's FIRSTPOST; the first domain's bob answers him, on the onion, the
     only place the onion's reply can be seen. That answer must not show on the first domain either: listed on the first
     bob's profile it would tell that he uses the onion."""
-    onion.onion_under, onion.first_under = reply_chain(onion.first_post, onion.onion_bob, onion.first_bob)
-    onion.onion_under.body, onion.onion_under.body_html = 'ONIONUNDER', '<p>ONIONUNDER</p>'
-    onion.first_under.body, onion.first_under.body_html = 'FIRSTUNDERONION', '<p>FIRSTUNDERONION</p>'
+    onion_hidden_on_clearnet_onion.onion_under, onion_hidden_on_clearnet_onion.first_under = reply_chain(onion_hidden_on_clearnet_onion.first_post, onion_hidden_on_clearnet_onion.onion_bob, onion_hidden_on_clearnet_onion.first_bob)
+    onion_hidden_on_clearnet_onion.onion_under.body, onion_hidden_on_clearnet_onion.onion_under.body_html = 'ONIONUNDER', '<p>ONIONUNDER</p>'
+    onion_hidden_on_clearnet_onion.first_under.body, onion_hidden_on_clearnet_onion.first_under.body_html = 'FIRSTUNDERONION', '<p>FIRSTUNDERONION</p>'
     db.session.commit()
-    return onion
+    return onion_hidden_on_clearnet_onion
 
 
 @pytest.mark.parametrize('who', ['user', 'admin'])
@@ -436,20 +395,20 @@ def test_on_the_onion_the_reply_to_an_onion_reply_is_shown(app, deep, monkeypatc
 # --- the link-domain and instance post lists (review C1) -------------------------------------------------------------
 
 @pytest.fixture
-def linked(onion):
+def linked(onion_hidden_on_clearnet_onion):
     """FIRSTPOST and the onion's ONIONINFIRST link to example.com; the first's bob also posts FIRSTINONION in the onion's
     art, so it is on the first domain's instance row and hidden off the onion all the same."""
     domain = Domain(name='example.com')
     db.session.add(domain)
     db.session.flush()
-    onion.first_in_onion = stamped(make_post(onion.onion_art, onion.first_bob, f'https://{FIRST}/post/in-onion',
-                                             title='FIRSTINONION'), onion.first_bob, onion.onion_art)
-    for post in (onion.in_first, onion.first_post, onion.first_in_onion):
+    onion_hidden_on_clearnet_onion.first_in_onion = stamped(make_post(onion_hidden_on_clearnet_onion.onion_art, onion_hidden_on_clearnet_onion.first_bob, f'https://{FIRST}/post/in-onion',
+                                             title='FIRSTINONION'), onion_hidden_on_clearnet_onion.first_bob, onion_hidden_on_clearnet_onion.onion_art)
+    for post in (onion_hidden_on_clearnet_onion.in_first, onion_hidden_on_clearnet_onion.first_post, onion_hidden_on_clearnet_onion.first_in_onion):
         post.domain_id = domain.id
         post.url = 'https://example.com/a'
     db.session.commit()
-    onion.domain = domain
-    return onion
+    onion_hidden_on_clearnet_onion.domain = domain
+    return onion_hidden_on_clearnet_onion
 
 
 @pytest.mark.parametrize('who', ['user', 'admin'])
@@ -471,23 +430,23 @@ def test_on_the_onion_the_link_domain_lists_them(app, linked):
 # --- an account's own activity lists (review I5) -----------------------------------------------------------------------
 
 @pytest.fixture
-def active(onion):
+def active(onion_hidden_on_clearnet_onion):
     """The first domain's bob, signed in on the onion, upvoted, bookmarked and read the onion's posts and its reply, and
     FIRSTPOST, the control."""
-    bob = onion.first_bob
+    bob = onion_hidden_on_clearnet_onion.first_bob
     # FIRSTOTHER is the upvotes page's control: since v1.8.10 that page leaves out votes on the user's own posts,
     # and FIRSTPOST is bob's
-    onion.first_other = make_post(onion.first_art, onion.admin, f'https://{FIRST}/post/other', title='FIRSTOTHER')
-    db.session.add(PostVote(user_id=bob.id, author_id=onion.admin.id, post_id=onion.first_other.id, effect=1.0))
-    for post in (onion.post, onion.in_first, onion.first_post):
+    onion_hidden_on_clearnet_onion.first_other = make_post(onion_hidden_on_clearnet_onion.first_art, onion_hidden_on_clearnet_onion.admin, f'https://{FIRST}/post/other', title='FIRSTOTHER')
+    db.session.add(PostVote(user_id=bob.id, author_id=onion_hidden_on_clearnet_onion.admin.id, post_id=onion_hidden_on_clearnet_onion.first_other.id, effect=1.0))
+    for post in (onion_hidden_on_clearnet_onion.post, onion_hidden_on_clearnet_onion.in_first, onion_hidden_on_clearnet_onion.first_post):
         db.session.add(PostVote(user_id=bob.id, author_id=post.user_id, post_id=post.id, effect=1.0))
         db.session.add(PostBookmark(user_id=bob.id, post_id=post.id))
         db.session.execute(read_posts.insert().values(user_id=bob.id, read_post_id=post.id))
-    onion.first_reply = make_post_reply(onion.first_post, bob, 'FIRSTREPLY')
-    for reply in (onion.reply, onion.first_reply):
+    onion_hidden_on_clearnet_onion.first_reply = make_post_reply(onion_hidden_on_clearnet_onion.first_post, bob, 'FIRSTREPLY')
+    for reply in (onion_hidden_on_clearnet_onion.reply, onion_hidden_on_clearnet_onion.first_reply):
         db.session.add(PostReplyBookmark(user_id=bob.id, post_reply_id=reply.id))
     db.session.commit()
-    return onion
+    return onion_hidden_on_clearnet_onion
 
 
 def test_upvotes_bookmarks_and_read_posts_leave_out_onion_content_on_the_first_domain(app, active):
@@ -511,21 +470,21 @@ def test_on_the_onion_they_list_it(app, active):
 # --- the admin panel (review I4) ----------------------------------------------------------------------------------
 
 @pytest.fixture
-def panel(onion):
-    for user in (onion.onion_bob, onion.first_bob):
+def panel(onion_hidden_on_clearnet_onion):
+    for user in (onion_hidden_on_clearnet_onion.onion_bob, onion_hidden_on_clearnet_onion.first_bob):
         db.session.add(UserRegistration(user_id=user.id, answer=f'ANSWER-{user.id}', status=0))
-    for post in (onion.post, onion.in_first, onion.first_post):
+    for post in (onion_hidden_on_clearnet_onion.post, onion_hidden_on_clearnet_onion.in_first, onion_hidden_on_clearnet_onion.first_post):
         post.deleted = True
-    onion.reply.deleted = True
-    for user in (onion.onion_bob, onion.first_bob):
+    onion_hidden_on_clearnet_onion.reply.deleted = True
+    for user in (onion_hidden_on_clearnet_onion.onion_bob, onion_hidden_on_clearnet_onion.first_bob):
         file = File(file_path=f'upload-{user.id}.png')
         db.session.add(file)
         db.session.flush()
         db.session.execute(user_file.insert().values(user_id=user.id, file_id=file.id))
     db.session.commit()
-    grant_permissions(onion.admin, *COMMUNITY_ADMINISTRATION)
-    grant_permission(onion.admin, 'approve registrations')
-    return onion
+    grant_permissions(onion_hidden_on_clearnet_onion.admin, *COMMUNITY_ADMINISTRATION)
+    grant_permission(onion_hidden_on_clearnet_onion.admin, 'approve registrations')
+    return onion_hidden_on_clearnet_onion
 
 
 def test_the_admin_panel_lists_no_onion_row_on_the_first_domain(app, panel):
@@ -577,29 +536,29 @@ def notice(user, notif_type, url, subtype=None, **targets):
 
 
 @pytest.fixture
-def notified(onion):
+def notified(onion_hidden_on_clearnet_onion):
     """One notification of each kind that names a post or reply, about the onion's ONIONPOST and its reply, for the first
     domain's bob, who took part on the onion; and one about FIRSTPOST, the control."""
-    bob, post, reply = onion.first_bob, onion.post, onion.reply
+    bob, post, reply = onion_hidden_on_clearnet_onion.first_bob, onion_hidden_on_clearnet_onion.post, onion_hidden_on_clearnet_onion.reply
     about = dict(post_id=post.id, post_title='ONIONTITLE', comment_id=reply.id, comment_body='ONIONBODY',
-                 parent_reply_body='ONIONBODY', author_user_name=ONION_BOB, author_id=onion.onion_bob.id,
-                 community_name=ONION_ART, community_id=onion.onion_art.id)
-    onion.notices = [notice(bob, kind, f'/post/{post.id}', **about) for kind in (0, 1, 2, 5, 10, 11, 41, 999)]
-    onion.notices += [notice(bob, kind, f'/post/{post.id}/comment/{reply.id}#comment_{reply.id}', **about)
+                 parent_reply_body='ONIONBODY', author_user_name=ONION_BOB, author_id=onion_hidden_on_clearnet_onion.onion_bob.id,
+                 community_name=ONION_ART, community_id=onion_hidden_on_clearnet_onion.onion_art.id)
+    onion_hidden_on_clearnet_onion.notices = [notice(bob, kind, f'/post/{post.id}', **about) for kind in (0, 1, 2, 5, 10, 11, 41, 999)]
+    onion_hidden_on_clearnet_onion.notices += [notice(bob, kind, f'/post/{post.id}/comment/{reply.id}#comment_{reply.id}', **about)
                       for kind in (3, 4, 12)]
-    onion.notices.append(notice(bob, 6, f'/comment/{reply.id}', subtype='comment_mention', **about))
-    onion.notices.append(notice(bob, 20, '/admin/reports', subtype='post_reported', suspect_post_id=post.id,
+    onion_hidden_on_clearnet_onion.notices.append(notice(bob, 6, f'/comment/{reply.id}', subtype='comment_mention', **about))
+    onion_hidden_on_clearnet_onion.notices.append(notice(bob, 20, '/admin/reports', subtype='post_reported', suspect_post_id=post.id,
                                 orig_post_title='ONIONTITLE', orig_post_body='ONIONBODY',
-                                suspect_user_user_name=ONION_BOB, suspect_user_id=onion.onion_bob.id))
-    onion.notices.append(notice(bob, 20, '/admin/reports', subtype='comment_reported', suspect_comment_id=reply.id,
+                                suspect_user_user_name=ONION_BOB, suspect_user_id=onion_hidden_on_clearnet_onion.onion_bob.id))
+    onion_hidden_on_clearnet_onion.notices.append(notice(bob, 20, '/admin/reports', subtype='comment_reported', suspect_comment_id=reply.id,
                                 orig_comment_body='ONIONBODY', suspect_user_user_name=ONION_BOB,
-                                suspect_user_id=onion.onion_bob.id))
-    onion.control = notice(bob, 0, f'/post/{onion.first_post.id}', post_id=onion.first_post.id, post_title='FIRSTPOST',
+                                suspect_user_id=onion_hidden_on_clearnet_onion.onion_bob.id))
+    onion_hidden_on_clearnet_onion.control = notice(bob, 0, f'/post/{onion_hidden_on_clearnet_onion.first_post.id}', post_id=onion_hidden_on_clearnet_onion.first_post.id, post_title='FIRSTPOST',
                            author_user_name='bob', author_id=bob.id, community_name='art',
-                           community_id=onion.first_art.id)
-    onion.control.title = 'FIRSTPOST'
+                           community_id=onion_hidden_on_clearnet_onion.first_art.id)
+    onion_hidden_on_clearnet_onion.control.title = 'FIRSTPOST'
     db.session.commit()
-    return onion
+    return onion_hidden_on_clearnet_onion
 
 
 def test_a_notification_of_a_hidden_post_or_reply_shows_only_the_note_on_the_first_domain(app, notified):
@@ -615,13 +574,13 @@ def test_a_notification_of_a_hidden_post_or_reply_shows_only_the_note_on_the_fir
             assert NOTE in text and not near(text, *hidden), (notification.notif_type, near(text, *hidden))
 
 
-def test_a_report_notification_about_an_onion_account_shows_only_the_note(app, onion):
-    about = notice(onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name=ONION_BOB,
-                   suspect_user_id=onion.onion_bob.id)
-    by_name = notice(onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name=ONION_BOB)
-    control = notice(onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name='bob',
-                     suspect_user_id=onion.first_bob.id)
-    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+def test_a_report_notification_about_an_onion_account_shows_only_the_note(app, onion_hidden_on_clearnet_onion):
+    about = notice(onion_hidden_on_clearnet_onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name=ONION_BOB,
+                   suspect_user_id=onion_hidden_on_clearnet_onion.onion_bob.id)
+    by_name = notice(onion_hidden_on_clearnet_onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name=ONION_BOB)
+    control = notice(onion_hidden_on_clearnet_onion.first_bob, 20, '/admin/reports', subtype='user_reported', suspect_user_user_name='bob',
+                     suspect_user_id=onion_hidden_on_clearnet_onion.first_bob.id)
+    body = get(app, '/notifications', user=onion_hidden_on_clearnet_onion.first_bob).get_data(as_text=True)
     assert body.count(NOTE) == 2   # by its id the whole row is the note; by its name alone, the name is text
     for hidden in (about, by_name):
         assert f'/notification/{hidden.id}/goto' not in body
@@ -629,49 +588,49 @@ def test_a_report_notification_about_an_onion_account_shows_only_the_note(app, o
 
 
 @pytest.mark.parametrize('targets', ['community_id', 'author_id', 'suspect_user_id'])
-def test_a_notification_about_an_onion_community_or_account_shows_only_the_note(app, onion, targets):
-    hidden = {'community_id': onion.onion_art.id, 'author_id': onion.onion_bob.id,
-              'suspect_user_id': onion.onion_bob.id}[targets]
-    notice(onion.first_bob, 999, '/notifications', **{targets: hidden})
-    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+def test_a_notification_about_an_onion_community_or_account_shows_only_the_note(app, onion_hidden_on_clearnet_onion, targets):
+    hidden = {'community_id': onion_hidden_on_clearnet_onion.onion_art.id, 'author_id': onion_hidden_on_clearnet_onion.onion_bob.id,
+              'suspect_user_id': onion_hidden_on_clearnet_onion.onion_bob.id}[targets]
+    notice(onion_hidden_on_clearnet_onion.first_bob, 999, '/notifications', **{targets: hidden})
+    body = get(app, '/notifications', user=onion_hidden_on_clearnet_onion.first_bob).get_data(as_text=True)
     assert body.count(NOTE) == 1 and 'ONIONTITLE' not in body
 
 
-def test_a_notification_from_an_onion_account_by_its_author_column_shows_only_the_note(app, onion):
-    notification = notice(onion.first_bob, 999, '/notifications')
-    notification.author_id = onion.onion_bob.id
+def test_a_notification_from_an_onion_account_by_its_author_column_shows_only_the_note(app, onion_hidden_on_clearnet_onion):
+    notification = notice(onion_hidden_on_clearnet_onion.first_bob, 999, '/notifications')
+    notification.author_id = onion_hidden_on_clearnet_onion.onion_bob.id
     db.session.commit()
-    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+    body = get(app, '/notifications', user=onion_hidden_on_clearnet_onion.first_bob).get_data(as_text=True)
     assert body.count(NOTE) == 1 and 'ONIONTITLE' not in body
 
 
-def test_a_notification_is_judged_by_where_following_it_goes(app, onion):
+def test_a_notification_is_judged_by_where_following_it_goes(app, onion_hidden_on_clearnet_onion):
     """A /c/<name> stored before follow-up F1 is followed by the id in its targets: here, the onion's art, though on
     the first domain the name is its own art."""
-    notification = notice(onion.first_bob, 999, '/c/art', community_id=onion.onion_art.id)
-    notification.targets = {'gen': '0', 'community_id': onion.onion_art.id}
+    notification = notice(onion_hidden_on_clearnet_onion.first_bob, 999, '/c/art', community_id=onion_hidden_on_clearnet_onion.onion_art.id)
+    notification.targets = {'gen': '0', 'community_id': onion_hidden_on_clearnet_onion.onion_art.id}
     db.session.commit()
     with default_request(app):
-        assert notification_hidden(SimpleNamespace(url='/c/art', targets={'community_id': onion.onion_art.id}))
-    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+        assert notification_hidden(SimpleNamespace(url='/c/art', targets={'community_id': onion_hidden_on_clearnet_onion.onion_art.id}))
+    response = Visitor(app, onion_hidden_on_clearnet_onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
     assert response.status_code == 404 and 'Location' not in response.headers
 
 
-def test_a_notification_naming_the_onions_host_is_hidden_and_followed_nowhere(app, onion):
-    notification = notice(onion.first_bob, 999, f'http://{ONION}/post/{onion.first_post.id}')
-    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+def test_a_notification_naming_the_onions_host_is_hidden_and_followed_nowhere(app, onion_hidden_on_clearnet_onion):
+    notification = notice(onion_hidden_on_clearnet_onion.first_bob, 999, f'http://{ONION}/post/{onion_hidden_on_clearnet_onion.first_post.id}')
+    body = get(app, '/notifications', user=onion_hidden_on_clearnet_onion.first_bob).get_data(as_text=True)
     assert body.count(NOTE) == 1 and ONION not in body
-    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+    response = Visitor(app, onion_hidden_on_clearnet_onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
     assert response.status_code == 404 and 'Location' not in response.headers
 
 
-def test_a_notification_is_never_followed_off_this_host(app, onion):
-    notification = notice(onion.first_bob, 999, 'https://elsewhere.example/post/1')
-    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+def test_a_notification_is_never_followed_off_this_host(app, onion_hidden_on_clearnet_onion):
+    notification = notice(onion_hidden_on_clearnet_onion.first_bob, 999, 'https://elsewhere.example/post/1')
+    response = Visitor(app, onion_hidden_on_clearnet_onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
     assert response.status_code == 302 and response.headers['Location'].endswith('/notifications')
-    notification = notice(onion.first_bob, 999, f'https://{FIRST}/post/{onion.first_post.id}')
-    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
-    assert response.headers['Location'] == f'https://{FIRST}/post/{onion.first_post.id}'   # this host's own
+    notification = notice(onion_hidden_on_clearnet_onion.first_bob, 999, f'https://{FIRST}/post/{onion_hidden_on_clearnet_onion.first_post.id}')
+    response = Visitor(app, onion_hidden_on_clearnet_onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+    assert response.headers['Location'] == f'https://{FIRST}/post/{onion_hidden_on_clearnet_onion.first_post.id}'   # this host's own
 
 
 def test_following_a_notification_of_a_hidden_post_answers_404_and_spells_no_onion_name(app, notified):
@@ -682,17 +641,17 @@ def test_following_a_notification_of_a_hidden_post_answers_404_and_spells_no_oni
     assert response.status_code == 302 and response.headers['Location'].endswith(f'/post/{notified.first_post.id}')
 
 
-def test_a_notification_naming_an_onion_account_by_its_handle_is_followed_nowhere(app, onion):
-    notification = notice(onion.first_bob, 13, f'/u/{ONION_BOB}', author_user_name=ONION_BOB,
-                          author_id=onion.onion_bob.id)
-    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+def test_a_notification_naming_an_onion_account_by_its_handle_is_followed_nowhere(app, onion_hidden_on_clearnet_onion):
+    notification = notice(onion_hidden_on_clearnet_onion.first_bob, 13, f'/u/{ONION_BOB}', author_user_name=ONION_BOB,
+                          author_id=onion_hidden_on_clearnet_onion.onion_bob.id)
+    response = Visitor(app, onion_hidden_on_clearnet_onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
     assert response.status_code == 404 and 'Location' not in response.headers
 
 
-def test_a_notification_whose_link_is_no_page_or_none_is_shown_as_it_was(app, onion):
+def test_a_notification_whose_link_is_no_page_or_none_is_shown_as_it_was(app, onion_hidden_on_clearnet_onion):
     for url in ('/nowhere/at/all', None, f'/post/{2 ** 30}'):
-        notice(onion.first_bob, 999, url)
-    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+        notice(onion_hidden_on_clearnet_onion.first_bob, 999, url)
+    body = get(app, '/notifications', user=onion_hidden_on_clearnet_onion.first_bob).get_data(as_text=True)
     assert NOTE not in body and body.count('ONIONTITLE') == 3   # the title these test notifications all carry
 
 
@@ -718,47 +677,47 @@ def test_the_apis_notifications_leave_them_out_on_the_first_domain(app, notified
 
 @pytest.mark.parametrize('path', ['/community/art/feed', '/community/art/ical', '/community/art/wiki/rules', '/u/bob',
                                   '/u/bob/feed', 'preview'])
-def test_on_the_onion_a_logged_out_reader_is_refused_by_the_views_own_gate(app, onion, path):
+def test_on_the_onion_a_logged_out_reader_is_refused_by_the_views_own_gate(app, onion_hidden_on_clearnet_onion, path):
     """The route gate asks only the storefront's part of the rule; a logged-out reader is each view's to refuse (C2)."""
-    path = f'/user/{onion.onion_bob.id}/preview' if path == 'preview' else path
+    path = f'/user/{onion_hidden_on_clearnet_onion.onion_bob.id}/preview' if path == 'preview' else path
     assert get(app, path, host=ONION).status_code == 404, path
 
 
-def test_off_the_onion_its_instance_sticky_post_is_left_out_for_a_signed_in_reader(app, onion):
-    onion.post.instance_sticky = onion.first_post.instance_sticky = True
+def test_off_the_onion_its_instance_sticky_post_is_left_out_for_a_signed_in_reader(app, onion_hidden_on_clearnet_onion):
+    onion_hidden_on_clearnet_onion.post.instance_sticky = onion_hidden_on_clearnet_onion.first_post.instance_sticky = True
     db.session.commit()
-    body = get(app, '/', user=onion.first_bob).get_data(as_text=True)
+    body = get(app, '/', user=onion_hidden_on_clearnet_onion.first_bob).get_data(as_text=True)
     assert 'ONIONPOST' not in body and 'FIRSTPOST' in body
 
 
-def test_a_moderation_action_on_a_hidden_post_is_refused_behind_the_route_gate(app, onion):
+def test_a_moderation_action_on_a_hidden_post_is_refused_behind_the_route_gate(app, onion_hidden_on_clearnet_onion):
     with default_request(app):
         with pytest.raises(NotFound):
-            refuse_invisible_unless_moderating(onion.post)
+            refuse_invisible_unless_moderating(onion_hidden_on_clearnet_onion.post)
 
 
-def test_a_notification_whose_link_cannot_be_parsed_is_shown_and_followed_to_the_list(app, onion):
-    notification = notice(onion.first_bob, 999, 'http://[::1/post/1')
-    body = get(app, '/notifications', user=onion.first_bob).get_data(as_text=True)
+def test_a_notification_whose_link_cannot_be_parsed_is_shown_and_followed_to_the_list(app, onion_hidden_on_clearnet_onion):
+    notification = notice(onion_hidden_on_clearnet_onion.first_bob, 999, 'http://[::1/post/1')
+    body = get(app, '/notifications', user=onion_hidden_on_clearnet_onion.first_bob).get_data(as_text=True)
     assert NOTE not in body and 'ONIONTITLE' in body
-    response = Visitor(app, onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
+    response = Visitor(app, onion_hidden_on_clearnet_onion.first_bob, FIRST).get(f'/notification/{notification.id}/goto')
     assert response.status_code == 302 and response.headers['Location'].endswith('/notifications')
 
 
 # --- an onion account's report names no reporter off the onion (round 3) ------------------------------------------
 
 @pytest.mark.parametrize('template', ['post_report', 'comment_report', 'user_report', 'community_report'])
-def test_a_report_by_an_onion_account_shows_its_reporter_as_the_note_on_the_first_domain(app, onion, template):
-    report = report_of(template, reporter_user_name=ONION_BOB, reporter_id=onion.onion_bob.id,
-                       source_instance_domain=FIRST, suspect_post_id=onion.first_post.id, orig_post_title='a title',
-                       suspect_user_user_name='bob', suspect_user_id=onion.first_bob.id,
-                       suspect_community_name='art', suspect_community_id=onion.first_art.id)
+def test_a_report_by_an_onion_account_shows_its_reporter_as_the_note_on_the_first_domain(app, onion_hidden_on_clearnet_onion, template):
+    report = report_of(template, reporter_user_name=ONION_BOB, reporter_id=onion_hidden_on_clearnet_onion.onion_bob.id,
+                       source_instance_domain=FIRST, suspect_post_id=onion_hidden_on_clearnet_onion.first_post.id, orig_post_title='a title',
+                       suspect_user_user_name='bob', suspect_user_id=onion_hidden_on_clearnet_onion.first_bob.id,
+                       suspect_community_name='art', suspect_community_id=onion_hidden_on_clearnet_onion.first_art.id)
     with default_request(app):
         html = render_template(f'admin/reports/{template}.html', report=report)
-    assert ONION_BOB not in html and f'/user/{onion.onion_bob.id}"' not in html and NOTE in html
+    assert ONION_BOB not in html and f'/user/{onion_hidden_on_clearnet_onion.onion_bob.id}"' not in html and NOTE in html
     with onion_request(app):
         html = render_template(f'admin/reports/{template}.html', report=report)
-    assert f'href="/user/{onion.onion_bob.id}"' in html
+    assert f'href="/user/{onion_hidden_on_clearnet_onion.onion_bob.id}"' in html
 
 
 # --- a page of notifications is checked in one query per model (round 3, N-m4) --------------------------------------
@@ -794,8 +753,8 @@ def queries_in(call):
     return statements
 
 
-def test_checking_notifications_costs_the_same_queries_for_any_number_of_them(app, onion):
-    few, many = many_notices(onion, 4), many_notices(onion, 16)
+def test_checking_notifications_costs_the_same_queries_for_any_number_of_them(app, onion_hidden_on_clearnet_onion):
+    few, many = many_notices(onion_hidden_on_clearnet_onion, 4), many_notices(onion_hidden_on_clearnet_onion, 16)
     def loaded(notifications):   # as a page's one query loads them; nothing else of theirs in the session
         db.session.expire_all()
         return Notification.query.filter(Notification.id.in_([n.id for n in notifications])).order_by(
@@ -811,30 +770,30 @@ def test_checking_notifications_costs_the_same_queries_for_any_number_of_them(ap
     assert len(ours) <= 8, ours   # two per model at most: posts, replies, users, communities
 
 
-def test_the_notification_page_costs_the_same_queries_for_any_number_of_them(app, onion):
+def test_the_notification_page_costs_the_same_queries_for_any_number_of_them(app, onion_hidden_on_clearnet_onion):
     """domain_rows() is memoized in production and not under the tests' null cache, so its reads are left out."""
-    viewer = Visitor(app, onion.first_bob, FIRST)
+    viewer = Visitor(app, onion_hidden_on_clearnet_onion.first_bob, FIRST)
 
     def cost():
         viewer.get('/notifications')   # first, so what a visit writes (the unread count) is written already
         db.session.expire_all()   # nothing of the page's rows already in the session: each is read as in production
         return [statement for statement in queries_in(lambda: viewer.get('/notifications'))
                 if not statement.startswith('SELECT site_domain')]
-    many_notices(onion, 4)
+    many_notices(onion_hidden_on_clearnet_onion, 4)
     cost_few = cost()
-    many_notices(onion, 12)
+    many_notices(onion_hidden_on_clearnet_onion, 12)
     cost_many = cost()
     assert len(cost_few) == len(cost_many), Counter(cost_many) - Counter(cost_few)
 
 
-def test_the_apis_notification_list_costs_the_same_hidden_checks_for_any_number_of_them(app, onion, monkeypatch):
+def test_the_apis_notification_list_costs_the_same_hidden_checks_for_any_number_of_them(app, onion_hidden_on_clearnet_onion, monkeypatch):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
     calls = []
     real = hidden_routes.hidden_notifications
     monkeypatch.setattr('app.api.alpha.utils.user.hidden_notifications',
                         lambda items: calls.append(len(list(items))) or real(items))
-    many_notices(onion, 6)
-    api(app, '/api/alpha/user/notifications?status=All&limit=50', onion.first_bob)
+    many_notices(onion_hidden_on_clearnet_onion, 6)
+    api(app, '/api/alpha/user/notifications?status=All&limit=50', onion_hidden_on_clearnet_onion.first_bob)
     assert calls == [6]   # one batched call for the page, never one per notification
 
 
@@ -890,17 +849,17 @@ def test_the_unread_count_reads_no_notification_row_where_nothing_is_hidden(app,
     assert (len(many.statements), many.rows) == (len(few.statements), few.rows), (few.statements, many.statements)
 
 
-def test_the_unread_count_costs_the_same_queries_for_any_number_where_something_is_hidden(app, alpha):
+def test_the_unread_count_costs_the_same_queries_for_any_number_where_something_is_hidden(app, onion_hidden_on_clearnet_alpha):
     """R4: where something is hidden, one query reads what the batch looks at, and the batch one per model."""
-    many_notices(alpha, 4)
-    alpha.first_bob.unread_notifications = 4
+    many_notices(onion_hidden_on_clearnet_alpha, 4)
+    onion_hidden_on_clearnet_alpha.first_bob.unread_notifications = 4
     db.session.commit()
-    few, answer = unread_count_cost(app, alpha.first_bob)
+    few, answer = unread_count_cost(app, onion_hidden_on_clearnet_alpha.first_bob)
     assert answer['other'] == 2   # the two about the onion count nowhere
-    many_notices(alpha, 12)
-    alpha.first_bob.unread_notifications = 16
+    many_notices(onion_hidden_on_clearnet_alpha, 12)
+    onion_hidden_on_clearnet_alpha.first_bob.unread_notifications = 16
     db.session.commit()
-    many, answer = unread_count_cost(app, alpha.first_bob)
+    many, answer = unread_count_cost(app, onion_hidden_on_clearnet_alpha.first_bob)
     assert answer['other'] == 8
     assert len(many.statements) == len(few.statements), Counter(many.statements) - Counter(few.statements)
 
@@ -938,16 +897,16 @@ COUNTED = {
 
 
 @pytest.mark.parametrize('what', COUNTED)
-def test_a_count_reads_no_row_of_the_notifications_that_have_nothing_to_do_with_the_onion(app, alpha, what):
+def test_a_count_reads_no_row_of_the_notifications_that_have_nothing_to_do_with_the_onion(app, onion_hidden_on_clearnet_alpha, what):
     """I1 (re-review 3): with something hidden, each count read every notification of the account, and the badge made
     that the cost of every page. The queries and the rows read do not grow with the ordinary notifications."""
-    many_notices(alpha, 2)   # one about the onion, one not
-    alpha.first_bob.unread_notifications = 2
+    many_notices(onion_hidden_on_clearnet_alpha, 2)   # one about the onion, one not
+    onion_hidden_on_clearnet_alpha.first_bob.unread_notifications = 2
     db.session.commit()
-    ordinary(alpha, 3)
-    few = cost_of(lambda: COUNTED[what](app, alpha))
-    ordinary(alpha, 30)
-    many = cost_of(lambda: COUNTED[what](app, alpha))
+    ordinary(onion_hidden_on_clearnet_alpha, 3)
+    few = cost_of(lambda: COUNTED[what](app, onion_hidden_on_clearnet_alpha))
+    ordinary(onion_hidden_on_clearnet_alpha, 30)
+    many = cost_of(lambda: COUNTED[what](app, onion_hidden_on_clearnet_alpha))
     assert (len(many.statements), many.rows) == (len(few.statements), few.rows), \
         (Counter(many.statements) - Counter(few.statements), few.rows, many.rows)
 
@@ -960,35 +919,35 @@ def stamped_notice(user, url=None, author=None, **targets):
     return notification
 
 
-def test_a_notification_is_stamped_whenever_it_may_name_an_onion_row(app, alpha):
+def test_a_notification_is_stamped_whenever_it_may_name_an_onion_row(app, onion_hidden_on_clearnet_alpha):
     """The stamp is the counts' narrowing, so it must cover every notification the per-link rule hides on a storefront:
     hidden there implies stamped. One that names only the first domain's rows is not stamped."""
-    bob, onion_bob, onion_reply = alpha.first_bob, alpha.onion_bob, alpha.reply
-    alpha.onion_bob.alt_user_name = 'quietotter'
-    alpha.with_onion, alpha.with_admin = Conversation(user_id=bob.id), Conversation(user_id=bob.id)
-    alpha.with_onion.members.extend([bob, onion_bob])
-    alpha.with_admin.members.extend([bob, alpha.admin])
-    db.session.add_all([alpha.with_onion, alpha.with_admin])
+    bob, onion_bob, onion_reply = onion_hidden_on_clearnet_alpha.first_bob, onion_hidden_on_clearnet_alpha.onion_bob, onion_hidden_on_clearnet_alpha.reply
+    onion_hidden_on_clearnet_alpha.onion_bob.alt_user_name = 'quietotter'
+    onion_hidden_on_clearnet_alpha.with_onion, onion_hidden_on_clearnet_alpha.with_admin = Conversation(user_id=bob.id), Conversation(user_id=bob.id)
+    onion_hidden_on_clearnet_alpha.with_onion.members.extend([bob, onion_bob])
+    onion_hidden_on_clearnet_alpha.with_admin.members.extend([bob, onion_hidden_on_clearnet_alpha.admin])
+    db.session.add_all([onion_hidden_on_clearnet_alpha.with_onion, onion_hidden_on_clearnet_alpha.with_admin])
     db.session.commit()
-    clean = [stamped_notice(bob, f'/post/{alpha.first_post.id}', bob, post_id=alpha.first_post.id),
-             stamped_notice(bob, f'https://{FIRST}/post/{alpha.first_post.id}#comment_1'),
-             stamped_notice(bob, f'/chat/{alpha.with_admin.id}'),
+    clean = [stamped_notice(bob, f'/post/{onion_hidden_on_clearnet_alpha.first_post.id}', bob, post_id=onion_hidden_on_clearnet_alpha.first_post.id),
+             stamped_notice(bob, f'https://{FIRST}/post/{onion_hidden_on_clearnet_alpha.first_post.id}#comment_1'),
+             stamped_notice(bob, f'/chat/{onion_hidden_on_clearnet_alpha.with_admin.id}'),
              stamped_notice(bob, '/admin/reports'),
-             stamped_notice(bob, 'https://elsewhere.example/users/x/statuses/9', community_id=alpha.first_art.id),
+             stamped_notice(bob, 'https://elsewhere.example/users/x/statuses/9', community_id=onion_hidden_on_clearnet_alpha.first_art.id),
              stamped_notice(bob, None)]
     onion_related = [
         stamped_notice(bob, None, onion_bob),                                         # its author
-        stamped_notice(bob, None, post_id=alpha.post.id),                             # its targets
+        stamped_notice(bob, None, post_id=onion_hidden_on_clearnet_alpha.post.id),                             # its targets
         stamped_notice(bob, None, comment_id=onion_reply.id),
         stamped_notice(bob, None, suspect_user_id=onion_bob.id),
-        stamped_notice(bob, None, community_id=alpha.onion_art.id),
-        stamped_notice(bob, f'/post/{alpha.post.id}'),                                # its link
-        stamped_notice(bob, f'/post/{alpha.first_post.id}/comment/{onion_reply.id}'),
+        stamped_notice(bob, None, community_id=onion_hidden_on_clearnet_alpha.onion_art.id),
+        stamped_notice(bob, f'/post/{onion_hidden_on_clearnet_alpha.post.id}'),                                # its link
+        stamped_notice(bob, f'/post/{onion_hidden_on_clearnet_alpha.first_post.id}/comment/{onion_reply.id}'),
         stamped_notice(bob, f'/comment/{onion_reply.id}#comment_{onion_reply.id}'),
-        stamped_notice(bob, f'/chat/{alpha.with_onion.id}'),
+        stamped_notice(bob, f'/chat/{onion_hidden_on_clearnet_alpha.with_onion.id}'),
         stamped_notice(bob, f'/user/{onion_bob.id}'),
-        stamped_notice(bob, f'/community/{alpha.onion_art.id}'),
-        stamped_notice(bob, f'/chat/ban_from_mod/{onion_bob.id}/{alpha.first_art.id}'),
+        stamped_notice(bob, f'/community/{onion_hidden_on_clearnet_alpha.onion_art.id}'),
+        stamped_notice(bob, f'/chat/ban_from_mod/{onion_bob.id}/{onion_hidden_on_clearnet_alpha.first_art.id}'),
         stamped_notice(bob, f'http://{ONION}/post/in-first'),                          # an onion host
         stamped_notice(bob, f'/u/{ONION_BOB}'),                                       # a link it cannot read
         stamped_notice(bob, '/u/quietotter'),
@@ -1008,10 +967,10 @@ def test_a_notification_is_stamped_whenever_it_may_name_an_onion_row(app, alpha)
         assert unstamped == []
 
 
-def test_the_backfill_stamps_existing_notifications_as_new_ones_are(app, alpha):
-    rows = [stamped_notice(alpha.first_bob, f'/post/{alpha.first_post.id}'),
-            stamped_notice(alpha.first_bob, f'/post/{alpha.post.id}'),
-            stamped_notice(alpha.first_bob, f'/u/{ONION_BOB}')]
+def test_the_backfill_stamps_existing_notifications_as_new_ones_are(app, onion_hidden_on_clearnet_alpha):
+    rows = [stamped_notice(onion_hidden_on_clearnet_alpha.first_bob, f'/post/{onion_hidden_on_clearnet_alpha.first_post.id}'),
+            stamped_notice(onion_hidden_on_clearnet_alpha.first_bob, f'/post/{onion_hidden_on_clearnet_alpha.post.id}'),
+            stamped_notice(onion_hidden_on_clearnet_alpha.first_bob, f'/u/{ONION_BOB}')]
     stamps = [row.local_only for row in rows]
     db.session.execute(text('UPDATE notification SET local_only = false'))
     MIGRATION.backfill(db.session.connection(), FIRST)
@@ -1025,28 +984,28 @@ def test_no_notification_is_stamped_where_every_domain_federates(app, monkeypatc
     assert stamped_notice(alice, '/u/whoever').local_only is False
 
 
-def test_the_hidden_counts_by_read_state_cost_the_same_queries_for_any_number(app, onion):
+def test_the_hidden_counts_by_read_state_cost_the_same_queries_for_any_number(app, onion_hidden_on_clearnet_onion):
     """The counts of /user/notifications, read and unread, keep to R4's rule: one query and the batch's."""
     def cost():
         db.session.expire_all()
         with default_request(app):
-            return [statement for statement in queries_in(lambda: hidden_routes.hidden_by_read_state(onion.first_bob.id))
+            return [statement for statement in queries_in(lambda: hidden_routes.hidden_by_read_state(onion_hidden_on_clearnet_onion.first_bob.id))
                     if not statement.startswith('SELECT site_domain')]
-    many_notices(onion, 4)
+    many_notices(onion_hidden_on_clearnet_onion, 4)
     few = cost()
-    for notification in many_notices(onion, 12)[::3]:
+    for notification in many_notices(onion_hidden_on_clearnet_onion, 12)[::3]:
         notification.read = True
     db.session.commit()
     many = cost()
     assert len(few) == len(many), Counter(many) - Counter(few)
     with default_request(app):
-        assert hidden_routes.hidden_by_read_state(onion.first_bob.id) == Counter({False: 6, True: 2})
+        assert hidden_routes.hidden_by_read_state(onion_hidden_on_clearnet_onion.first_bob.id) == Counter({False: 6, True: 2})
 
 
-def test_the_rows_the_batch_reads_stay_for_the_pages_own_lookups(app, onion):
+def test_the_rows_the_batch_reads_stay_for_the_pages_own_lookups(app, onion_hidden_on_clearnet_onion):
     """N2 (re-review 3): the batch reads the rows its notifications name so target_link finds them in the session; the
     identity map holds rows weakly, so they are kept for the request, or each is read again."""
-    notices = many_notices(onion, 6)
+    notices = many_notices(onion_hidden_on_clearnet_onion, 6)
     post_ids = [n.targets['post_id'] for n in notices if n.local_only]   # the batch reads only the stamped ones'
     assert len(post_ids) == 3
     ids = [n.id for n in notices]
@@ -1065,15 +1024,15 @@ def a_notice(url, **targets):
     return SimpleNamespace(url=url, targets=targets, author_id=None)
 
 
-def test_the_batch_reads_each_kind_of_link_as_the_gate_does(app, onion):
-    onion.onion_bob.alt_user_name = 'quietotter'
-    onion.with_onion, onion.with_admin = Conversation(user_id=onion.first_bob.id), Conversation(user_id=onion.first_bob.id)
-    onion.with_onion.members.extend([onion.first_bob, onion.onion_bob])
-    onion.with_admin.members.extend([onion.first_bob, onion.admin])
-    db.session.add_all([onion.with_onion, onion.with_admin])
+def test_the_batch_reads_each_kind_of_link_as_the_gate_does(app, onion_hidden_on_clearnet_onion):
+    onion_hidden_on_clearnet_onion.onion_bob.alt_user_name = 'quietotter'
+    onion_hidden_on_clearnet_onion.with_onion, onion_hidden_on_clearnet_onion.with_admin = Conversation(user_id=onion_hidden_on_clearnet_onion.first_bob.id), Conversation(user_id=onion_hidden_on_clearnet_onion.first_bob.id)
+    onion_hidden_on_clearnet_onion.with_onion.members.extend([onion_hidden_on_clearnet_onion.first_bob, onion_hidden_on_clearnet_onion.onion_bob])
+    onion_hidden_on_clearnet_onion.with_admin.members.extend([onion_hidden_on_clearnet_onion.first_bob, onion_hidden_on_clearnet_onion.admin])
+    db.session.add_all([onion_hidden_on_clearnet_onion.with_onion, onion_hidden_on_clearnet_onion.with_admin])
     db.session.commit()
-    message = ChatMessage(conversation_id=onion.with_onion.id, sender_id=onion.onion_bob.id,
-                          recipient_id=onion.first_bob.id, body='x', body_html='<p>x</p>')
+    message = ChatMessage(conversation_id=onion_hidden_on_clearnet_onion.with_onion.id, sender_id=onion_hidden_on_clearnet_onion.onion_bob.id,
+                          recipient_id=onion_hidden_on_clearnet_onion.first_bob.id, body='x', body_html='<p>x</p>')
     db.session.add(message)
     db.session.commit()
     cases = [
@@ -1084,10 +1043,10 @@ def test_the_batch_reads_each_kind_of_link_as_the_gate_does(app, onion):
         ('/u/quietotter', {}, True),                                     # an onion account's alternate name
         ('/u/nobodyatall', {}, False),
         (f'/u/{ONION_BOB}', {}, True),                                   # a handle on the onion
-        (f'/chat/{onion.with_onion.id}', {}, True),                      # a conversation with the onion's bob
-        (f'/chat/{onion.with_admin.id}', {}, False),
+        (f'/chat/{onion_hidden_on_clearnet_onion.with_onion.id}', {}, True),                      # a conversation with the onion's bob
+        (f'/chat/{onion_hidden_on_clearnet_onion.with_admin.id}', {}, False),
         (f'/private_message/{message.id}', {}, True),
-        (f'/admin/instance/{onion.onion_bob.instance_id}/edit', {}, True),   # the onion's instance row
+        (f'/admin/instance/{onion_hidden_on_clearnet_onion.onion_bob.instance_id}/edit', {}, True),   # the onion's instance row
         ('/admin/instance/1/edit', {}, False),
         ('/c/art', {}, False),                                           # a stored name: the default domain's
         (f'/u/{ONION_BOB}', {'suspect_user_id': None}, True),            # a stored handle on the onion
@@ -1099,7 +1058,7 @@ def test_the_batch_reads_each_kind_of_link_as_the_gate_does(app, onion):
     assert flags == [expected for *_, expected in cases], [(url, flag) for (url, *_), flag in zip(cases, flags)]
 
 
-def test_a_stored_bare_name_is_hidden_where_the_default_domain_is(app, onion, monkeypatch):
+def test_a_stored_bare_name_is_hidden_where_the_default_domain_is(app, onion_hidden_on_clearnet_onion, monkeypatch):
     """Only where the default domain itself does not federate and this is another storefront; its rows are then
     hidden, and a stored bare name is one of them."""
     monkeypatch.setattr(hidden_routes, 'hidden_default_domain', lambda: True)

@@ -29,18 +29,6 @@ pytestmark = pytest.mark.usefixtures('site')
 
 
 @pytest.fixture
-def onion(db_session):
-    if SiteDomain.query.filter_by(domain=CANONICAL).first() is None:   # the canonical host stays served
-        db.session.add(SiteDomain(domain=CANONICAL, scheme='https', is_default=True))
-    db.session.add(SiteDomain(domain=ONION, scheme='http', federates=False))
-    db.session.commit()
-    clear_domain_cache()
-    cache.clear()
-    yield ONION
-    clear_domain_cache()
-
-
-@pytest.fixture
 def restores_the_shared_logger():
     logger = logging.getLogger('app')
     before = list(logger.handlers)
@@ -59,7 +47,7 @@ def get_json(client, path, host):
 
 
 @pytest.mark.parametrize('host, origin', [(ONION, f'http://{ONION}'), (CANONICAL, f'https://{CANONICAL}')])
-def test_openapi_servers_follow_the_storefront(onion, restores_the_shared_logger, host, origin):
+def test_openapi_servers_follow_the_storefront(storefront_api_onion, restores_the_shared_logger, host, origin):
     docs = create_app(type('DocsConfig', (TestConfig,), {'SERVE_API_DOCS': True}))
     servers = get_json(docs.test_client(), '/api/alpha/swagger.json', host)['servers']
     assert servers[0] == {'url': origin, 'description': 'This instance'}
@@ -71,7 +59,7 @@ def test_openapi_servers_follow_the_storefront(onion, restores_the_shared_logger
 
 
 @pytest.fixture
-def api(app, onion, api_baseline, monkeypatch):
+def api(app, storefront_api_onion, api_baseline, monkeypatch):
     g.admin_ids = []
     g.site = db.session.get(Site, 1)
     monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
@@ -101,7 +89,7 @@ def test_api_post_view_on_storefront(app, api):
 
 
 @pytest.mark.parametrize('host, origin', [(ONION, f'http://{ONION}'), (CANONICAL, f'https://{CANONICAL}')])
-def test_site_view_icon_follows_storefront_and_actor_id_stays_canonical(app, onion, monkeypatch, host, origin):
+def test_site_view_icon_follows_storefront_and_actor_id_stays_canonical(app, storefront_api_onion, monkeypatch, host, origin):
     monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
     g.site = db.session.get(Site, 1)
     body = get_json(app.test_client(), '/api/alpha/site', host)['site']
@@ -109,7 +97,7 @@ def test_site_view_icon_follows_storefront_and_actor_id_stays_canonical(app, oni
     assert body['actor_id'] == f'https://{CANONICAL}/'
 
 
-def test_instance_chooser_logo_follows_storefront(app, onion, monkeypatch):
+def test_instance_chooser_logo_follows_storefront(app, storefront_api_onion, monkeypatch):
     monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
     g.site = db.session.get(Site, 1)
     with patch('app.api.alpha.routes.get_setting', return_value=True):
@@ -121,7 +109,7 @@ def test_instance_chooser_logo_follows_storefront(app, onion, monkeypatch):
     (f'https://{CANONICAL}', f'http://{ONION}'),           # this instance's own origin follows the storefront
     ('https://stream.example', 'https://stream.example'),  # a separate stream host is not ours to move
 ])
-def test_stream_urls_relative_or_storefront(app, onion, configured, expected):
+def test_stream_urls_relative_or_storefront(app, storefront_api_onion, configured, expected):
     user = make_user(make_instance(CANONICAL, software='piefed'), 'streamer', local=True)
     client = app.test_client()
     with client.session_transaction(base_url=f'http://{ONION}') as session:
@@ -135,7 +123,7 @@ def test_stream_urls_relative_or_storefront(app, onion, configured, expected):
         assert f'{configured}/notifications/stream' not in text
 
 
-def test_add_local_hint_names_the_storefront(app, onion):
+def test_add_local_hint_names_the_storefront(app, storefront_api_onion):
     user = make_user(make_instance(CANONICAL, software='piefed'), 'maker', local=True)
     user.verified = True
     user.private_key = 'k'
@@ -158,7 +146,7 @@ UPLOADED = f'https://{CANONICAL}/static/media/posts/zz/yy/zzyyuploaded.png'
 
 
 @pytest.fixture
-def uploader(app, onion, monkeypatch):
+def uploader(app, storefront_api_onion, monkeypatch):
     """A logged-in local user owning one uploaded File, stored canonical as process_upload stores it."""
     monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
     g.site = db.session.get(Site, 1)

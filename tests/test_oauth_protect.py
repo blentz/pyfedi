@@ -11,7 +11,6 @@ from app.models import utcnow
 from app.oauth_server import tokens
 from app.oauth_server.protect import require_oauth
 from tests.factories import make_user
-from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
 
 @pytest.fixture

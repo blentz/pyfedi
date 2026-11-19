@@ -79,26 +79,6 @@ def able_to_post(user):
     return user
 
 
-@pytest.fixture
-def poster(app, db_session):
-    local = instance()
-    founder = make_user(local, 'founder', local=True)
-    assert founder.id == 1  # fact 347
-    author = make_user(local, 'author', local=True)
-    able_to_post(author)
-    community = make_community('general')
-    db.session.add(Language(code='und', name='Undetermined'))
-    english = Language(code='en', name='English')
-    db.session.add(english)
-    db.session.commit()
-    make_community_member(author, community)
-    db.session.commit()
-
-    client = app.test_client()
-    login(client, author)
-    return client, csrf(app, client), community, author, english
-
-
 def _post_payload(token, english, community, **overrides):
     """`communities` is a DataRequired SelectField fed from
     `possible_communities()`, and `timezone` is one fed from `get_timezones()`
@@ -132,7 +112,7 @@ def _private_post(author_id, title='Private plans', body='the secret body'):
 
 
 def test_a_private_posts_content_is_not_leaked_through_the_crosspost_form(
-        app, poster):
+        app, community_add_post_poster):
     """D998's pin, inverted.
 
     The cross-post block loads `db.session.get(Post, request.args.get('source'))`
@@ -150,7 +130,7 @@ def test_a_private_posts_content_is_not_leaked_through_the_crosspost_form(
     to the post page itself -- the check existed, one blueprint over, and this
     path never called it.
     """
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     secret, hidden = _private_post(author_id=1)
     assert not secret.is_member(author)
 
@@ -164,10 +144,10 @@ def test_a_private_posts_content_is_not_leaked_through_the_crosspost_form(
 
 
 def test_a_member_of_the_private_community_can_still_crosspost_from_it(
-        app, poster):
+        app, community_add_post_poster):
     """The control. A check that refuses everyone is not the fix -- somebody
     who is in the private community is exactly who cross-posting is for."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     secret, hidden = _private_post(author_id=author.id)
     make_community_member(author, secret)
     db.session.commit()
@@ -183,10 +163,10 @@ def test_a_member_of_the_private_community_can_still_crosspost_from_it(
     assert form.link_url.data == 'https://secret.example/x'
 
 
-def test_crossposting_from_a_public_post_still_works(app, poster):
+def test_crossposting_from_a_public_post_still_works(app, community_add_post_poster):
     """The ordinary case, which is most of them: a public community's post is
     copied into the form for another community."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     elsewhere = make_community('elsewhere')
     db.session.commit()
     source = Post(user_id=author.id, community_id=elsewhere.id,
@@ -208,10 +188,10 @@ def test_crossposting_from_a_public_post_still_works(app, poster):
     assert form.link_url.data == 'https://example.com/article'
 
 
-def test_crossposting_a_video_copies_the_url_into_the_video_field(app, poster):
+def test_crossposting_a_video_copies_the_url_into_the_video_field(app, community_add_post_poster):
     """`elif post_type == POST_TYPE_VIDEO:` -- the same block fills a different
     field, and a row for only the link type would not notice."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     elsewhere = make_community('elsewhere')
     db.session.commit()
     source = Post(user_id=author.id, community_id=elsewhere.id,
@@ -227,10 +207,10 @@ def test_crossposting_a_video_copies_the_url_into_the_video_field(app, poster):
     assert render.call_args.kwargs['form'].video_url.data == 'https://example.com/v.mp4'
 
 
-def test_crossposting_a_deleted_post_is_a_404(app, poster):
+def test_crossposting_a_deleted_post_is_a_404(app, community_add_post_poster):
     """`if source_post.deleted:` -- a deleted post's content must not come back
     through this door either."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     elsewhere = make_community('elsewhere')
     db.session.commit()
     source = Post(user_id=author.id, community_id=elsewhere.id, title='Gone',
@@ -250,11 +230,11 @@ def test_crossposting_a_deleted_post_is_a_404(app, poster):
 # --------------------------------------------------------------------------
 
 
-def test_a_source_id_that_does_not_exist_is_a_404(app, poster):
+def test_a_source_id_that_does_not_exist_is_a_404(app, community_add_post_poster):
     """D992's shape, fifth instance in this file -- and the first on a QUERY
     PARAMETER rather than a path segment. A stale cross-post link was
     `AttributeError: 'NoneType' object has no attribute 'deleted'`."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     response = client.get(url(app, 'community.add_post', actor=community.name,
                               type='link') + '?source=999999')
@@ -262,11 +242,11 @@ def test_a_source_id_that_does_not_exist_is_a_404(app, poster):
     assert response.status_code == 404
 
 
-def test_an_unresolvable_community_is_a_404(app, poster):
+def test_an_unresolvable_community_is_a_404(app, community_add_post_poster):
     """D992's fourth instance: `actor_to_community` returns None and the next
     lines read `community.default_post_type` and `community.nsfw`. Measured as
     `AttributeError: 'NoneType' object has no attribute 'nsfw'`."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     response = client.get(url(app, 'community.add_post',
                               actor='no-such-community', type='discussion'))
@@ -274,10 +254,10 @@ def test_an_unresolvable_community_is_a_404(app, poster):
     assert response.status_code == 404
 
 
-def test_an_unknown_post_type_is_a_404(app, poster):
+def test_an_unknown_post_type_is_a_404(app, community_add_post_poster):
     """The `else: abort(404)` on the type dispatch -- `type` comes from the
     URL."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     response = client.get(url(app, 'community.add_post', actor=community.name,
                               type='not-a-type'))
@@ -290,7 +270,7 @@ def test_an_unknown_post_type_is_a_404(app, poster):
 # --------------------------------------------------------------------------
 
 
-def test_a_failed_post_does_not_put_the_exception_on_the_page(app, poster,
+def test_a_failed_post_does_not_put_the_exception_on_the_page(app, community_add_post_poster,
                                                               caplog):
     """D1000's pin, inverted.
 
@@ -299,7 +279,7 @@ def test_a_failed_post_does_not_put_the_exception_on_the_page(app, poster,
     straight onto the page. Same class as D895 and D950. Fact 393: `caplog`,
     not a patched `current_app`.
     """
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     secret = '/srv/piefed/media/tmp/upload-4f2a.png: Permission denied'
 
     with patch('app.shared.post.make_post', side_effect=RuntimeError(secret)):
@@ -323,7 +303,7 @@ def test_a_failed_post_does_not_put_the_exception_on_the_page(app, poster,
 # --------------------------------------------------------------------------
 
 
-def test_a_non_moderator_cannot_sticky_their_own_post(app, poster):
+def test_a_non_moderator_cannot_sticky_their_own_post(app, community_add_post_poster):
     """`render_kw={'disabled': True}` is a RENDERING hint -- a client can
     submit the field regardless -- so this row exists to record that the real
     check is elsewhere and works.
@@ -334,7 +314,7 @@ def test_a_non_moderator_cannot_sticky_their_own_post(app, poster):
     `add_post` alone would reasonably conclude this was a bypass, which is what
     happened while writing this slice.
     """
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     assert not community.is_moderator(author)
 
     with patch('app.community.routes.render_template', return_value='rendered'):
@@ -349,11 +329,11 @@ def test_a_non_moderator_cannot_sticky_their_own_post(app, poster):
     assert post.sticky is False
 
 
-def test_a_moderator_can_sticky_their_own_post(app, poster):
+def test_a_moderator_can_sticky_their_own_post(app, community_add_post_poster):
     """The other half, and the reason the field exists at all."""
     from app.models import CommunityMember
 
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     # The fixture already made them a member -- promote that row rather than
     # inserting a second, which the (user_id, community_id) primary key
     # refuses.
@@ -383,10 +363,10 @@ def test_a_moderator_can_sticky_their_own_post(app, poster):
 
 @pytest.mark.parametrize('type_name', ['discussion', 'link', 'image', 'video',
                                        'poll', 'event'])
-def test_each_post_type_renders_its_own_form(app, poster, type_name):
+def test_each_post_type_renders_its_own_form(app, community_add_post_poster, type_name):
     """The six-way type dispatch. Each arm builds a different form class, and
     a row for one says nothing about the others."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     with patch('app.community.routes.render_template', return_value='rendered') as render:
         response = client.get(url(app, 'community.add_post',
@@ -396,10 +376,10 @@ def test_each_post_type_renders_its_own_form(app, poster, type_name):
     assert render.call_args.kwargs['form'] is not None
 
 
-def test_the_default_post_type_is_used_when_none_is_given(app, poster):
+def test_the_default_post_type_is_used_when_none_is_given(app, community_add_post_poster):
     """`if type is None: type = community.default_post_type or 'link'` -- the
     community chooses what its new-post page opens on."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     community.default_post_type = 'discussion'
     db.session.commit()
 
@@ -410,9 +390,9 @@ def test_the_default_post_type_is_used_when_none_is_given(app, poster):
     assert render.call_args.kwargs['post_type'] == POST_TYPE_ARTICLE
 
 
-def test_a_community_with_no_default_falls_back_to_link(app, poster):
+def test_a_community_with_no_default_falls_back_to_link(app, community_add_post_poster):
     """The `or 'link'` half."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     community.default_post_type = None
     db.session.commit()
 
@@ -425,12 +405,12 @@ def test_a_community_with_no_default_falls_back_to_link(app, poster):
 
 @pytest.mark.parametrize('column, field', [('nsfw', 'nsfw'), ('nsfl', 'nsfl'),
                                            ('ai_generated', 'ai_generated')])
-def test_a_communitys_content_flags_are_forced_on(app, poster, column, field):
+def test_a_communitys_content_flags_are_forced_on(app, community_add_post_poster, column, field):
     """A community marked NSFW, NSFL or AI-generated pre-sets and disables the
     matching checkbox, so every post inherits it. The `render_kw` disable is a
     rendering hint only -- `make_post` is what actually applies `post.nsfw =
     nsfw or post.community.nsfw`."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     setattr(community, column, True)
     db.session.commit()
 
@@ -444,12 +424,12 @@ def test_a_communitys_content_flags_are_forced_on(app, poster, column, field):
         form.nsfw.render_kw == {'disabled': True}
 
 
-def test_a_community_with_flair_offers_it(app, poster):
+def test_a_community_with_flair_offers_it(app, community_add_post_poster):
     """`if len(flair_choices): ... else: del form.flair` -- a community with no
     flair must not render an empty select, and one with flair must offer it."""
     from app.models import CommunityFlair
 
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     db.session.add(CommunityFlair(community_id=community.id, flair='Question',
                                   text_color='#000000',
                                   background_color='#ffffff'))
@@ -464,12 +444,12 @@ def test_a_community_with_flair_offers_it(app, poster):
     assert 'Question' in [choice.label for choice in form.flair.choices]
 
 
-def test_a_community_without_flair_drops_the_field(app, poster):
+def test_a_community_without_flair_drops_the_field(app, community_add_post_poster):
     """The `del form.flair` arm. WTForms' `Form.__delattr__` pops the field out
     of `_fields` and then sets the attribute to None, so the field is gone from
     rendering while `hasattr(form, 'flair')` is still True -- the assertion has
     to be on the value, not on the attribute."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     with patch('app.community.routes.render_template', return_value='rendered') as render:
         client.get(url(app, 'community.add_post', actor=community.name,
@@ -480,10 +460,10 @@ def test_a_community_without_flair_drops_the_field(app, poster):
     assert 'flair' not in form._fields
 
 
-def test_a_poll_opens_with_a_three_day_default(app, poster):
+def test_a_poll_opens_with_a_three_day_default(app, community_add_post_poster):
     """`if post_type == POST_TYPE_POLL: form.finish_in.data = '3d'` -- a poll
     with no end date never closes."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     with patch('app.community.routes.render_template', return_value='rendered') as render:
         client.get(url(app, 'community.add_post', actor=community.name,
@@ -492,9 +472,9 @@ def test_a_poll_opens_with_a_three_day_default(app, poster):
     assert render.call_args.kwargs['form'].finish_in.data == '3d'
 
 
-def test_an_event_opens_online_in_the_users_timezone(app, poster):
+def test_an_event_opens_online_in_the_users_timezone(app, community_add_post_poster):
     """The event arm's two defaults."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     author.timezone = 'Europe/London'
     db.session.commit()
 
@@ -509,10 +489,10 @@ def test_an_event_opens_online_in_the_users_timezone(app, poster):
 
 @pytest.mark.parametrize('owner, attribute', [('community', 'posting_warning'),
                                               ('instance', 'posting_warning')])
-def test_a_posting_warning_is_shown(app, poster, owner, attribute):
+def test_a_posting_warning_is_shown(app, community_add_post_poster, owner, attribute):
     """Both warnings -- the community's and its instance's. They are separate
     fields and a row for one would not notice the other going missing."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     target = community if owner == 'community' else community.instance
     setattr(target, attribute, 'Read the rules first')
     db.session.commit()
@@ -527,11 +507,11 @@ def test_a_posting_warning_is_shown(app, poster, owner, attribute):
 
 @pytest.mark.parametrize('type_name, field', [('link', 'link_url'),
                                               ('video', 'video_url')])
-def test_a_link_query_parameter_prefills_the_form(app, poster, type_name,
+def test_a_link_query_parameter_prefills_the_form(app, community_add_post_poster, type_name,
                                                   field):
     """`request.args.get('link')` -- the bookmarklet and share targets arrive
     this way, with the title alongside."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     with patch('app.community.routes.render_template', return_value='rendered') as render:
         client.get(url(app, 'community.add_post', actor=community.name,
@@ -543,11 +523,11 @@ def test_a_link_query_parameter_prefills_the_form(app, poster, type_name,
     assert form.title.data == 'Shared'
 
 
-def test_a_post_in_an_unexpected_language_warns(app, poster):
+def test_a_post_in_an_unexpected_language_warns(app, community_add_post_poster):
     """`if form.language_id.data not in community.language_ids()` -- the
     community lists the languages it wants, and the warning is advisory rather
     than a refusal."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     french = Language(code='fr', name='French')
     db.session.add(french)
     db.session.commit()
@@ -565,11 +545,11 @@ def test_a_post_in_an_unexpected_language_warns(app, poster):
     assert 'prefers posts in' in messages
 
 
-def test_a_community_that_only_accepts_undetermined_does_not_warn(app, poster):
+def test_a_community_that_only_accepts_undetermined_does_not_warn(app, community_add_post_poster):
     """`if not (len(...) == 1 and ...[0] == 1)` -- language id 1 is always
     "Undetermined", and a community that lists only that has expressed no
     preference at all."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     with patch('app.community.routes.flash') as flashed:
         with patch('app.community.routes.render_template', return_value='rendered'):
@@ -580,8 +560,8 @@ def test_a_community_that_only_accepts_undetermined_does_not_warn(app, poster):
     assert 'prefers posts in' not in messages
 
 
-def test_a_banned_user_cannot_post(app, poster):
-    client, token, community, author, english = poster
+def test_a_banned_user_cannot_post(app, community_add_post_poster):
+    client, token, community, author, english = community_add_post_poster
     author.banned = True
     db.session.commit()
 
@@ -592,10 +572,10 @@ def test_a_banned_user_cannot_post(app, poster):
     assert render.call_args_list == []
 
 
-def test_a_user_banned_from_posting_still_gets_the_form(app, poster):
+def test_a_user_banned_from_posting_still_gets_the_form(app, community_add_post_poster):
     """Since v1.8.10 (778fb654, the post approval queue) `ban_posts` no longer refuses the form: the account may
     post, and make_post holds what it posts for review (POST_STATUS_REVIEWING)."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     author.ban_posts = True
     db.session.commit()
 
@@ -606,11 +586,11 @@ def test_a_user_banned_from_posting_still_gets_the_form(app, poster):
     assert render.call_args.args[0] == 'community/add_post.html'
 
 
-def test_a_post_held_for_review_tells_its_author_and_asks_the_admins_and_staff(app, poster):
+def test_a_post_held_for_review_tells_its_author_and_asks_the_admins_and_staff(app, community_add_post_poster):
     """v1.8.10's approval queue: a `ban_posts` account's post is held (POST_STATUS_REVIEWING), its author is told,
     and every admin -- and, where staff may approve registrations, every staff member -- is notified with a link to
     the queue (notify_admins_of_post_needing_approval)."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     author.ban_posts = True
     admin, staffer = make_user(author.instance, 'boss', local=True), make_user(author.instance, 'helper', local=True)
     admin.roles.append(Role.admin() or Role(name='Admin', built_in=True))
@@ -641,11 +621,11 @@ def test_a_post_held_for_review_tells_its_author_and_asks_the_admins_and_staff(a
     assert 'new_post_for_approval' in hooked
 
 
-def test_a_successful_post_clears_the_draft_cookies(app, poster):
+def test_a_successful_post_clears_the_draft_cookies(app, community_add_post_poster):
     """The route keeps the title and body in cookies while the user switches
     post type, and has to clear them on success or the next new post starts
     pre-filled with the last one."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     with patch('app.community.routes.render_template', return_value='rendered'):
         response = client.post(url(app, 'community.add_post',
@@ -661,10 +641,10 @@ def test_a_successful_post_clears_the_draft_cookies(app, poster):
 
 
 def test_posting_to_a_community_chosen_in_the_form_uses_that_community(app,
-                                                                        poster):
+                                                                        community_add_post_poster):
     """`if request.form.get('communities')` -- the form has a community
     selector, so the POST target can differ from the actor in the URL."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     elsewhere = make_community('elsewhere')
     db.session.commit()
     make_community_member(author, elsewhere)
@@ -722,12 +702,12 @@ def _type_extras(type_name):
     return {}
 
 
-def test_a_post_without_a_community_field_falls_back_to_the_actor(app, poster):
+def test_a_post_without_a_community_field_falls_back_to_the_actor(app, community_add_post_poster):
     """The POST branch reads `request.form.get('communities')` first and only
     falls back to the actor in the URL when it is absent. `communities` carries
     DataRequired, so the form refuses the submission -- but the fallback runs
     before validation, and a `None` community there is D999's shape again."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     payload = _post_payload(token, english, community)
     del payload['communities']
 
@@ -742,12 +722,12 @@ def test_a_post_without_a_community_field_falls_back_to_the_actor(app, poster):
 
 
 @pytest.mark.parametrize('type_name', ['image', 'event', 'video'])
-def test_the_upload_types_pass_the_file_through(app, poster, type_name):
+def test_the_upload_types_pass_the_file_through(app, community_add_post_poster, type_name):
     """`if type == 'image' or type == 'event' or media_upload: uploaded_file =
     request.files['image_file']` -- three of the six types carry an upload and
     the other three must pass None, or `make_post` stores nothing for a post
     the user attached a file to."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     payload = _post_payload(token, english, community, title='With a file',
                             **_type_extras(type_name))
     payload['image_file'] = (io.BytesIO(b'not really a png'), 'x.png')
@@ -765,11 +745,11 @@ def test_the_upload_types_pass_the_file_through(app, poster, type_name):
     assert make.call_args.kwargs['uploaded_file'].filename == 'x.png'
 
 
-def test_a_before_post_create_plugin_can_rewrite_the_title_and_body(app, poster):
+def test_a_before_post_create_plugin_can_rewrite_the_title_and_body(app, community_add_post_poster):
     """D811, fixed (owner ruling 2026-09-30): the web call site now uses
     `fire_hook`'s returned title and content for the post it creates, as the
     API's does, rather than discarding them."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     def rewrite(hook_name, data=None, **kwargs):
         if hook_name != 'before_post_create':
@@ -789,11 +769,11 @@ def test_a_before_post_create_plugin_can_rewrite_the_title_and_body(app, poster)
     assert form.body.data == 'rewritten body'
 
 
-def test_a_video_post_without_upload_permission_gets_no_file(app, poster):
+def test_a_video_post_without_upload_permission_gets_no_file(app, community_add_post_poster):
     """`media_upload = type == media_kind_for(community) and can_upload_media(...)` -- the permission is half
     of the condition, so an account without it posts a video by URL only and
     the file it attached is dropped (spec A13.6)."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     payload = _post_payload(token, english, community, title='No video upload',
                             **_type_extras('video'))
     payload['image_file'] = (io.BytesIO(b'not really a png'), 'x.png')
@@ -811,9 +791,9 @@ def test_a_video_post_without_upload_permission_gets_no_file(app, poster):
 
 
 @pytest.mark.parametrize('type_name', ['discussion', 'link', 'poll'])
-def test_the_other_types_pass_no_file(app, poster, type_name):
+def test_the_other_types_pass_no_file(app, community_add_post_poster, type_name):
     """The `else: uploaded_file = None` arm, for each type that reaches it."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         with patch('app.community.routes.render_template', return_value='rendered') as render:
@@ -828,12 +808,12 @@ def test_the_other_types_pass_no_file(app, poster, type_name):
     assert make.call_args.kwargs['uploaded_file'] is None
 
 
-def test_a_failure_is_logged_and_the_reason_is_not_shown(app, poster):
+def test_a_failure_is_logged_and_the_reason_is_not_shown(app, community_add_post_poster):
     """D1000. `make_post` reaches image processing, remote fetches and the
     plugin hooks, so `str(ex)` can name a filesystem path, a relay host or a
     library internal. The user gets a fixed message; the detail goes to the
     log."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     with patch('app.shared.post.make_post',
                side_effect=RuntimeError('/srv/piefed/media/tmp/secret.png')):
@@ -852,10 +832,10 @@ def test_a_failure_is_logged_and_the_reason_is_not_shown(app, poster):
     assert 'server log' in shown
 
 
-def test_a_failure_in_debug_mode_raises(app, poster):
+def test_a_failure_in_debug_mode_raises(app, community_add_post_poster):
     """`if current_app.debug: raise ex` -- a developer wants the traceback, and
     the redirect below would swallow it."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     app.debug = True
     try:
         with patch('app.shared.post.make_post',
@@ -875,12 +855,12 @@ def test_a_failure_in_debug_mode_raises(app, poster):
 # --------------------------------------------------------------------------
 
 
-def test_an_instance_that_refuses_local_image_posts_refuses_them(app, poster):
+def test_an_instance_that_refuses_local_image_posts_refuses_them(app, community_add_post_poster):
     """D1001. `CreateImageForm.validate` appended 'Images cannot be posted to
     local communities.' to `communities.errors` and then returned True, so the
     site setting recorded a complaint and accepted the image anyway. Measured
     before the fix: `make_post called? True`."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     site = db.session.get(Site, 1)
     site.allow_local_image_posts = False
     db.session.commit()
@@ -901,10 +881,10 @@ def test_an_instance_that_refuses_local_image_posts_refuses_them(app, poster):
     assert render.call_args.kwargs['form'].communities.errors != []
 
 
-def test_an_instance_that_allows_local_image_posts_accepts_them(app, poster):
+def test_an_instance_that_allows_local_image_posts_accepts_them(app, community_add_post_poster):
     """The other side of D1001's condition. A `return False` that fires
     unconditionally would pass the row above."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     site = db.session.get(Site, 1)
     site.allow_local_image_posts = True
     db.session.commit()
@@ -925,12 +905,12 @@ def test_an_instance_that_allows_local_image_posts_accepts_them(app, poster):
     ('language_id', 'french', 'english'),
     ('timezone', 'Europe/London', 'Europe/Paris'),
 ])
-def test_a_refused_post_keeps_what_was_typed(app, poster, field, submitted,
+def test_a_refused_post_keeps_what_was_typed(app, community_add_post_poster, field, submitted,
                                              stored):
     """D1002 -- D907's shape, the fifth instance. The POST branch ended with
     `else:` rather than `elif request.method == 'GET':`, so a submission the
     form refused was overwritten from the database before being redisplayed."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     french = Language(code='fr', name='French')
     db.session.add(french)
     db.session.commit()
@@ -954,11 +934,11 @@ def test_a_refused_post_keeps_what_was_typed(app, poster, field, submitted,
     assert getattr(form, field).data == expected
 
 
-def test_a_refused_post_keeps_a_cleared_checkbox(app, poster):
+def test_a_refused_post_keeps_a_cleared_checkbox(app, community_add_post_poster):
     """The same overwrite, on the field where it is least visible: the GET
     branch sets `notify_author` to True, so clearing it and having the form
     refused turned notifications back on."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     payload = _post_payload(token, english, community, title='x')
     del payload['notify_author']
 
@@ -970,11 +950,11 @@ def test_a_refused_post_keeps_a_cleared_checkbox(app, poster):
     assert render.call_args.kwargs['form'].notify_author.data is False
 
 
-def test_poll_choices_past_the_ninth_are_counted(app, poster):
+def test_poll_choices_past_the_ninth_are_counted(app, community_add_post_poster):
     """D1003. `CreatePollForm.validate` counted `range(1, 10)` of fifteen
     fields while `make_post` reads `range(1, 16)`, so a poll whose options
     were typed into choices 10-15 was refused for having none."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     payload = _post_payload(token, english, community, title='A poll',
                             mode='single', finish_in='3d')
     for i in range(10, 16):
@@ -989,10 +969,10 @@ def test_poll_choices_past_the_ninth_are_counted(app, poster):
     assert make.call_args is not None, render.call_args.kwargs['form'].errors
 
 
-def test_a_poll_with_one_choice_is_still_refused(app, poster):
+def test_a_poll_with_one_choice_is_still_refused(app, community_add_post_poster):
     """The counting fix must not turn the minimum off. One choice, in a field
     the old count could not see, is still one choice."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     payload = _post_payload(token, english, community, title='A poll',
                             mode='single', finish_in='3d', choice_12='Only')
 
@@ -1006,9 +986,9 @@ def test_a_poll_with_one_choice_is_still_refused(app, poster):
     assert render.call_args.kwargs['form'].choice_2.errors != []
 
 
-def test_a_poll_with_no_choices_is_refused(app, poster):
+def test_a_poll_with_no_choices_is_refused(app, community_add_post_poster):
     """The `choices_made == 0` arm, which reports a different field."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     payload = _post_payload(token, english, community, title='A poll',
                             mode='single', finish_in='3d')
 
@@ -1022,12 +1002,12 @@ def test_a_poll_with_no_choices_is_refused(app, poster):
     assert render.call_args.kwargs['form'].choice_1.errors != []
 
 
-def test_a_poll_submission_that_omits_a_choice_field_is_not_a_500(app, poster):
+def test_a_poll_submission_that_omits_a_choice_field_is_not_a_500(app, community_add_post_poster):
     """D1003's second half. WTForms leaves an unsubmitted StringField at None,
     not '', so `.data.strip()` was `AttributeError: 'NoneType' object has no
     attribute 'strip'` for any submission that did not carry all fifteen
     fields -- which the browser form does and nothing else has to."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     payload = _post_payload(token, english, community, title='A poll',
                             mode='single', finish_in='3d',
                             choice_1='Yes', choice_2='No')
@@ -1041,10 +1021,10 @@ def test_a_poll_submission_that_omits_a_choice_field_is_not_a_500(app, poster):
     assert make.call_args is not None
 
 
-def test_a_poll_may_not_repeat(app, poster):
+def test_a_poll_may_not_repeat(app, community_add_post_poster):
     """`if self.repeat.data in ['daily', 'weekly', 'monthly']` -- the one arm
     of CreatePollForm.validate that is not about choices."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     payload = _post_payload(token, english, community, title='A poll',
                             mode='single', finish_in='3d', repeat='weekly',
                             choice_1='Yes', choice_2='No')
@@ -1059,13 +1039,13 @@ def test_a_poll_may_not_repeat(app, poster):
     assert render.call_args.kwargs['form'].repeat.errors != []
 
 
-def test_a_remote_community_still_accepts_images(app, poster):
+def test_a_remote_community_still_accepts_images(app, community_add_post_poster):
     """D1001's condition says *local* communities, and the fix has to leave
     the rest alone: an instance that hosts no images of its own still carries
     posts whose images live on the remote community's server. Without this row
     dropping `community.is_local()` from the condition changed nothing that
     any assertion could see."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     site = db.session.get(Site, 1)
     site.allow_local_image_posts = False
     db.session.commit()
@@ -1089,10 +1069,10 @@ def test_a_remote_community_still_accepts_images(app, poster):
     assert make.call_args is not None, render.call_args.kwargs['form'].errors
 
 
-def test_a_post_with_no_timezone_left_on_the_form_skips_the_timezone_update(app, poster):
+def test_a_post_with_no_timezone_left_on_the_form_skips_the_timezone_update(app, community_add_post_poster):
     """The false arm of `if form.timezone.data:` after a created post. `timezone` is DataRequired, so only a
     `make_post` (or plugin) that clears it reaches this arm; the user's stored timezone is then left alone."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     author.timezone = 'Europe/Paris'
     db.session.commit()
 
@@ -1110,12 +1090,12 @@ def test_a_post_with_no_timezone_left_on_the_form_skips_the_timezone_update(app,
 
 
 @pytest.mark.parametrize('kind', ['link', 'discussion', 'image', 'video', 'audio', 'poll', 'event'])
-def test_the_compose_forms_community_picker_keeps_the_type_it_is_on(app, poster, kind, monkeypatch):
+def test_the_compose_forms_community_picker_keeps_the_type_it_is_on(app, community_add_post_poster, kind, monkeypatch):
     """The type buttons belong to the community the form opened on, so the picker's links go back through
     main.add_post with this type, and the form is rebuilt for the community picked. An audio form is a podcast's,
     so the community is one here; the other forms do not depend on kind."""
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the real template renders form.csrf_token
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     community.kind = 'podcast'
     db.session.commit()
 
@@ -1124,20 +1104,20 @@ def test_the_compose_forms_community_picker_keeps_the_type_it_is_on(app, poster,
     assert f'href="/add_post?community={community.id}&amp;type={kind}"' in html
 
 
-def test_a_compose_form_opened_without_a_type_keeps_the_type_it_chose(app, poster, monkeypatch):
+def test_a_compose_form_opened_without_a_type_keeps_the_type_it_chose(app, community_add_post_poster, monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     html = client.get(url(app, 'community.add_post', actor=community.name)).get_data(as_text=True)
 
     assert f'&amp;type={community.default_post_type or "link"}"' in html
 
 
-def test_the_compose_form_names_its_community_and_posts_to_it(app, poster, monkeypatch):
+def test_the_compose_form_names_its_community_and_posts_to_it(app, community_add_post_poster, monkeypatch):
     """The community is shown, not a select of every community; the picker is how to change it, and the hidden
     `communities` field is what the POST reads."""
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     html = client.get(url(app, 'community.add_post', actor=community.name)).get_data(as_text=True)
 
@@ -1148,9 +1128,9 @@ def test_the_compose_form_names_its_community_and_posts_to_it(app, poster, monke
 
 
 @pytest.fixture
-def lemmy_community(poster):
+def lemmy_community(community_add_post_poster):
     """A remote community on a Lemmy instance, which takes neither polls nor events (Instance.can_poll/can_event)."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
     lemmy = instance('lemmy.example', software='lemmy')
     remote = make_community('remote', host='lemmy.example')
     remote.ap_id = 'remote@lemmy.example'
@@ -1166,9 +1146,9 @@ def type_buttons(html):
     return re.search(r'id="type_of_post".*?</div>', html, re.S).group(0)
 
 
-def test_a_community_that_takes_polls_and_events_shows_their_buttons(app, poster, monkeypatch):
+def test_a_community_that_takes_polls_and_events_shows_their_buttons(app, community_add_post_poster, monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the real template renders form.csrf_token
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     buttons = type_buttons(client.get(url(app, 'community.add_post', actor=community.name)).get_data(as_text=True))
 
@@ -1176,11 +1156,11 @@ def test_a_community_that_takes_polls_and_events_shows_their_buttons(app, poster
     assert f'/community/{community.name}/submit/event"' in buttons
 
 
-def test_a_community_that_takes_no_polls_or_events_shows_no_buttons_for_them(app, poster, lemmy_community,
+def test_a_community_that_takes_no_polls_or_events_shows_no_buttons_for_them(app, community_add_post_poster, lemmy_community,
                                                                               monkeypatch):
     """They were rendered as href="#" links that did nothing when clicked."""
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
-    client = poster[0]
+    client = community_add_post_poster[0]
 
     buttons = type_buttons(client.get(url(app, 'community.add_post', actor=lemmy_community.link(),
                                           type='link')).get_data(as_text=True))
@@ -1190,9 +1170,9 @@ def test_a_community_that_takes_no_polls_or_events_shows_no_buttons_for_them(app
 
 
 @pytest.mark.parametrize('kind', ['poll', 'event'])
-def test_opening_a_form_the_community_cannot_take_goes_to_its_link_form(app, poster, lemmy_community, kind):
+def test_opening_a_form_the_community_cannot_take_goes_to_its_link_form(app, community_add_post_poster, lemmy_community, kind):
     """Reached when the compose form's community switcher keeps a poll or event type for a Lemmy community."""
-    client = poster[0]
+    client = community_add_post_poster[0]
 
     response = client.get(url(app, 'community.add_post', actor=lemmy_community.link(), type=kind))
 
@@ -1201,9 +1181,9 @@ def test_opening_a_form_the_community_cannot_take_goes_to_its_link_form(app, pos
 
 
 @pytest.mark.parametrize('kind', ['poll', 'event'])
-def test_posting_a_type_the_community_cannot_take_is_refused(app, poster, lemmy_community, kind):
+def test_posting_a_type_the_community_cannot_take_is_refused(app, community_add_post_poster, lemmy_community, kind):
     """The POST's community comes from the form's `communities` field, so a poll form can name a Lemmy community."""
-    client, token, community, author, english = poster
+    client, token, community, author, english = community_add_post_poster
 
     with patch('app.shared.post.make_post', return_value=FakePost()) as make:
         response = client.post(url(app, 'community.add_post', actor=community.name, type=kind),

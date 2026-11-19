@@ -5,7 +5,7 @@ import pytest
 
 from app import db
 from app.models import Site
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401  (the fixture)
+from tests.two_domains import FIRST, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 

@@ -13,7 +13,7 @@ from app.api.alpha.utils.post import post_post, put_post
 from app.constants import POST_TYPE_GALLERY
 from app.models import Post
 from app.utils import set_setting
-from tests.test_api_post_actions import env, token  # noqa: F401 (env)
+from tests.test_api_post_actions import token
 
 OURS = 'https://test.piefed.local/static/media/posts/ab/cd'
 
@@ -54,8 +54,8 @@ def _two():
     return [{'url': f'{OURS}/1.png', 'alt_text': 'one'}, {'url': f'{OURS}/2.png'}]
 
 
-def test_a_gallery_post_is_created_with_its_pictures(env, images, composite):
-    post_id = _create(env, gallery=_two())
+def test_a_gallery_post_is_created_with_its_pictures(api_post_actions_env, images, composite):
+    post_id = _create(api_post_actions_env, gallery=_two())
 
     post = db.session.get(Post, post_id)
     assert post.type == POST_TYPE_GALLERY
@@ -63,14 +63,14 @@ def test_a_gallery_post_is_created_with_its_pictures(env, images, composite):
     assert post.image.source_url == f'{OURS}/composite.webp' and post.url.endswith(post.slug)
 
 
-def test_a_url_beside_the_gallery_is_not_used(env, images, composite):
-    post_id = _create(env, url=f'{OURS}/0.png', gallery=_two())
+def test_a_url_beside_the_gallery_is_not_used(api_post_actions_env, images, composite):
+    post_id = _create(api_post_actions_env, url=f'{OURS}/0.png', gallery=_two())
 
     assert [url for url, _alt in _pictures(post_id)] == [f'{OURS}/1.png', f'{OURS}/2.png']
 
 
-def test_the_post_view_lists_every_picture(env, images, composite):
-    res = post_post(token(env.author), {'title': 'a gallery', 'community_id': env.post.community_id,
+def test_the_post_view_lists_every_picture(api_post_actions_env, images, composite):
+    res = post_post(token(api_post_actions_env.author), {'title': 'a gallery', 'community_id': api_post_actions_env.post.community_id,
                                         'gallery': _two()})
 
     post = res['post_view']['post']
@@ -78,48 +78,48 @@ def test_the_post_view_lists_every_picture(env, images, composite):
         [(f'{OURS}/1.png', 'one'), (f'{OURS}/2.png', None)]
 
 
-def test_an_edit_without_gallery_keeps_the_pictures(env, images, composite):
-    post_id = _create(env, gallery=_two())
+def test_an_edit_without_gallery_keeps_the_pictures(api_post_actions_env, images, composite):
+    post_id = _create(api_post_actions_env, gallery=_two())
 
-    put_post(token(env.author), {'post_id': post_id, 'title': 'renamed'})
+    put_post(token(api_post_actions_env.author), {'post_id': post_id, 'title': 'renamed'})
 
     assert db.session.get(Post, post_id).type == POST_TYPE_GALLERY
     assert _pictures(post_id) == [(f'{OURS}/1.png', 'one'), (f'{OURS}/2.png', None)]
 
 
-def test_an_edit_replaces_the_pictures(env, images, composite):
-    post_id = _create(env, gallery=_two())
+def test_an_edit_replaces_the_pictures(api_post_actions_env, images, composite):
+    post_id = _create(api_post_actions_env, gallery=_two())
 
-    put_post(token(env.author), {'post_id': post_id, 'gallery': [{'url': f'{OURS}/2.png', 'alt_text': 'two'},
+    put_post(token(api_post_actions_env.author), {'post_id': post_id, 'gallery': [{'url': f'{OURS}/2.png', 'alt_text': 'two'},
                                                                  {'url': f'{OURS}/1.png', 'alt_text': 'one!'}]})
 
     assert _pictures(post_id) == [(f'{OURS}/2.png', 'two'), (f'{OURS}/1.png', 'one!')]
 
 
-def test_an_edit_to_fewer_than_two_pictures_is_refused(env, images, composite):
-    post_id = _create(env, gallery=_two())
+def test_an_edit_to_fewer_than_two_pictures_is_refused(api_post_actions_env, images, composite):
+    post_id = _create(api_post_actions_env, gallery=_two())
 
     with pytest.raises(Exception, match='A gallery has 2 to'):
-        put_post(token(env.author), {'post_id': post_id, 'gallery': []})
+        put_post(token(api_post_actions_env.author), {'post_id': post_id, 'gallery': []})
 
 
-def test_a_gallery_over_the_limit_is_refused(env, images, composite):
+def test_a_gallery_over_the_limit_is_refused(api_post_actions_env, images, composite):
     set_setting('max_album_images', 2)
 
     with pytest.raises(Exception, match='At most 2 images'):
-        _create(env, gallery=_two() + [{'url': f'{OURS}/3.png'}])
+        _create(api_post_actions_env, gallery=_two() + [{'url': f'{OURS}/3.png'}])
 
 
-def test_a_gallery_url_must_be_http(env, images, composite):
+def test_a_gallery_url_must_be_http(api_post_actions_env, images, composite):
     """D1407's rule for `url`, held for each picture: a template renders them as hrefs too."""
     with pytest.raises(Exception, match='must be an http'):
-        _create(env, gallery=[{'url': 'javascript:alert(1)'}, {'url': f'{OURS}/2.png'}])
+        _create(api_post_actions_env, gallery=[{'url': 'javascript:alert(1)'}, {'url': f'{OURS}/2.png'}])
 
 
-def test_one_picture_is_not_a_gallery(env, images, composite):
+def test_one_picture_is_not_a_gallery(api_post_actions_env, images, composite):
     """A gallery post needs two pictures; one is an image post, made with `url`."""
     with pytest.raises(Exception, match='A gallery has 2 to'):
-        _create(env, gallery=[{'url': f'{OURS}/1.png'}])
+        _create(api_post_actions_env, gallery=[{'url': f'{OURS}/1.png'}])
     assert Post.query.filter_by(title='a gallery').count() == 0   # make_post removes the post it began
 
 

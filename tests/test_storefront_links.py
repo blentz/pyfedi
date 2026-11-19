@@ -22,8 +22,7 @@ from app.storefront import (canonicalise_links, current_storefront, domain_for_h
                             rewrite_response_for_storefront, storefront_html)
 from app.utils import allowlist_html, feed_entry_body, markdown_to_html
 from tests.factories import make_domain
-from tests.test_storefront_presentation import (CANONICAL, ONION, on_onion, onion, post_on_onion,  # noqa: F401
-                                                world)  # noqa: F401  (onion and world are fixtures)
+from tests.test_storefront_presentation import CANONICAL, ONION, on_onion, post_on_onion
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -57,7 +56,7 @@ def in_onion_request(app):
     ('<img srcset="http://abc.onion/a,b.jpg, https://example.com/c.jpg 2x"/>',
      f'<img srcset="https://{CANONICAL}/a,b.jpg, https://example.com/c.jpg 2x"/>'),
 ])
-def test_canonicalise_variants(app, onion, stored, saved):
+def test_canonicalise_variants(app, storefront_presentation_onion, stored, saved):
     assert canonicalise_links(stored) == saved
 
 
@@ -71,11 +70,11 @@ def test_canonicalise_variants(app, onion, stored, saved):
     '<a href="https://notabc.onion/x">x</a>',
     '<a href="https://abc.o\tnion/x">abc.onion</a>',         # urlsplit drops the tab: the host is not as written
 ])
-def test_canonicalise_leaves_the_rest_alone(app, onion, html):
+def test_canonicalise_leaves_the_rest_alone(app, storefront_presentation_onion, html):
     assert canonicalise_links(html) is html
 
 
-def test_federated_html_is_canonicalised_and_nothing_else_changes(app, onion):
+def test_federated_html_is_canonicalised_and_nothing_else_changes(app, storefront_presentation_onion):
     incoming = ('<p>Hello <a href="https://mastodon.example/@a">@a</a>, see '
                 '<a href="http://abc.onion/post/1">http://abc.onion/post/1</a> '
                 '<img src="https://cdn.example/x.png" alt="x"/></p>')
@@ -85,7 +84,7 @@ def test_federated_html_is_canonicalised_and_nothing_else_changes(app, onion):
     assert 'http://abc.onion/post/1</a>' in expected   # the visible text is what the author wrote
 
 
-def test_markdown_is_saved_canonical(app, onion):
+def test_markdown_is_saved_canonical(app, storefront_presentation_onion):
     html = markdown_to_html('[a post](http://abc.onion/post/1) ![pic](//abc.onion/a.jpg)')
     assert f'href="https://{CANONICAL}/post/1"' in html
     assert f'src="https://{CANONICAL}/a.jpg"' in html
@@ -100,7 +99,7 @@ def test_allowlist_test_env_reads_no_domains():
 
 # --- the storefront on render -------------------------------------------------------------------------------------
 
-def test_rewrite_links_attributes(app, onion):
+def test_rewrite_links_attributes(app, storefront_presentation_onion):
     body = (f'<html><head><meta property="og:url" content="https://{CANONICAL}/post/1"/>'
             f'<meta property="og:image" content="https://{CANONICAL}/static/a.jpg"/>'
             f'<meta name="description" content="all about {CANONICAL}"/>'
@@ -132,12 +131,12 @@ def test_rewrite_links_attributes(app, onion):
     assert f'<span content="https://{CANONICAL}/x"></span>' in out    # content is a link only on <meta>
 
 
-def test_rewrite_links_returns_unchanged_body_when_nothing_moves(app, onion):
+def test_rewrite_links_returns_unchanged_body_when_nothing_moves(app, storefront_presentation_onion):
     body = f'<p>@someone@{CANONICAL.upper()} says hi</p><br>'
     assert rewrite_links(body, domain_for_host(ONION)) is body   # parsed, but no attribute moved: not re-serialised
 
 
-def test_rewrite_skips_when_absent(app, onion):
+def test_rewrite_skips_when_absent(app, storefront_presentation_onion):
     # off the onion: an onion page is always parsed, since any host may be remote media to proxy
     db.session.add(SiteDomain(domain='alias.test', scheme='https', federates=False))
     db.session.commit()
@@ -149,13 +148,13 @@ def test_rewrite_skips_when_absent(app, onion):
     parser.assert_not_called()
 
 
-def test_rewrite_precheck_ignores_case(app, onion):
+def test_rewrite_precheck_ignores_case(app, storefront_presentation_onion):
     out = rewrite_links(f'<a href="https://{CANONICAL.upper()}/x">x</a>', domain_for_host(ONION))
     assert out == f'<a href="http://{ONION}/x">x</a>'
 
 
-def test_onion_page_has_no_canonical_links(app, world):
-    founder, author, community, post, image = world
+def test_onion_page_has_no_canonical_links(app, storefront_presentation_world):
+    founder, author, community, post, image = storefront_presentation_world
     post.body_html = f'<p><a href="https://{CANONICAL}/post/1">https://{CANONICAL}/post/1</a></p>'
     db.session.commit()
     response = on_onion(app).get(f'/post/{post.id}', base_url=f'https://{ONION}')
@@ -166,9 +165,9 @@ def test_onion_page_has_no_canonical_links(app, world):
     assert int(response.headers['Content-Length']) == len(response.data)
 
 
-def test_rewritten_page_keeps_doctype_and_scripts(app, world):
+def test_rewritten_page_keeps_doctype_and_scripts(app, storefront_presentation_world):
     """html.parser re-serialises the page: a DOCTYPE, inline scripts and the page itself must survive it."""
-    founder, author, community, post, image = world
+    founder, author, community, post, image = storefront_presentation_world
     post.body_html = f'<p><a href="https://{CANONICAL}/c/general">there</a></p>'
     db.session.commit()
     seen = []
@@ -208,7 +207,7 @@ def test_inline_script_text_is_byte_identical():
     (f'https:\\\\{CANONICAL}/c/general', f'https:\\\\{CANONICAL}/c/general'),
     (f'http://{ONION}/c/general', f'http://{ONION}/c/general'),
 ])
-def test_location_header_rewrite(app, onion, location, expected):
+def test_location_header_rewrite(app, storefront_presentation_onion, location, expected):
     context = in_onion_request(app)
     try:
         response = Response('', status=302, headers={'Location': location, 'X-Kept': 'yes'})
@@ -219,7 +218,7 @@ def test_location_header_rewrite(app, onion, location, expected):
     assert response.status_code == 302 and response.headers['X-Kept'] == 'yes'
 
 
-def test_hx_redirect_header_rewrite(app, onion):
+def test_hx_redirect_header_rewrite(app, storefront_presentation_onion):
     context = in_onion_request(app)
     try:
         response = rewrite_response_for_storefront(Response('', headers={'HX-Redirect': f'https://{CANONICAL}/x'}))
@@ -228,8 +227,8 @@ def test_hx_redirect_header_rewrite(app, onion):
     assert response.headers['HX-Redirect'] == f'http://{ONION}/x'
 
 
-def test_location_rewritten(app, world):
-    founder, author, community, post, image = world
+def test_location_rewritten(app, storefront_presentation_world):
+    founder, author, community, post, image = storefront_presentation_world
     target = quote(f'https://{CANONICAL}/c/general?x=1#top', safe='')
     # the view redirects to its ?redirect= target as given: an absolute URL on the canonical host
     response = post_on_onion(app, founder, f'/u/author@{CANONICAL}/block_instance?redirect={target}')
@@ -237,7 +236,7 @@ def test_location_rewritten(app, world):
     assert response.headers['Location'] == f'http://{ONION}/c/general@{CANONICAL}?x=1#top'
 
 
-def test_rewrite_keeps_status_and_headers(app, onion):
+def test_rewrite_keeps_status_and_headers(app, storefront_presentation_onion):
     context = in_onion_request(app)
     try:
         response = Response(f'<a href="https://{CANONICAL}/x">x</a>', status=404, mimetype='text/html',
@@ -250,7 +249,7 @@ def test_rewrite_keeps_status_and_headers(app, onion):
     assert int(response.headers['Content-Length']) == len(response.get_data())
 
 
-def test_rewrite_ignores_other_content_types(app, onion):
+def test_rewrite_ignores_other_content_types(app, storefront_presentation_onion):
     context = in_onion_request(app)
     try:
         body = f'{{"url": "https://{CANONICAL}/x"}}'
@@ -260,7 +259,7 @@ def test_rewrite_ignores_other_content_types(app, onion):
     assert response.get_data(as_text=True) == body
 
 
-def test_rewrite_never_reads_an_encoded_body(app, onion):
+def test_rewrite_never_reads_an_encoded_body(app, storefront_presentation_onion):
     """An encoded body (gzip from an upstream or a view) is bytes, not markup: it is passed on as it is, never
     decoded or rewritten. Its redirect header is still moved."""
     body = gzip.compress(f'<a href="https://{CANONICAL}/x">x</a>'.encode())
@@ -274,8 +273,8 @@ def test_rewrite_never_reads_an_encoded_body(app, onion):
     assert response.headers['Location'] == f'http://{ONION}/y'
 
 
-def test_clearnet_response_untouched(app, world):
-    founder, author, community, post, image = world
+def test_clearnet_response_untouched(app, storefront_presentation_world):
+    founder, author, community, post, image = storefront_presentation_world
     post.body_html = f'<p><a href="http://{ONION}/post/1">x</a></p>'   # an old row: rows are never edited
     db.session.commit()
     with patch.object(storefront, 'rewrite_links') as rewrite:
@@ -290,7 +289,7 @@ def test_clearnet_response_untouched(app, world):
         assert rewrite_response_for_storefront(redirect).headers['Location'] == f'http://{ONION}/x'
 
 
-def test_sse_not_buffered(app, onion):
+def test_sse_not_buffered(app, storefront_presentation_onion):
     pulled = []
 
     def stream():
@@ -317,7 +316,7 @@ class _Post:
     body_html = f'<p><a href="https://{CANONICAL}/c/general">there</a></p>'
 
 
-def test_feed_entry_body_on_storefront(app, onion):
+def test_feed_entry_body_on_storefront(app, storefront_presentation_onion):
     context = in_onion_request(app)
     try:
         assert current_storefront().domain == ONION
@@ -329,7 +328,7 @@ def test_feed_entry_body_on_storefront(app, onion):
         assert feed_entry_body(_Post()) == _Post.body_html
 
 
-def test_storefront_html_passes_none(app, onion):
+def test_storefront_html_passes_none(app, storefront_presentation_onion):
     context = in_onion_request(app)
     try:
         assert storefront_html(None) is None
@@ -340,8 +339,8 @@ def test_storefront_html_passes_none(app, onion):
 # A bare name on the onion is the onion's own (plan C1): the first domain's rows are named by their handle there
 @pytest.mark.parametrize('path', ['/index/feed', '/d/{domain}/feed', '/tag/pics/feed', f'/u/author@{CANONICAL}/feed',
                                   f'/community/general@{CANONICAL}/feed'])
-def test_feed_item_bodies_on_storefront(app, world, path):
-    founder, author, community, post, image = world
+def test_feed_item_bodies_on_storefront(app, storefront_presentation_world, path):
+    founder, author, community, post, image = storefront_presentation_world
     domain = make_domain('pics.example')
     tag = Tag(name='pics', display_as='Pics')
     db.session.add(tag)

@@ -45,14 +45,6 @@ def _getaddrinfo_without_the_network(host, *args, **kwargs):
     return _REAL_GETADDRINFO(host, *args, **kwargs)
 
 
-@pytest.fixture
-def wire(monkeypatch):
-    """Every outbound HTTP request, answered 202. `wire.calls` is what left the server."""
-    monkeypatch.setattr(socket, 'getaddrinfo', _getaddrinfo_without_the_network)
-    with respx.mock(assert_all_called=False) as router:
-        yield router.route().mock(return_value=httpx.Response(202))
-
-
 def _onion_actor(row, kind):
     row.ap_profile_id = f'{ONION}/{kind}/{row.name if kind == "c" else row.user_name}'
     row.ap_public_url = row.ap_profile_id
@@ -118,19 +110,19 @@ def _sent(wire):
 
 # -- Review Focus 5 ---------------------------------------------------------------------------------------------------
 
-def test_an_onion_users_post_vote_follow_and_delete_send_nothing(env, wire):
+def test_an_onion_users_post_vote_follow_and_delete_send_nothing(env, local_only_outbound_wire):
     post = _post(env.away, env.ozzy, local_only=True)
     send_post(post.id, session=db.session)
     remote_post = make_post(env.away, env.remote, ap_id='https://peer.example/post/7')
     vote_for_post(None, env.ozzy.id, remote_post.id, None, 'upvote')
     join_community(True, env.ozzy.id, env.away.id, SRC_API)
     delete_object(env.ozzy.id, post, is_post=True, session=db.session)
-    assert _sent(wire) == []
+    assert _sent(local_only_outbound_wire) == []
 
 
 # -- Review Focus 4 ---------------------------------------------------------------------------------------------------
 
-def test_a_reply_vote_and_boost_on_local_only_content_send_nothing(env, wire):
+def test_a_reply_vote_and_boost_on_local_only_content_send_nothing(env, local_only_outbound_wire):
     """A federating user's reply to an onion post in a federating community is stamped local-only and goes nowhere,
     nor does a vote on it, nor a boost (an Announce naming it; piefed has no user boost sender, so it is sent as
     any activity would be)."""
@@ -142,10 +134,10 @@ def test_a_reply_vote_and_boost_on_local_only_content_send_nothing(env, wire):
     boost = {'id': f'{SERVER}/activities/announce/1', 'type': 'Announce', 'actor': env.hal.public_url(),
              'object': post.ap_id, 'to': ['https://www.w3.org/ns/activitystreams#Public']}
     send_post_request(PEER_INBOX, boost, env.hal.private_key, env.hal.public_url() + '#main-key')
-    assert _sent(wire) == []
+    assert _sent(local_only_outbound_wire) == []
 
 
-def test_a_federating_communitys_announce_of_a_local_only_reply_is_not_sent(env, wire, monkeypatch, app):
+def test_a_federating_communitys_announce_of_a_local_only_reply_is_not_sent(env, local_only_outbound_wire, monkeypatch, app):
     post = _post(env.first, env.ozzy, local_only=True)
     reply = _reply(post, env.remote)
     note = {'id': f'https://peer.example/comment/{reply.id}', 'type': 'Note', 'attributedTo': env.remote.public_url(),
@@ -163,15 +155,15 @@ def test_a_federating_communitys_announce_of_a_local_only_reply_is_not_sent(env,
     like = {'id': 'https://peer.example/activities/like/1', 'type': 'Like', 'actor': env.remote.public_url(),
             'object': post.ap_id}
     announce_activity_to_followers(env.first, env.remote, like)                # the notification server
-    assert _sent(wire) == [] and published == [] and db.session.query(ActivityBatch).count() == 0
+    assert _sent(local_only_outbound_wire) == [] and published == [] and db.session.query(ActivityBatch).count() == 0
 
 
 # -- Review Focus 2 ---------------------------------------------------------------------------------------------------
 
-def test_a_mention_of_an_onion_user_goes_out_as_plain_text(env, wire):
+def test_a_mention_of_an_onion_user_goes_out_as_plain_text(env, local_only_outbound_wire):
     post = _post(env.first, env.hal, body='hello @ozzy@abc.onion')
     send_post(post.id, session=db.session)
-    sent = _sent(wire)
+    sent = _sent(local_only_outbound_wire)
     assert [url for url, _ in sent] == [PEER_INBOX]
     body = json.loads(sent[0][1])
     page = body['object']['object']
@@ -186,7 +178,7 @@ def test_federated_mentions_drops_local_only_users(env):
 
 # -- retries ----------------------------------------------------------------------------------------------------------
 
-def test_a_queued_retry_of_a_local_only_activity_is_dropped(env, wire, app, monkeypatch):
+def test_a_queued_retry_of_a_local_only_activity_is_dropped(env, local_only_outbound_wire, app, monkeypatch):
     post = _post(env.first, env.ozzy, local_only=True)
     like = {'id': f'{SERVER}/activities/like/1', 'type': 'Like', 'actor': env.hal.public_url(), 'object': post.ap_id}
     from_onion = {'id': f'{SERVER}/activities/follow/1', 'type': 'Follow', 'actor': env.ozzy.public_url(),
@@ -202,22 +194,22 @@ def test_a_queued_retry_of_a_local_only_activity_is_dropped(env, wire, app, monk
     result = app.test_cli_runner().invoke(args=['send-queue'])
     assert result.exception is None, result.exception
     post_request(PEER_INBOX, like, env.hal.private_key, 'k')     # a task queued before this guard existed
-    assert _sent(wire) == []
+    assert _sent(local_only_outbound_wire) == []
     assert db.session.query(SendQueue).count() == 0
 
 
 # -- what is not local-only is untouched ------------------------------------------------------------------------------
 
-def test_a_first_domain_post_in_a_first_domain_community_is_sent_unchanged(env, wire, monkeypatch):
+def test_a_first_domain_post_in_a_first_domain_community_is_sent_unchanged(env, local_only_outbound_wire, monkeypatch):
     """The body that leaves is byte-for-byte the one sent with the guard and the mention filter switched off."""
     monkeypatch.setattr('app.utils.gibberish', lambda *a: 'fixed')   # where activity_id reads it
     post = _post(env.first, env.hal, body='plain words')
     send_post(post.id, session=db.session)
-    guarded = _sent(wire)
+    guarded = _sent(local_only_outbound_wire)
     monkeypatch.setattr('app.local_only.outbound_refusal', lambda body, session=None: None)
     monkeypatch.setattr('app.shared.tasks.pages.federated_mentions', lambda users: users)
     send_post(post.id, session=db.session)
-    assert _sent(wire)[len(guarded):] == guarded and [url for url, _ in guarded] == [PEER_INBOX]
+    assert _sent(local_only_outbound_wire)[len(guarded):] == guarded and [url for url, _ in guarded] == [PEER_INBOX]
 
 
 # -- outbound_refusal itself ------------------------------------------------------------------------------------------
@@ -272,13 +264,13 @@ def test_a_body_naming_nothing_of_ours_costs_no_query(env, monkeypatch):
     assert refused is None and queries == []
 
 
-def test_a_refusal_is_logged_at_debug_without_a_user_name(env, wire, caplog):
+def test_a_refusal_is_logged_at_debug_without_a_user_name(env, local_only_outbound_wire, caplog):
     caplog.set_level('DEBUG', logger='app.local_only')
     body = {'id': f'{SERVER}/activities/follow/1', 'type': 'Follow', 'actor': env.ozzy.public_url(),
             'object': 'https://peer.example/c/away'}
     send_post_request(PEER_INBOX, body, env.ozzy.private_key, env.ozzy.public_url() + '#main-key')
     refusals = [record for record in caplog.records if 'not sent' in record.getMessage()]
-    assert _sent(wire) == [] and len(refusals) == 1
+    assert _sent(local_only_outbound_wire) == [] and len(refusals) == 1
     assert all(record.levelname == 'DEBUG' and 'ozzy' not in record.getMessage() for record in refusals)
 
 
@@ -303,7 +295,7 @@ def test_a_post_quoting_a_local_only_post_is_refused(env):
         assert outbound_refusal(body), key
 
 
-def test_each_delivery_is_checked_once(env, wire, monkeypatch):
+def test_each_delivery_is_checked_once(env, local_only_outbound_wire, monkeypatch):
     """The send queue path (.delay) walks the body in post_request only, not again when it is queued."""
     real, calls = local_only.outbound_refusal, []
     monkeypatch.setattr('app.local_only.outbound_refusal', lambda body, session=None: calls.append(1) or
@@ -311,4 +303,4 @@ def test_each_delivery_is_checked_once(env, wire, monkeypatch):
     body = {'id': f'{SERVER}/activities/like/1', 'type': 'Like', 'actor': env.hal.public_url(),
             'object': 'https://peer.example/post/3'}
     send_post_request(PEER_INBOX, body, env.hal.private_key, env.hal.public_url() + '#main-key')
-    assert len(calls) == 1 and [url for url, _ in _sent(wire)] == [PEER_INBOX]
+    assert len(calls) == 1 and [url for url, _ in _sent(local_only_outbound_wire)] == [PEER_INBOX]

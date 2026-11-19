@@ -18,9 +18,8 @@ from app.custom_themes_routes import SVG_POLICY
 from app.models import CustomTheme, CustomThemeFile, ModLog, SiteDomain
 from app.storefront import clear_domain_cache
 from tests.test_branding_pages import visit
-from tests.test_custom_themes_admin import Actor, themes_url, world  # noqa: F401  (world is a fixture)
+from tests.test_custom_themes_admin import Actor, themes_url
 from tests.factories import grant_permission
-from tests.two_domains import two_domains  # noqa: F401  (a fixture world needs)
 
 pytestmark = pytest.mark.usefixtures('site')
 LIMITS = {'file_bytes': 2 * 1024 * 1024, 'theme_bytes': 10 * 1024 * 1024, 'files': 50}
@@ -91,10 +90,10 @@ def upload(world, theme, name, data, replace=False, domain=None):
     return world['holder'].post(themes_url(domain or world['onion'], f'/{theme.id}/files'), **fields)
 
 
-def test_an_image_is_stored_and_served_as_what_it_is(app, world):
-    night = world['night']
+def test_an_image_is_stored_and_served_as_what_it_is(app, custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
     before = stored_files()
-    assert upload(world, night, 'sky.html', PNG).status_code == 302
+    assert upload(custom_themes_admin_world, night, 'sky.html', PNG).status_code == 302
     row = db.session.query(CustomThemeFile).filter_by(custom_theme_id=night.id).one()
     assert row.filename == 'sky.png' and row.mime_type == 'image/png' and row.size == len(PNG)
     assert row.path.startswith('/static/media/themes/') and row.path.endswith('.bin')
@@ -110,36 +109,36 @@ def test_an_image_is_stored_and_served_as_what_it_is(app, world):
     assert visit(app, '/theme/999999/files/sky.png', onion=True).status_code == 404
 
 
-def test_html_named_as_an_image_is_refused(world):
-    night = world['night']
+def test_html_named_as_an_image_is_refused(custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
     before = stored_files()
-    upload(world, night, 'x.png', b'<html><script>alert(1)</script></html>')
+    upload(custom_themes_admin_world, night, 'x.png', b'<html><script>alert(1)</script></html>')
     assert db.session.query(CustomThemeFile).count() == 0
     assert stored_files() == before
 
 
-def test_an_svg_is_served_sandboxed(app, world):
-    night = world['night']
-    upload(world, night, 'icon.svg', SVG_WITH_SCRIPT)
+def test_an_svg_is_served_sandboxed(app, custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'icon.svg', SVG_WITH_SCRIPT)
     served = visit(app, f'/theme/{night.id}/files/icon.svg', onion=True)
     assert served.mimetype == SVG
     assert served.headers['Content-Security-Policy'] == SVG_POLICY
     assert served.headers['X-Content-Type-Options'] == 'nosniff'
 
 
-def test_every_font_type_is_served_with_its_type(app, world):
-    night = world['night']
+def test_every_font_type_is_served_with_its_type(app, custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
     for mime, data in FONTS.items():
-        upload(world, night, f'face-{mime.split("/")[1]}', data)
+        upload(custom_themes_admin_world, night, f'face-{mime.split("/")[1]}', data)
     for row in db.session.query(CustomThemeFile).filter_by(custom_theme_id=night.id):
         assert visit(app, f'/theme/{night.id}/files/{row.filename}', onion=True).mimetype == row.mime_type
     assert {row.mime_type for row in db.session.query(CustomThemeFile)} == set(FONTS)
 
 
-def test_a_missing_upload_is_a_400(world):
-    night = world['night']
-    assert world['holder'].post(themes_url(world['onion'], f'/{night.id}/files')).status_code == 400
-    assert upload(world, night, '', PNG).status_code == 400
+def test_a_missing_upload_is_a_400(custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
+    assert custom_themes_admin_world['holder'].post(themes_url(custom_themes_admin_world['onion'], f'/{night.id}/files')).status_code == 400
+    assert upload(custom_themes_admin_world, night, '', PNG).status_code == 400
 
 
 @pytest.mark.parametrize('limit, value, uploads', [
@@ -147,112 +146,112 @@ def test_a_missing_upload_is_a_400(world):
     ('CUSTOM_THEME_MAX_FILES', 2, 3),
     ('CUSTOM_THEME_MAX_BYTES', len(PNG) * 2 + len(PNG) // 2, 3),
 ])
-def test_each_limit(app, world, monkeypatch, limit, value, uploads):
+def test_each_limit(app, custom_themes_admin_world, monkeypatch, limit, value, uploads):
     monkeypatch.setitem(app.config, limit, value)
-    night = world['night']
+    night = custom_themes_admin_world['night']
     for number in range(uploads):
-        upload(world, night, f'n{number}.png', PNG)
+        upload(custom_themes_admin_world, night, f'n{number}.png', PNG)
     assert db.session.query(CustomThemeFile).count() == uploads - 1
 
 
-def test_a_taken_name_needs_replace(world):
-    night = world['night']
-    upload(world, night, 'sky.png', PNG)
+def test_a_taken_name_needs_replace(custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)
     first = db.session.query(CustomThemeFile).one()
     old_path = first.path
-    upload(world, night, 'sky.png', PNG)       # refused: no replace
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)       # refused: no replace
     db.session.expire_all()
     assert db.session.query(CustomThemeFile).one().path == old_path
-    upload(world, night, 'sky.html', PNG, replace=True)   # same stored name, sky.png
+    upload(custom_themes_admin_world, night, 'sky.html', PNG, replace=True)   # same stored name, sky.png
     db.session.expire_all()
     replaced = db.session.query(CustomThemeFile).one()
     assert replaced.path != old_path and os.path.isfile(f'app{replaced.path}')
     assert not os.path.exists(f'app{old_path}')
 
 
-def test_replacing_within_the_file_count(app, world, monkeypatch):
+def test_replacing_within_the_file_count(app, custom_themes_admin_world, monkeypatch):
     monkeypatch.setitem(app.config, 'CUSTOM_THEME_MAX_FILES', 1)
-    night = world['night']
-    upload(world, night, 'sky.png', PNG)
-    upload(world, night, 'sky.png', PNG, replace=True)
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)
+    upload(custom_themes_admin_world, night, 'sky.png', PNG, replace=True)
     db.session.expire_all()
     assert db.session.query(CustomThemeFile).count() == 1
 
 
-def test_removing_a_file_unlinks_it(world):
-    night = world['night']
-    upload(world, night, 'sky.png', PNG)
+def test_removing_a_file_unlinks_it(custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)
     row = db.session.query(CustomThemeFile).one()
     path = row.path
-    world['holder'].post(themes_url(world['onion'], f'/{night.id}/files/{row.id}/delete'))
+    custom_themes_admin_world['holder'].post(themes_url(custom_themes_admin_world['onion'], f'/{night.id}/files/{row.id}/delete'))
     assert db.session.query(CustomThemeFile).count() == 0
     assert not os.path.exists(f'app{path}')
     assert db.session.query(ModLog).filter_by(action='remove_theme_file').one().reason == 'sky.png'
 
 
-def test_another_domains_file_is_out_of_reach(world):
-    day, default = world['day'], world['default']
-    world['admin'].post(themes_url(default, f'/{day.id}/files'), file=(io.BytesIO(PNG), 'sun.png'))
+def test_another_domains_file_is_out_of_reach(custom_themes_admin_world):
+    day, default = custom_themes_admin_world['day'], custom_themes_admin_world['default']
+    custom_themes_admin_world['admin'].post(themes_url(default, f'/{day.id}/files'), file=(io.BytesIO(PNG), 'sun.png'))
     row = db.session.query(CustomThemeFile).one()
-    holder = world['holder']
+    holder = custom_themes_admin_world['holder']
     assert holder.post(themes_url(default, f'/{day.id}/files/{row.id}/delete')).status_code == 403
-    assert holder.post(themes_url(world['onion'], f'/{day.id}/files/{row.id}/delete')).status_code == 404
-    night = world['night']
-    assert holder.post(themes_url(world['onion'], f'/{night.id}/files/{row.id}/delete')).status_code == 404
-    assert upload(world, day, 'x.png', PNG, domain=default).status_code == 403
+    assert holder.post(themes_url(custom_themes_admin_world['onion'], f'/{day.id}/files/{row.id}/delete')).status_code == 404
+    night = custom_themes_admin_world['night']
+    assert holder.post(themes_url(custom_themes_admin_world['onion'], f'/{night.id}/files/{row.id}/delete')).status_code == 404
+    assert upload(custom_themes_admin_world, day, 'x.png', PNG, domain=default).status_code == 403
     assert db.session.query(CustomThemeFile).count() == 1
 
 
-def test_the_edit_page_lists_files_with_their_css_reference(world):
-    night = world['night']
-    upload(world, night, 'sky.png', PNG)
-    page = world['holder'].get(themes_url(world['onion'], f'/{night.id}/edit')).get_data(as_text=True)
+def test_the_edit_page_lists_files_with_their_css_reference(custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)
+    page = custom_themes_admin_world['holder'].get(themes_url(custom_themes_admin_world['onion'], f'/{night.id}/edit')).get_data(as_text=True)
     assert 'url(files/sky.png)' in page
 
 
-def test_deleting_a_theme_unlinks_its_files(world):
-    night = world['night']
-    upload(world, night, 'sky.png', PNG)
+def test_deleting_a_theme_unlinks_its_files(custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)
     path = db.session.query(CustomThemeFile).one().path
-    world['holder'].post(themes_url(world['onion'], f'/{night.id}/delete'))
+    custom_themes_admin_world['holder'].post(themes_url(custom_themes_admin_world['onion'], f'/{night.id}/delete'))
     assert db.session.get(CustomTheme, night.id) is None
     assert not os.path.exists(f'app{path}')
 
 
-def test_copying_a_theme_copies_its_files(app, world):
-    night = world['night']
-    upload(world, night, 'sky.png', PNG)
+def test_copying_a_theme_copies_its_files(app, custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)
     original = db.session.query(CustomThemeFile).one()
-    world['holder'].post(themes_url(world['onion'], '/copy'), source=custom_identifier(night.id))
+    custom_themes_admin_world['holder'].post(themes_url(custom_themes_admin_world['onion'], '/copy'), source=custom_identifier(night.id))
     copy = db.session.query(CustomTheme).filter_by(name='Copy of Night').one()
     (copied,) = copy.files
     assert copied.filename == 'sky.png' and copied.path != original.path
     with open(f'app{copied.path}', 'rb') as file:
         assert file.read() == PNG
-    world['holder'].post(themes_url(world['onion'], f'/{night.id}/delete'))   # the copy keeps its own
+    custom_themes_admin_world['holder'].post(themes_url(custom_themes_admin_world['onion'], f'/{night.id}/delete'))   # the copy keeps its own
     assert os.path.isfile(f'app{copied.path}')
 
 
-def test_copying_skips_a_file_gone_from_disk(app, world, caplog):
-    night = world['night']
-    upload(world, night, 'sky.png', PNG)
+def test_copying_skips_a_file_gone_from_disk(app, custom_themes_admin_world, caplog):
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)
     os.unlink(f'app{db.session.query(CustomThemeFile).one().path}')
     with caplog.at_level(logging.WARNING):
-        copy = copy_theme(custom_identifier(night.id), world['onion'].id, None)
+        copy = copy_theme(custom_identifier(night.id), custom_themes_admin_world['onion'].id, None)
     assert copy.files == []
     assert 'missing' in caplog.text
 
 
-def test_a_file_gone_from_disk_is_not_found(app, world):
-    night = world['night']
-    upload(world, night, 'sky.png', PNG)
+def test_a_file_gone_from_disk_is_not_found(app, custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)
     os.unlink(f'app{db.session.query(CustomThemeFile).one().path}')
     assert visit(app, f'/theme/{night.id}/files/sky.png', onion=True).status_code == 404
 
 
-def test_remove_theme_files_takes_only_unnamed_stored_files(app, world, tmp_path, caplog):
-    night = world['night']
-    upload(world, night, 'sky.png', PNG)
+def test_remove_theme_files_takes_only_unnamed_stored_files(app, custom_themes_admin_world, tmp_path, caplog):
+    night = custom_themes_admin_world['night']
+    upload(custom_themes_admin_world, night, 'sky.png', PNG)
     named = db.session.query(CustomThemeFile).one().path
     os.makedirs(THEME_MEDIA, exist_ok=True)
     outside = tmp_path / 'victim.txt'
@@ -273,14 +272,14 @@ def test_remove_theme_files_takes_only_unnamed_stored_files(app, world, tmp_path
     assert caplog.text.count('not removed') == 5
 
 
-def test_add_theme_file_limits_directly(app, world):
-    night = world['night']
+def test_add_theme_file_limits_directly(app, custom_themes_admin_world):
+    night = custom_themes_admin_world['night']
     with pytest.raises(ThemeFileError, match='too big'):
         add_theme_file(night, 'a.png', PNG, False, {**LIMITS, 'file_bytes': 1})
 
 
-def test_deleting_a_domain_unlinks_its_themes_files(app, world):
-    manager = world['two_domains'].local_user('domainmanager', world['default'])
+def test_deleting_a_domain_unlinks_its_themes_files(app, custom_themes_admin_world):
+    manager = custom_themes_admin_world['two_domains'].local_user('domainmanager', custom_themes_admin_world['default'])
     grant_permission(manager, 'manage domains')
     grant_permission(manager, 'edit domain branding')
     spare = SiteDomain(domain='spare.example', scheme='https')

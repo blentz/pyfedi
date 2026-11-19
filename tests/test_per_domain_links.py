@@ -4,7 +4,7 @@ import pytest
 from app.models import User
 from app.storefront import canonicalise_links, canonicalise_text, home_storefront, storefront_html
 from app.utils import allowlist_html, markdown_to_html
-from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, default_request, onion_request
 
 
 def test_links_on_the_default_storefront_are_unchanged(app, two_domains):

@@ -6,7 +6,7 @@ import pytest
 
 from app import db
 from tests.factories import make_community, make_feed_item, make_post
-from tests.three_domains import FIRST, get, three_domains, two_domains  # noqa: F401
+from tests.three_domains import FIRST, get
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -19,7 +19,7 @@ def public_site(site):
     return site
 
 
-def test_a_feed_holds_communities_from_several_domains_and_remote_servers(app, three_domains):  # noqa: F811
+def test_a_feed_holds_communities_from_several_domains_and_remote_servers(app, three_domains):
     d = three_domains
     owner = d.account('owner', d.first)
     remote = make_community('remotegroup', host='remote.example')

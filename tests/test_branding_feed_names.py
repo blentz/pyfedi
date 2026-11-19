@@ -12,9 +12,8 @@ from app import cache, db
 from app.models import Domain, DomainBranding, Feed, Site, Tag, Topic
 from app.storefront import clear_domain_cache
 from tests.factories import make_post
-from tests.test_c3_golden_documents import golden_site  # noqa: F401  (fixtures)
-from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_first  # noqa: F401
-from tests.two_domains import FIRST, two_domains  # noqa: F401  (a fixture)
+from tests.test_per_domain_actor_documents import SHOP_BASE, site_named_first
+from tests.two_domains import FIRST
 
 SHOP = 'shop.example'
 SITE_NAME = 'First Domain Site'

@@ -14,8 +14,6 @@ from tests import test_login_gate as gate_tests
 from tests import test_onion_guard_limits as limit_tests
 from tests.factories import make_community, make_user
 
-private = gate_tests.private   # the private-instance fixture
-limited_app = limit_tests.limited_app   # an app whose limiter counts
 STORED = 'https://test.piefed.local/static/media/posts/ab/cd/abcdefghijklmno.png'
 
 
@@ -108,12 +106,12 @@ def test_an_upload_works_on_a_private_instance(private, app, stored):
     assert response.status_code == 200, response.get_data(as_text=True)
 
 
-def test_uploads_share_alphas_limit(limited_app, api_baseline, monkeypatch, stored):
-    monkeypatch.setitem(limited_app.config, 'ENABLE_ALPHA_API', 'true')
-    with limited_app.app_context():
+def test_uploads_share_alphas_limit(onion_guard_limits_limited_app, api_baseline, monkeypatch, stored):
+    monkeypatch.setitem(onion_guard_limits_limited_app.config, 'ENABLE_ALPHA_API', 'true')
+    with onion_guard_limits_limited_app.app_context():
         person = make_user(None, 'lemmyuploadlimit', local=True)
         headers, away = {'Authorization': f'Bearer {person.encode_jwt_token()}'}, {'REMOTE_ADDR': '203.0.113.4'}
-        client = limited_app.test_client()
+        client = onion_guard_limits_limited_app.test_client()
         limiter.reset()
         limiter.enabled = True
         try:

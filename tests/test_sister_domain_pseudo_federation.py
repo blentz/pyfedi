@@ -31,11 +31,10 @@ from app.shared.reply import make_reply
 from app.storefront import clear_domain_cache, domain_for_host, is_hosted_uri
 from tests.factories import bearer, make_community_member, make_follow, make_instance, make_notification_subscription, \
     make_user
-from tests.test_no_http_to_hosted import wire  # noqa: F401 -- fixture
 from tests.test_per_domain_object_ids import _keyed, a_post
 from tests.test_per_domain_signing import _key_id
 from tests.test_shared_post_edit import _api_input
-from tests.two_domains import FIRST, request_on, two_domains  # noqa: F401 -- fixture
+from tests.two_domains import FIRST, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -54,7 +53,7 @@ def _peer(domain, software):
 
 
 @pytest.fixture
-def world(app, two_domains):  # noqa: F811 -- two_domains is the imported fixture
+def world(app, two_domains):  # -- two_domains is the imported fixture
     """hal on the first domain and sam on shop.example, a community on each (pit on the first domain, wares on shop.example), each
     with its own key, and rem on peer.example (Lemmy) following both. hal's post in pit and sam's post in wares, each
     author subscribed to replies as make_post leaves them."""
@@ -92,13 +91,13 @@ def _reply(app, author, domain, post):
     return _act(app, domain, author, lambda: make_reply(payload, post, None, SRC_API, auth=bearer(author))[1])
 
 
-def _sent(wire):  # noqa: F811 -- wire is the imported fixture
+def _sent(wire):  # -- wire is the imported fixture
     """Each request that left the server: (url, body, keyId, the httpx request)."""
     return [(str(call.request.url), json.loads(call.request.content), _key_id(call.request), call.request)
             for call in wire.calls]
 
 
-def _nothing_hosted(wire):  # noqa: F811
+def _nothing_hosted(wire):
     assert [url for url, *_ in _sent(wire) if is_hosted_uri(url)] == []
     # and nothing even addressed one of ours (post_request logs a refused hosted delivery, or one to a hosted row's
     # empty inbox, as a failure): every activity handed to post_request was delivered
@@ -117,7 +116,7 @@ def _verifies_at(monkeypatch, app, sent_request, public_key):
             return HttpSignature.verify_request(request, public_key, POST_REQUIRED, enforce=True)
 
 
-def _the_announce(wire, inbox, community):  # noqa: F811
+def _the_announce(wire, inbox, community):
     """The one delivery, to `inbox`: an Announce by `community`, on its domain, under its key."""
     sent = _sent(wire)
     assert [url for url, *_ in sent] == [inbox]
@@ -132,21 +131,21 @@ def _the_announce(wire, inbox, community):  # noqa: F811
 
 # -- a reply ----------------------------------------------------------------------------------------------------------
 
-def test_a_shop_users_reply_on_a_first_post_is_stored_and_announced_by_first_domains_community(app, world, wire,
-                                                                                    monkeypatch):  # noqa: F811
+def test_a_shop_users_reply_on_a_first_post_is_stored_and_announced_by_first_domains_community(app, world, no_http_to_hosted_wire,
+                                                                                    monkeypatch):
     # sam has a remote follower: a public comment goes to the community, not to the author's followers (plan rule,
     # upstream PieFed), so their inbox gets nothing
     make_follow(world.sam, make_user(_peer('masto.example', 'mastodon'), 'max'), is_inward=True)
 
     reply = _reply(app, world.sam, world.shop, world.hello)
 
-    assert MASTO_INBOX not in [url for url, *_ in _sent(wire)]
+    assert MASTO_INBOX not in [url for url, *_ in _sent(no_http_to_hosted_wire)]
     stored = db.session.get(PostReply, reply.id)
     assert stored is not None and stored.post_id == world.hello.id and stored.user_id == world.sam.id
     assert stored.ap_id.startswith(f'{SHOP_BASE}/')
-    _nothing_hosted(wire)
+    _nothing_hosted(no_http_to_hosted_wire)
 
-    announce, sent_request = _the_announce(wire, PEER_INBOX, world.pit)
+    announce, sent_request = _the_announce(no_http_to_hosted_wire, PEER_INBOX, world.pit)
     assert _verifies_at(monkeypatch, app, sent_request, world.pit.public_key) is True
     create = announce['object']
     assert create['type'] == 'Create'
@@ -162,16 +161,16 @@ def test_a_shop_users_reply_on_a_first_post_is_stored_and_announced_by_first_dom
     assert notification.targets['comment_id'] == reply.id
 
 
-def test_a_first_users_reply_in_a_shop_community_is_announced_by_the_shops_community(app, world, wire,
-                                                                                   monkeypatch):  # noqa: F811
+def test_a_first_users_reply_in_a_shop_community_is_announced_by_the_shops_community(app, world, no_http_to_hosted_wire,
+                                                                                   monkeypatch):
     """The mirror: the community, not the replier, decides which domain Announces."""
     reply = _reply(app, world.hal, world.first, world.wares_post)
 
     stored = db.session.get(PostReply, reply.id)
     assert stored.ap_id.startswith(f'{FIRST_BASE}/')
-    _nothing_hosted(wire)
+    _nothing_hosted(no_http_to_hosted_wire)
 
-    announce, sent_request = _the_announce(wire, PEER_INBOX, world.wares)
+    announce, sent_request = _the_announce(no_http_to_hosted_wire, PEER_INBOX, world.wares)
     assert announce['actor'] == f'{SHOP_BASE}/c/wares'
     assert _verifies_at(monkeypatch, app, sent_request, world.wares.public_key) is True
     create = announce['object']
@@ -184,18 +183,18 @@ def test_a_first_users_reply_in_a_shop_community_is_announced_by_the_shops_commu
     assert notification.author_id == world.hal.id
 
 
-def test_the_announce_does_not_verify_under_the_repliers_key(app, world, wire, monkeypatch):  # noqa: F811
+def test_the_announce_does_not_verify_under_the_repliers_key(app, world, no_http_to_hosted_wire, monkeypatch):
     """The verifier above can say no: the Announce is the community's, not the replying account's."""
     _reply(app, world.sam, world.shop, world.hello)
-    _, sent_request = _the_announce(wire, PEER_INBOX, world.pit)
+    _, sent_request = _the_announce(no_http_to_hosted_wire, PEER_INBOX, world.pit)
     with pytest.raises(KeyMismatchError, match='Signature mismatch'):
         _verifies_at(monkeypatch, app, sent_request, world.sam.public_key)
 
 
 # -- a vote -----------------------------------------------------------------------------------------------------------
 
-def test_a_shop_users_vote_on_a_first_post_is_stored_and_announced_by_first_domains_community(app, world, wire,
-                                                                                   monkeypatch):  # noqa: F811
+def test_a_shop_users_vote_on_a_first_post_is_stored_and_announced_by_first_domains_community(app, world, no_http_to_hosted_wire,
+                                                                                   monkeypatch):
     before = db.session.get(Post, world.hello.id).up_votes or 0
     _act(app, world.shop, world.sam,
          lambda: vote_for_post(world.hello.id, 'upvote', True, None, SRC_API, auth=bearer(world.sam)))
@@ -203,9 +202,9 @@ def test_a_shop_users_vote_on_a_first_post_is_stored_and_announced_by_first_doma
     db.session.expire_all()
     assert db.session.query(PostVote).filter_by(user_id=world.sam.id, post_id=world.hello.id).one().effect > 0
     assert db.session.get(Post, world.hello.id).up_votes == before + 1
-    _nothing_hosted(wire)
+    _nothing_hosted(no_http_to_hosted_wire)
 
-    announce, sent_request = _the_announce(wire, PEER_INBOX, world.pit)
+    announce, sent_request = _the_announce(no_http_to_hosted_wire, PEER_INBOX, world.pit)
     assert _verifies_at(monkeypatch, app, sent_request, world.pit.public_key) is True
     like = announce['object']
     assert like['type'] == 'Like'
@@ -225,7 +224,7 @@ def notifs(app, monkeypatch):
 
 
 def test_with_the_notifs_channel_a_shop_users_vote_is_published_for_the_peer_and_never_for_a_hosted_inbox(
-        app, world, wire, notifs, monkeypatch):  # noqa: F811
+        app, world, no_http_to_hosted_wire, notifs, monkeypatch):
     """A vote on a local community goes through piefed_notifs (likes.py send_vote) when NOTIF_SERVER is set: the
     second channel out of the server. A stale peer row whose inbox names shop.example follows pit too, the one way a
     hosted inbox reaches the fan-out (hosted Instance rows are filtered and carry none): it is never published,
@@ -237,7 +236,7 @@ def test_with_the_notifs_channel_a_shop_users_vote_is_published_for_the_peer_and
     _act(app, world.shop, world.sam,
          lambda: vote_for_post(world.hello.id, 'upvote', True, None, SRC_API, auth=bearer(world.sam)))
 
-    assert wire.calls.call_count == 0   # nothing over httpx: the votes went to the channel
+    assert no_http_to_hosted_wire.calls.call_count == 0   # nothing over httpx: the votes went to the channel
     urls = [url for _, payload in notifs for url in payload['urls']]
     assert [url for url in urls if is_hosted_uri(url)] == []
     assert urls == [PEER_INBOX]
@@ -249,21 +248,21 @@ def test_with_the_notifs_channel_a_shop_users_vote_is_published_for_the_peer_and
 
 
 def test_with_the_notifs_channel_a_reply_still_goes_over_http_and_never_to_a_hosted_inbox(
-        app, world, wire, notifs, monkeypatch):  # noqa: F811
+        app, world, no_http_to_hosted_wire, notifs, monkeypatch):
     """Only votes use the channel (likes.py is publish_async_posts' one outbound caller): a reply is still sent by
     post_request, to the peer alone, with NOTIF_SERVER set."""
     _reply(app, world.sam, world.shop, world.hello)
 
     assert notifs == []
-    _nothing_hosted(wire)
-    _, sent_request = _the_announce(wire, PEER_INBOX, world.pit)
+    _nothing_hosted(no_http_to_hosted_wire)
+    _, sent_request = _the_announce(no_http_to_hosted_wire, PEER_INBOX, world.pit)
     assert _verifies_at(monkeypatch, app, sent_request, world.pit.public_key) is True
 
 
 # -- a post -----------------------------------------------------------------------------------------------------------
 
-def test_a_shop_users_post_in_a_first_community_reaches_community_and_author_followers(app, world, wire,
-                                                                                     monkeypatch):  # noqa: F811
+def test_a_shop_users_post_in_a_first_community_reaches_community_and_author_followers(app, world, no_http_to_hosted_wire,
+                                                                                     monkeypatch):
     """pages.py send_post: the community's followers and the author's piefed/mbin followers get the community's
     Announce; any other follower (Mastodon here) the author's own Create."""
     piefed_fan = make_user(_peer('pf.example', 'piefed'), 'pia')
@@ -277,11 +276,11 @@ def test_a_shop_users_post_in_a_first_community_reaches_community_and_author_fol
 
     stored = db.session.get(Post, post.id)
     assert stored.community_id == world.pit.id and stored.ap_id.startswith(f'{SHOP_BASE}/')
-    _nothing_hosted(wire)
+    _nothing_hosted(no_http_to_hosted_wire)
 
-    by_inbox = {url: (body, key_id, sent_request) for url, body, key_id, sent_request in _sent(wire)}
+    by_inbox = {url: (body, key_id, sent_request) for url, body, key_id, sent_request in _sent(no_http_to_hosted_wire)}
     assert sorted(by_inbox) == sorted([PEER_INBOX, PIEFED_INBOX, MASTO_INBOX])
-    assert len(wire.calls) == 3
+    assert len(no_http_to_hosted_wire.calls) == 3
     for inbox in (PEER_INBOX, PIEFED_INBOX):
         body, key_id, sent_request = by_inbox[inbox]
         assert body['type'] == 'Announce' and body['actor'] == world.pit.public_url()

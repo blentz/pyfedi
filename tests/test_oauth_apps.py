@@ -5,7 +5,6 @@ import pytest
 from app.models import OAuthApp
 from app.oauth_scopes import SCOPES, covers
 from app.oauth_server import tokens
-from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
 TUSKY = 'oauth2redirect://com.keylesspalace.tusky/'
 OOB = 'urn:ietf:wg:oauth:2.0:oob'

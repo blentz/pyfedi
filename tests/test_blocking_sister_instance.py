@@ -11,7 +11,7 @@ from app.api.alpha.utils.site import post_site_block
 from app.models import InstanceBlock, Site
 from tests.factories import bearer, make_instance, make_post, make_post_reply, make_user
 from tests.test_per_domain_html_routes import BASE, Visitor
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 

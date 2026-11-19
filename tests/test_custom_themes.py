@@ -13,7 +13,6 @@ from app.custom_themes import (CUSTOM_PREFIX, custom_identifier, custom_theme_id
                                is_shipped, theme_counts)
 from app.models import CustomTheme, CustomThemeFile, SiteDomain
 from app.storefront import clear_domain_cache
-from tests.two_domains import two_domains  # noqa: F401  (a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
 

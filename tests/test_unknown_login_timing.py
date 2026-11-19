@@ -20,8 +20,7 @@ from app.nntp.nntpserver import NNTPAuthenticationError
 from app.nntp.server import PieFedNNTPServer
 from app.shared.auth import api_log_user_in
 from tests.factories import make_user
-from tests.test_onion_guard_limits import (LOGIN, PASSWORD, a_session, alice, ldap_off, login_form,  # noqa: F401
-                                           onion, proof_given, web_login)
+from tests.test_onion_guard_limits import LOGIN, PASSWORD, a_session, login_form, proof_given, web_login
 
 CLEARNET = {'REMOTE_ADDR': '203.0.113.9'}
 
@@ -57,7 +56,7 @@ def clearnet_attempt(app, typed):
     return response, flashed(client)
 
 
-def test_web_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, ldap_off):
+def test_web_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, onion_guard_limits_alice, ldap_off):
     with counted() as verified:
         unknown, unknown_flashes = clearnet_attempt(app, 'ghost')
     verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
@@ -70,7 +69,7 @@ def test_web_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_pa
     assert unknown_flashes == wrong_flashes and unknown_flashes
 
 
-def test_onion_web_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, ldap_off):
+def test_onion_web_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, onion_guard_limits_alice, ldap_off):
     answers = []
     for typed in ('ghost', 'alice'):
         client = app.test_client()
@@ -90,7 +89,7 @@ def api_attempt(app, typed):
     return type(raised.value), str(raised.value)
 
 
-def test_api_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, ldap_off):
+def test_api_login_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, onion_guard_limits_alice, ldap_off):
     with counted() as verified:
         unknown = api_attempt(app, 'ghost')
     verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
@@ -108,7 +107,7 @@ def verify_attempt(app, typed):
 
 
 @pytest.mark.parametrize('typed', ['ghost', 'ghost@example.com'], ids=['name', 'email'])
-def test_verify_credentials_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, typed):
+def test_verify_credentials_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, onion_guard_limits_alice, typed):
     with counted() as verified:
         unknown = verify_attempt(app, typed)
     verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')
@@ -123,9 +122,9 @@ def test_verify_credentials_for_an_unknown_name_verifies_a_hash_and_answers_as_a
 # --------------------------------------------------------------------------
 
 @pytest.fixture(params=[None, ''], ids=['null', 'empty'])
-def passwordless(request, alice):
+def passwordless(request, onion_guard_limits_alice):
     """bob: an account with no stored hash, beside alice's real one."""
-    bob = make_user(alice.instance, 'bob', local=True)
+    bob = make_user(onion_guard_limits_alice.instance, 'bob', local=True)
     bob.verified = True
     bob.password_hash = request.param
     db.session.commit()
@@ -169,7 +168,7 @@ def nntp_attempt(app, typed):
 
 
 @pytest.mark.parametrize('typed', ['ghost', 'ghost@example.com', 'gh\x00ost'], ids=['name', 'email', 'nul'])
-def test_nntp_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, alice, typed):
+def test_nntp_for_an_unknown_name_verifies_a_hash_and_answers_as_a_wrong_password(app, onion_guard_limits_alice, typed):
     with counted() as verified:
         unknown = nntp_attempt(app, typed)
     verified.assert_called_once_with(dummy_password_hash(), 'a wrong password')

@@ -14,9 +14,8 @@ from app import db
 from app.models import CustomTheme, ModLog
 from app.theme_code import ThemeCodeError, read_archive
 from tests.conftest import forget_login
-from tests.test_custom_themes_admin import BASE, csrf, themes_url, world  # noqa: F401  (world is a fixture)
+from tests.test_custom_themes_admin import BASE, csrf, themes_url
 from tests.test_custom_themes_files import PNG, no_stored_files_left, stored_files  # noqa: F401  (autouse)
-from tests.two_domains import two_domains  # noqa: F401  (a fixture world needs)
 
 pytestmark = pytest.mark.usefixtures('site')
 MANIFEST = {'format': 1, 'name': 'Imported', 'base_theme': 'forest', 'software': 'piefed'}
@@ -51,10 +50,10 @@ def imported(domain):
 
 
 @pytest.fixture
-def coder(world):
+def coder(custom_themes_admin_world):
     from tests.factories import grant_permission
-    grant_permission(world['admin'].user, 'manage theme code')
-    return world['admin']
+    grant_permission(custom_themes_admin_world['admin'].user, 'manage theme code')
+    return custom_themes_admin_world['admin']
 
 
 # --- read_archive: what a zip may hold
@@ -199,106 +198,106 @@ def test_a_directory_entry_is_ignored(app):
 
 # --- the import route
 
-def test_a_holder_imports_a_css_only_theme(world):
-    response = post(world['holder'], world['onion'], make_zip({'files/logo.png': PNG}))
+def test_a_holder_imports_a_css_only_theme(custom_themes_admin_world):
+    response = post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], make_zip({'files/logo.png': PNG}))
     assert response.status_code == 302
-    [theme] = imported(world['onion'])
+    [theme] = imported(custom_themes_admin_world['onion'])
     assert (theme.name, theme.base_theme, theme.css, theme.retired) == \
         ('Imported', 'forest', '.imported { color: red; }', False)
-    assert [f.filename for f in theme.files] == ['logo.png'] and theme.updated_by == world['holder'].user.id
+    assert [f.filename for f in theme.files] == ['logo.png'] and theme.updated_by == custom_themes_admin_world['holder'].user.id
     assert [(m.link_text, m.reason) for m in db.session.query(ModLog).filter_by(action='import_theme')] == \
         [('Imported', 'theme.zip')]
 
 
-def test_code_needs_the_permission(world):
-    response = post(world['holder'], world['onion'], make_zip({'scripts.js': 'go();'}))
-    assert response.status_code == 403 and imported(world['onion']) == []
+def test_code_needs_the_permission(custom_themes_admin_world):
+    response = post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], make_zip({'scripts.js': 'go();'}))
+    assert response.status_code == 403 and imported(custom_themes_admin_world['onion']) == []
 
 
-def test_a_coder_imports_code(world, coder):
-    response = post(coder, world['default'], make_zip({'templates/index.html': 'home', 'scripts.js': 'go();'}))
+def test_a_coder_imports_code(custom_themes_admin_world, coder):
+    response = post(coder, custom_themes_admin_world['default'], make_zip({'templates/index.html': 'home', 'scripts.js': 'go();'}))
     assert response.status_code == 302
-    [theme] = imported(world['default'])
+    [theme] = imported(custom_themes_admin_world['default'])
     assert theme.script == 'go();' and [(t.name, t.source) for t in theme.templates] == [('index.html', 'home')]
     assert [m.reason for m in db.session.query(ModLog).filter_by(action='import_theme')] == ['theme.zip, with code']
 
 
-def test_a_taken_name_gets_the_copy_suffix(world):
-    post(world['holder'], world['onion'], make_zip())
-    post(world['holder'], world['onion'], make_zip())
-    assert sorted(t.name for t in imported(world['onion'])) == ['Copy of Imported', 'Imported']
+def test_a_taken_name_gets_the_copy_suffix(custom_themes_admin_world):
+    post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], make_zip())
+    post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], make_zip())
+    assert sorted(t.name for t in imported(custom_themes_admin_world['onion'])) == ['Copy of Imported', 'Imported']
 
 
-def test_a_base_theme_this_site_does_not_have_is_refused(world):
-    response = post(world['holder'], world['onion'], make_zip(manifest={**MANIFEST, 'base_theme': 'gone-theme'}))
+def test_a_base_theme_this_site_does_not_have_is_refused(custom_themes_admin_world):
+    response = post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], make_zip(manifest={**MANIFEST, 'base_theme': 'gone-theme'}))
     assert response.status_code == 400 and 'gone-theme' in response.get_data(as_text=True)
-    assert imported(world['onion']) == []
+    assert imported(custom_themes_admin_world['onion']) == []
 
 
-def test_piefed_is_a_base_theme_every_site_has(world):
-    assert post(world['holder'], world['onion'], make_zip(manifest={**MANIFEST, 'base_theme': 'piefed'})).status_code \
+def test_piefed_is_a_base_theme_every_site_has(custom_themes_admin_world):
+    assert post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], make_zip(manifest={**MANIFEST, 'base_theme': 'piefed'})).status_code \
         == 302
 
 
-def test_a_refused_archive_is_a_400_that_names_the_entry_and_stores_nothing(world):
+def test_a_refused_archive_is_a_400_that_names_the_entry_and_stores_nothing(custom_themes_admin_world):
     before = stored_files()
-    response = post(world['holder'], world['onion'], make_zip({'files/logo.png': PNG, '../evil': 'x'}))
+    response = post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], make_zip({'files/logo.png': PNG, '../evil': 'x'}))
     assert response.status_code == 400 and '../evil' in response.get_data(as_text=True)
-    assert imported(world['onion']) == [] and stored_files() == before
+    assert imported(custom_themes_admin_world['onion']) == [] and stored_files() == before
 
 
-def test_an_onion_import_refuses_off_site_css(world):
+def test_an_onion_import_refuses_off_site_css(custom_themes_admin_world):
     data = io.BytesIO()
     with zipfile.ZipFile(data, 'w') as archive:
         archive.writestr('manifest.json', json.dumps(MANIFEST))
         archive.writestr('styles.css', 'body { background: url(https://elsewhere.example/x.png); }')
-    response = post(world['holder'], world['onion'], data.getvalue())
+    response = post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], data.getvalue())
     assert response.status_code == 400 and 'elsewhere.example' in response.get_data(as_text=True)
 
 
-def test_a_clearnet_import_with_off_site_css_is_taken_with_a_warning(world):
+def test_a_clearnet_import_with_off_site_css_is_taken_with_a_warning(custom_themes_admin_world):
     data = io.BytesIO()
     with zipfile.ZipFile(data, 'w') as archive:
         archive.writestr('manifest.json', json.dumps(MANIFEST))
         archive.writestr('styles.css', 'body { background: url(https://elsewhere.example/x.png); }')
-    response = post(world['admin'], world['default'], data.getvalue())
-    assert response.status_code == 302 and len(imported(world['default'])) == 1
+    response = post(custom_themes_admin_world['admin'], custom_themes_admin_world['default'], data.getvalue())
+    assert response.status_code == 302 and len(imported(custom_themes_admin_world['default'])) == 1
     forget_login()
-    page = world['admin'].get(response.headers['Location']).get_data(as_text=True)
+    page = custom_themes_admin_world['admin'].get(response.headers['Location']).get_data(as_text=True)
     assert 'elsewhere.example' in page
 
 
-def test_too_many_files_or_too_large_files_for_the_theme_are_refused(app, world, monkeypatch):
+def test_too_many_files_or_too_large_files_for_the_theme_are_refused(app, custom_themes_admin_world, monkeypatch):
     monkeypatch.setitem(app.config, 'CUSTOM_THEME_MAX_BYTES', len(PNG) + 1)
-    response = post(world['holder'], world['onion'], make_zip({'files/a.png': PNG, 'files/b.png': PNG}))
-    assert response.status_code == 400 and imported(world['onion']) == []
+    response = post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], make_zip({'files/a.png': PNG, 'files/b.png': PNG}))
+    assert response.status_code == 400 and imported(custom_themes_admin_world['onion']) == []
 
 
-def test_an_archive_over_the_upload_limit_is_refused(app, world, monkeypatch):
+def test_an_archive_over_the_upload_limit_is_refused(app, custom_themes_admin_world, monkeypatch):
     monkeypatch.setitem(app.config, 'CUSTOM_THEME_MAX_ARCHIVE_BYTES', 100)
-    response = post(world['holder'], world['onion'], make_zip({'files/a.png': PNG}))
+    response = post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion'], make_zip({'files/a.png': PNG}))
     assert response.status_code == 400 and 'too big' in response.get_data(as_text=True)
 
 
-def test_an_import_without_a_file_is_a_400(world):
-    assert post(world['holder'], world['onion']).status_code == 400
+def test_an_import_without_a_file_is_a_400(custom_themes_admin_world):
+    assert post(custom_themes_admin_world['holder'], custom_themes_admin_world['onion']).status_code == 400
 
 
-def test_import_needs_theme_holder_rights(world):
-    assert post(world['holder'], world['default'], make_zip()).status_code == 403
+def test_import_needs_theme_holder_rights(custom_themes_admin_world):
+    assert post(custom_themes_admin_world['holder'], custom_themes_admin_world['default'], make_zip()).status_code == 403
 
 
-def test_an_export_imports_back_to_the_same_theme(app, world, coder):
+def test_an_export_imports_back_to_the_same_theme(app, custom_themes_admin_world, coder):
     from app.custom_themes import add_theme_file
     from app.models import CustomThemeTemplate
     from tests.test_custom_themes_files import LIMITS
-    day = world['day']
+    day = custom_themes_admin_world['day']
     add_theme_file(day, 'logo.png', PNG, False, LIMITS)
     day.script = 'go();'
     db.session.add(CustomThemeTemplate(custom_theme_id=day.id, name='about.html', source='about'))
     db.session.commit()
-    exported = coder.post(themes_url(world['default'], f'/{day.id}/export')).get_data()
-    assert post(coder, world['default'], exported).status_code == 302
+    exported = coder.post(themes_url(custom_themes_admin_world['default'], f'/{day.id}/export')).get_data()
+    assert post(coder, custom_themes_admin_world['default'], exported).status_code == 302
     copy = db.session.query(CustomTheme).filter_by(name='Copy of Daylight').one()
     assert (copy.css, copy.base_theme, copy.script) == (day.css, day.base_theme, day.script)
     assert [(t.name, t.source) for t in copy.templates] == [('about.html', 'about')]

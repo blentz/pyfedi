@@ -19,11 +19,6 @@ FIXTURES = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tests', 'fi
 POST_STATUS_PUBLISHED = 1   # app/constants.py
 
 
-@pytest.fixture(scope='module')
-def alice_web():
-    return PieFedWeb('alice', 'interop-alice-pw')
-
-
 def _query(sql, *args):
     """Rows from the harness database: the media record lives in Post.extensions, which the alpha API does not
     expose."""

@@ -150,32 +150,6 @@ def test_cover_art_alone_is_not_audio():
 # ---------------------------------------------------------------- probe_media against the database
 
 
-@pytest.fixture
-def env(app, db_session, site, private_static_tree, monkeypatch):
-    local = make_instance('test.piefed.local', software='piefed')
-    make_user(local, 'founder', local=True)   # user 1 is the admin
-    mod = make_user(local, 'mod', local=True)
-    mod.verified = True
-    mod.private_key = 'a private key'   # can_create_post wants both of a local user
-    chan, cast = make_community('chan'), make_community('cast')
-    chan.kind, cast.kind = COMMUNITY_KIND_VIDEO_CHANNEL, COMMUNITY_KIND_PODCAST
-    db.session.commit()
-    for community in (chan, cast):
-        make_community_member(mod, community, is_moderator=True)
-    set_setting('allow_video_file_uploads', 'users')   # the author may upload to both, until a test revokes it
-    set_setting('allow_audio_file_uploads', 'users')
-
-    tasks, notified, sized = [], [], []
-    monkeypatch.setattr(media_tasks, 'task_selector', lambda key, **kw: tasks.append((key, kw)))
-    monkeypatch.setattr(media_tasks, 'notify_about_post', lambda post: notified.append(post.id))
-    monkeypatch.setattr(media_tasks, 'make_image_sizes', lambda *args: sized.append(args))
-    yield SimpleNamespace(app=app, mod=mod, chan=chan, cast=cast, tasks=tasks, notified=notified, sized=sized)
-    db.session.rollback()
-    for directory, _, files in os.walk('app/static'):
-        for name in files:
-            os.unlink(os.path.join(directory, name))
-
-
 def stored_post(env, fixture='video_h264.mp4', kind='video', title='Processing', **columns):
     community = env.chan if kind == 'video' else env.cast
     post = make_post(community, env.mod, ap_id=f'https://test.piefed.local/post/{title}', title=title)
@@ -210,8 +184,8 @@ def assert_nothing_published(env, post):
     assert env.tasks == [] and env.notified == []
 
 
-def test_a_good_video_is_ready_thumbnailed_and_published(env):
-    post = stored_post(env)
+def test_a_good_video_is_ready_thumbnailed_and_published(media_probe_env):
+    post = stored_post(media_probe_env)
     before = dict(media_of(post))
     post = run(post)
 
@@ -226,15 +200,15 @@ def test_a_good_video_is_ready_thumbnailed_and_published(env):
     assert isinstance(post.image, File) and media['thumbnail_file_id'] == post.image_id
     thumbnail = post.image.local_path_for_url(post.image.source_url)
     assert thumbnail.endswith('.jpg') and os.path.getsize(thumbnail) > 0
-    assert env.sized == [(post.image_id, 512, 1200, 'posts', post.community.low_quality)]
-    assert env.tasks == [('make_post', {'post_id': post.id})]
-    assert env.notified == [post.id]
+    assert media_probe_env.sized == [(post.image_id, 512, 1200, 'posts', post.community.low_quality)]
+    assert media_probe_env.tasks == [('make_post', {'post_id': post.id})]
+    assert media_probe_env.notified == [post.id]
     assert os.path.isfile(media_local_path(post))   # S3 is off: the media stays where it was stored
     assert os.listdir('app/static/tmp') == []
 
 
-def test_an_audio_file_with_cover_art_gets_that_art_as_its_thumbnail(env):
-    post = run(stored_post(env, 'audio_cover.mp3', 'audio'))
+def test_an_audio_file_with_cover_art_gets_that_art_as_its_thumbnail(media_probe_env):
+    post = run(stored_post(media_probe_env, 'audio_cover.mp3', 'audio'))
     media = media_of(post)
     assert media['status'] == 'ready' and media['codec'] == 'mp3'
     assert media['duration_s'] == ffprobe_duration('audio_cover.mp3')
@@ -244,58 +218,58 @@ def test_an_audio_file_with_cover_art_gets_that_art_as_its_thumbnail(env):
     assert post.status == POST_STATUS_PUBLISHED
 
 
-def test_an_audio_file_without_art_has_no_thumbnail(env):
-    post = run(stored_post(env, 'audio.mp3', 'audio'))
+def test_an_audio_file_without_art_has_no_thumbnail(media_probe_env):
+    post = run(stored_post(media_probe_env, 'audio.mp3', 'audio'))
     media = media_of(post)
     assert media['status'] == 'ready' and 'thumbnail_file_id' not in media
-    assert post.image_id is None and env.sized == []
+    assert post.image_id is None and media_probe_env.sized == []
     assert post.status == POST_STATUS_PUBLISHED
     assert File.query.count() == 0
 
 
-def test_a_refused_codec_fails_the_post_and_tells_the_author(env):
-    post = stored_post(env, 'video_mpeg4.mp4')
+def test_a_refused_codec_fails_the_post_and_tells_the_author(media_probe_env):
+    post = stored_post(media_probe_env, 'video_mpeg4.mp4')
     local = media_local_path(post)
-    unread = env.mod.unread_notifications
+    unread = media_probe_env.mod.unread_notifications
     post = run(post)
 
     media = media_of(post)
     assert media['status'] == 'failed' and 'mpeg4' in media['error'] and 'codec' in media['error']
-    assert_nothing_published(env, post)
+    assert_nothing_published(media_probe_env, post)
     assert not os.path.exists(local) and files_on_disk() == []   # ruling: a failed upload's file is removed
     notification = Notification.query.one()
-    assert notification.user_id == env.mod.id and notification.author_id == env.mod.id
+    assert notification.user_id == media_probe_env.mod.id and notification.author_id == media_probe_env.mod.id
     assert (notification.notif_type, notification.subtype) == (NOTIF_DEFAULT, 'media_failed')
     assert notification.targets == {'post_id': post.id}
     assert notification.url == f'/post/{post.id}'
     assert notification.title.startswith('Your upload could not be processed: ') and 'mpeg4' in notification.title
-    assert db.session.get(User, env.mod.id).unread_notifications == unread + 1
+    assert db.session.get(User, media_probe_env.mod.id).unread_notifications == unread + 1
     assert File.query.count() == 0
 
 
-def test_the_failure_notification_lists_with_its_title(env, app):
-    run(stored_post(env, 'video_mpeg4.mp4'))
+def test_the_failure_notification_lists_with_its_title(media_probe_env, app):
+    run(stored_post(media_probe_env, 'video_mpeg4.mp4'))
     client = app.test_client()
     with client.session_transaction() as session:
-        session['_user_id'] = str(env.mod.id)
+        session['_user_id'] = str(media_probe_env.mod.id)
         session['_fresh'] = True
     response = client.get('/notifications')
     assert response.status_code == 200
     assert 'Your upload could not be processed' in response.get_data(as_text=True)
 
 
-def test_a_sandbox_error_fails_the_post_with_its_reason(env, monkeypatch):
+def test_a_sandbox_error_fails_the_post_with_its_reason(media_probe_env, monkeypatch):
     def timed_out(path):
         raise MediaToolError('ffprobe timed out after 60 s')
     monkeypatch.setattr(media_tasks, 'run_ffprobe', timed_out)
-    post = run(stored_post(env))
+    post = run(stored_post(media_probe_env))
     assert media_of(post)['status'] == 'failed'
     assert media_of(post)['error'] == 'ffprobe timed out after 60 s'
-    assert_nothing_published(env, post)
+    assert_nothing_published(media_probe_env, post)
 
 
-def test_a_thumbnail_that_cannot_be_written_fails_the_post_and_leaves_nothing(env, monkeypatch):
-    post = stored_post(env)
+def test_a_thumbnail_that_cannot_be_written_fails_the_post_and_leaves_nothing(media_probe_env, monkeypatch):
+    post = stored_post(media_probe_env)
     media_file = media_local_path(post)
 
     def half_written(img, fp, **kwargs):
@@ -307,13 +281,13 @@ def test_a_thumbnail_that_cannot_be_written_fails_the_post_and_leaves_nothing(en
 
     assert media_of(post)['status'] == 'failed'
     assert media_of(post)['error'] == 'the thumbnail could not be made'   # no local path reaches the author
-    assert_nothing_published(env, post)
+    assert_nothing_published(media_probe_env, post)
     assert post.image_id is None and File.query.count() == 0
     assert not os.path.exists(media_file) and files_on_disk() == []
 
 
-def test_a_failure_after_the_thumbnail_removes_its_file_row_and_image(env, monkeypatch):
-    post = stored_post(env)
+def test_a_failure_after_the_thumbnail_removes_its_file_row_and_image(media_probe_env, monkeypatch):
+    post = stored_post(media_probe_env)
     media_file = media_local_path(post)
 
     def refuse(*args):
@@ -324,37 +298,27 @@ def test_a_failure_after_the_thumbnail_removes_its_file_row_and_image(env, monke
 
     assert media_of(post)['status'] == 'failed'
     assert media_of(post)['error'] == 'the file could not be stored'
-    assert_nothing_published(env, post)
+    assert_nothing_published(media_probe_env, post)
     assert post.image_id is None and File.query.count() == 0
     assert 'thumbnail_file_id' not in media_of(post)
     assert not os.path.exists(media_file) and files_on_disk() == []
 
 
-def test_a_scheduled_upload_waits_for_its_schedule(env):
-    post = run(stored_post(env, scheduled_for=utcnow() + timedelta(days=1), timezone='UTC'))
+def test_a_scheduled_upload_waits_for_its_schedule(media_probe_env):
+    post = run(stored_post(media_probe_env, scheduled_for=utcnow() + timedelta(days=1), timezone='UTC'))
     assert media_of(post)['status'] == 'ready'
     assert post.status == POST_STATUS_SCHEDULED
-    assert env.tasks == [] and env.notified == []
+    assert media_probe_env.tasks == [] and media_probe_env.notified == []
 
 
-@pytest.fixture
-def s3(env, s3_bucket, monkeypatch):
-    for key, value in (('S3_ACCESS_KEY', 'key'), ('S3_ACCESS_SECRET', 'secret'),
-                       ('S3_ENDPOINT', 'https://s3.us-east-1.amazonaws.com'), ('S3_REGION', 'us-east-1'),
-                       ('S3_BUCKET', s3_bucket), ('S3_PUBLIC_URL', 'cdn.probeland.test'),
-                       ('S3_STORAGE_CLASS', ''), ('S3_PUBLIC_ACL', '')):
-        monkeypatch.setitem(env.app.config, key, value)
-    return boto3.client('s3', region_name='us-east-1')
-
-
-def test_with_s3_on_the_media_and_its_thumbnail_move_to_the_bucket(env, s3):
-    post = stored_post(env)
+def test_with_s3_on_the_media_and_its_thumbnail_move_to_the_bucket(media_probe_env, media_probe_s3):
+    post = stored_post(media_probe_env)
     local = media_local_path(post)
     name = os.path.basename(local)
     post = run(post)
 
     key = f'posts/{name[0:2]}/{name[2:4]}/{name}'
-    head = s3.head_object(Bucket='pyfedi-test', Key=key)
+    head = media_probe_s3.head_object(Bucket='pyfedi-test', Key=key)
     assert head['ContentType'] == 'video/mp4'
     assert head['ContentLength'] == media_of(post)['bytes']
     assert post.url == f'https://cdn.probeland.test/{key}'
@@ -363,13 +327,13 @@ def test_with_s3_on_the_media_and_its_thumbnail_move_to_the_bucket(env, s3):
 
     assert post.image.source_url.startswith('https://cdn.probeland.test/posts/')
     thumbnail_key = post.image.source_url.removeprefix('https://cdn.probeland.test/')
-    assert s3.head_object(Bucket='pyfedi-test', Key=thumbnail_key)['ContentType'] == 'image/jpeg'
+    assert media_probe_s3.head_object(Bucket='pyfedi-test', Key=thumbnail_key)['ContentType'] == 'image/jpeg'
     assert files_on_disk() == []
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
 
 
-def test_a_media_upload_refused_by_s3_removes_the_local_file_and_the_thumbnail_leaves_the_bucket(env, s3, monkeypatch):
-    post = stored_post(env)
+def test_a_media_upload_refused_by_s3_removes_the_local_file_and_the_thumbnail_leaves_the_bucket(media_probe_env, media_probe_s3, monkeypatch):
+    post = stored_post(media_probe_env)
     local = media_local_path(post)
     real_upload = media_tasks.upload_file_to_s3
 
@@ -381,16 +345,16 @@ def test_a_media_upload_refused_by_s3_removes_the_local_file_and_the_thumbnail_l
     post = run(post)
 
     assert media_of(post)['status'] == 'failed' and media_of(post)['error'] == 'the file could not be stored'
-    assert_nothing_published(env, post)
+    assert_nothing_published(media_probe_env, post)
     assert not os.path.exists(local) and files_on_disk() == []   # ruling: a failed upload's file is removed
-    assert s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
+    assert media_probe_s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
     assert File.query.count() == 0
 
 
-def test_the_post_row_is_not_locked_while_its_files_go_to_the_bucket(env, s3, monkeypatch):
+def test_the_post_row_is_not_locked_while_its_files_go_to_the_bucket(media_probe_env, media_probe_s3, monkeypatch):
     """An S3 upload of up to 500 MB can take minutes. Until the run holds its claim, nothing of the post is written,
     so the author editing it, a mod removing it or a ban's bulk update does not wait on the upload."""
-    post = stored_post(env)
+    post = stored_post(media_probe_env)
     post_id = post.id
     real_upload = media_tasks.upload_file_to_s3
     edited = []
@@ -414,31 +378,31 @@ def test_the_post_row_is_not_locked_while_its_files_go_to_the_bucket(env, s3, mo
     assert post.image.source_url.startswith('https://cdn.probeland.test/posts/')
 
 
-def test_upload_file_to_s3_passes_the_storage_class_and_acl(env, s3, monkeypatch):
-    monkeypatch.setitem(env.app.config, 'S3_STORAGE_CLASS', 'STANDARD_IA')
-    monkeypatch.setitem(env.app.config, 'S3_PUBLIC_ACL', True)
+def test_upload_file_to_s3_passes_the_storage_class_and_acl(media_probe_env, media_probe_s3, monkeypatch):
+    monkeypatch.setitem(media_probe_env.app.config, 'S3_STORAGE_CLASS', 'STANDARD_IA')
+    monkeypatch.setitem(media_probe_env.app.config, 'S3_PUBLIC_ACL', True)
     with open('app/static/tmp/x.ogg', 'wb') as f:
         f.write(b'OggS')
     assert upload_file_to_s3('app/static/tmp/x.ogg', 'posts/ab/cd/x.ogg', 'audio/ogg') == \
         'https://cdn.probeland.test/posts/ab/cd/x.ogg'
-    head = s3.head_object(Bucket='pyfedi-test', Key='posts/ab/cd/x.ogg')
+    head = media_probe_s3.head_object(Bucket='pyfedi-test', Key='posts/ab/cd/x.ogg')
     assert head['ContentType'] == 'audio/ogg' and head['StorageClass'] == 'STANDARD_IA'
-    grants = s3.get_object_acl(Bucket='pyfedi-test', Key='posts/ab/cd/x.ogg')['Grants']
+    grants = media_probe_s3.get_object_acl(Bucket='pyfedi-test', Key='posts/ab/cd/x.ogg')['Grants']
     assert any(g['Grantee'].get('URI', '').endswith('/AllUsers') and g['Permission'] == 'READ' for g in grants)
     assert os.path.exists('app/static/tmp/x.ogg')   # the caller removes the local copy
 
 
 @pytest.mark.parametrize('case', [None, 'no media record', 'already ready', 'deleted', 'being probed'])
-def test_a_post_with_nothing_to_probe_is_left_alone(env, case):
+def test_a_post_with_nothing_to_probe_is_left_alone(media_probe_env, case):
     if case is None:
         probe_media(False, 999999)
-        assert env.tasks == []
+        assert media_probe_env.tasks == []
         return
     if case == 'no media record':
-        post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/plain', title='plain')
+        post = make_post(media_probe_env.chan, media_probe_env.mod, ap_id='https://test.piefed.local/post/plain', title='plain')
         before = (post.status, post.extensions)
     else:
-        post = stored_post(env)
+        post = stored_post(media_probe_env)
         if case == 'already ready':
             with_media(post, status='ready')
         elif case == 'being probed':
@@ -449,27 +413,27 @@ def test_a_post_with_nothing_to_probe_is_left_alone(env, case):
         before = (post.status, dict(post.extensions))
     post = run(post)
     assert (post.status, post.extensions) == before
-    assert env.tasks == [] and env.notified == [] and Notification.query.count() == 0
+    assert media_probe_env.tasks == [] and media_probe_env.notified == [] and Notification.query.count() == 0
 
 
-def test_a_file_gone_from_disk_fails_the_post(env):
-    post = stored_post(env)
+def test_a_file_gone_from_disk_fails_the_post(media_probe_env):
+    post = stored_post(media_probe_env)
     os.unlink(media_local_path(post))
     post = run(post)
     assert media_of(post)['status'] == 'failed' and media_of(post)['error'] == 'media file is missing'
-    assert_nothing_published(env, post)
+    assert_nothing_published(media_probe_env, post)
 
 
-def test_a_media_url_that_is_not_a_stored_name_is_missing_media(env):
-    post = stored_post(env)
+def test_a_media_url_that_is_not_a_stored_name_is_missing_media(media_probe_env):
+    post = stored_post(media_probe_env)
     post.url = 'https://elsewhere.example/clip.mp4'
     db.session.commit()
     post = run(post)
     assert media_of(post)['error'] == 'media file is missing'
 
 
-def test_an_error_the_task_does_not_expect_is_rolled_back_and_raised(env, monkeypatch):
-    post = stored_post(env)
+def test_an_error_the_task_does_not_expect_is_rolled_back_and_raised(media_probe_env, monkeypatch):
+    post = stored_post(media_probe_env)
 
     def broken(path):
         raise RuntimeError('a bug')
@@ -480,46 +444,46 @@ def test_an_error_the_task_does_not_expect_is_rolled_back_and_raised(env, monkey
     assert media_of(db.session.get(Post, post.id))['status'] == 'processing'   # released, not left 'probing'
 
 
-def test_publish_ready_post_follows_the_scheduled_publisher(env):
-    post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/p', title='p')
+def test_publish_ready_post_follows_the_scheduled_publisher(media_probe_env):
+    post = make_post(media_probe_env.chan, media_probe_env.mod, ap_id='https://test.piefed.local/post/p', title='p')
     post.status = POST_STATUS_PROCESSING
     db.session.commit()
     publish_ready_post(post)
     assert post.status == POST_STATUS_PUBLISHED and post.posted_at is not None
-    assert env.tasks == [('make_post', {'post_id': post.id})] and env.notified == [post.id]
+    assert media_probe_env.tasks == [('make_post', {'post_id': post.id})] and media_probe_env.notified == [post.id]
 
 
-def test_publish_ready_post_leaves_a_scheduled_post_to_its_schedule(env):
-    post = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/s', title='s')
+def test_publish_ready_post_leaves_a_scheduled_post_to_its_schedule(media_probe_env):
+    post = make_post(media_probe_env.chan, media_probe_env.mod, ap_id='https://test.piefed.local/post/s', title='s')
     post.status, post.scheduled_for = POST_STATUS_PROCESSING, utcnow() + timedelta(days=1)
     db.session.commit()
     publish_ready_post(post)
     assert post.status == POST_STATUS_SCHEDULED
-    assert env.tasks == [] and env.notified == []
+    assert media_probe_env.tasks == [] and media_probe_env.notified == []
 
 
-def test_probe_media_is_registered_with_task_selector(env, monkeypatch):
+def test_probe_media_is_registered_with_task_selector(media_probe_env, monkeypatch):
     seen = []
     monkeypatch.setattr(media_tasks.probe_media, 'delay', lambda **kw: seen.append(kw))
     task_selector('probe_media', post_id=5)
     assert seen == [{'send_async': True, 'post_id': 5}]
 
 
-def test_a_frame_ffmpeg_could_not_grab_fails_the_post_with_its_reason(env, monkeypatch):
+def test_a_frame_ffmpeg_could_not_grab_fails_the_post_with_its_reason(media_probe_env, monkeypatch):
     def nothing_written(path, at_s, out_path):
         raise MediaToolError('ffmpeg wrote no image')
     monkeypatch.setattr(media_tasks, 'extract_frame', nothing_written)
-    post = stored_post(env)
+    post = stored_post(media_probe_env)
     media_file = media_local_path(post)
     post = run(post)
     assert media_of(post)['error'] == 'ffmpeg wrote no image'
-    assert_nothing_published(env, post)
+    assert_nothing_published(media_probe_env, post)
     assert not os.path.exists(media_file) and files_on_disk() == []
 
 
-def test_the_thumbnail_is_written_in_the_configured_image_format(env, monkeypatch):
-    monkeypatch.setitem(env.app.config, 'MEDIA_IMAGE_FORMAT', 'webp')
-    post = run(stored_post(env))
+def test_the_thumbnail_is_written_in_the_configured_image_format(media_probe_env, monkeypatch):
+    monkeypatch.setitem(media_probe_env.app.config, 'MEDIA_IMAGE_FORMAT', 'webp')
+    post = run(stored_post(media_probe_env))
     thumbnail = post.image.local_path_for_url(post.image.source_url)
     assert thumbnail.endswith('.webp')
     with open(thumbnail, 'rb') as f:
@@ -527,13 +491,13 @@ def test_the_thumbnail_is_written_in_the_configured_image_format(env, monkeypatc
     assert head[:4] == b'RIFF' and head[8:12] == b'WEBP'
 
 
-def test_with_s3_on_audio_without_art_moves_only_the_media(env, s3):
-    post = stored_post(env, 'audio.mp3', 'audio')
+def test_with_s3_on_audio_without_art_moves_only_the_media(media_probe_env, media_probe_s3):
+    post = stored_post(media_probe_env, 'audio.mp3', 'audio')
     name = os.path.basename(media_local_path(post))
     post = run(post)
     key = f'posts/{name[0:2]}/{name[2:4]}/{name}'
-    assert s3.head_object(Bucket='pyfedi-test', Key=key)['ContentType'] == 'audio/mpeg'
-    assert s3.list_objects_v2(Bucket='pyfedi-test')['KeyCount'] == 1
+    assert media_probe_s3.head_object(Bucket='pyfedi-test', Key=key)['ContentType'] == 'audio/mpeg'
+    assert media_probe_s3.list_objects_v2(Bucket='pyfedi-test')['KeyCount'] == 1
     assert post.url == f'https://cdn.probeland.test/{key}' and post.image_id is None
     assert files_on_disk() == [] and post.status == POST_STATUS_PUBLISHED
 
@@ -587,53 +551,53 @@ REVOCATIONS = {
 
 
 @pytest.mark.parametrize('case', list(REVOCATIONS))
-def test_a_right_lost_while_probing_fails_the_post_instead_of_publishing_it(env, monkeypatch, case):
-    post = stored_post(env)
+def test_a_right_lost_while_probing_fails_the_post_instead_of_publishing_it(media_probe_env, monkeypatch, case):
+    post = stored_post(media_probe_env)
     revoke, reason = REVOCATIONS[case]
-    while_probing(monkeypatch, revoke(env, post))
+    while_probing(monkeypatch, revoke(media_probe_env, post))
     post = run(post)
     media = media_of(post)
     assert media['status'] == 'failed'
     assert media['error'] == reason
-    assert_nothing_published(env, post)
+    assert_nothing_published(media_probe_env, post)
     notification = Notification.query.one()
-    assert (notification.user_id, notification.subtype) == (env.mod.id, 'media_failed')
+    assert (notification.user_id, notification.subtype) == (media_probe_env.mod.id, 'media_failed')
     assert post.image_id is None and File.query.count() == 0   # the thumbnail made for it is removed
 
 
-def test_a_right_lost_before_a_scheduled_upload_is_ready_fails_it_too(env, monkeypatch):
-    post = stored_post(env, scheduled_for=utcnow() + timedelta(days=1), timezone='UTC')
-    while_probing(monkeypatch, REVOCATIONS['the author is no longer a moderator'][0](env, post))
+def test_a_right_lost_before_a_scheduled_upload_is_ready_fails_it_too(media_probe_env, monkeypatch):
+    post = stored_post(media_probe_env, scheduled_for=utcnow() + timedelta(days=1), timezone='UTC')
+    while_probing(monkeypatch, REVOCATIONS['the author is no longer a moderator'][0](media_probe_env, post))
     post = run(post)
     assert media_of(post)['status'] == 'failed' and post.status == POST_STATUS_PROCESSING
 
 
-def test_an_author_whose_posts_need_approval_is_held_for_review_when_ready(env, monkeypatch):
+def test_an_author_whose_posts_need_approval_is_held_for_review_when_ready(media_probe_env, monkeypatch):
     """`ban_posts` (v1.8.10's approval queue) is not a lost right: make_post holds such an author's posts for
     review, and a ready upload is held the same way -- not published, not announced, and the admins are told."""
-    post = stored_post(env)
-    while_probing(monkeypatch, lambda o: setattr(o.get(User, env.mod.id), 'ban_posts', True))
+    post = stored_post(media_probe_env)
+    while_probing(monkeypatch, lambda o: setattr(o.get(User, media_probe_env.mod.id), 'ban_posts', True))
     with patch('app.shared.tasks.media.notify_admins_of_post_needing_approval') as notify_admins:
         post = run(post)
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_REVIEWING
-    assert env.tasks == [] and env.notified == []
+    assert media_probe_env.tasks == [] and media_probe_env.notified == []
     assert [p.id for p in notify_admins.call_args.args] == [post.id]
 
 
-def test_rights_unchanged_while_probing_publish_as_before(env, monkeypatch):
+def test_rights_unchanged_while_probing_publish_as_before(media_probe_env, monkeypatch):
     while_probing(monkeypatch, lambda other: None)   # positive control: the same hook, with nothing revoked
-    post = run(stored_post(env))
+    post = run(stored_post(media_probe_env))
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
-    assert env.tasks == [('make_post', {'post_id': post.id})] and env.notified == [post.id]
+    assert media_probe_env.tasks == [('make_post', {'post_id': post.id})] and media_probe_env.notified == [post.id]
 
 
 # ---------------------------------------------------------------- one run per upload
 
 
-def test_a_second_run_while_the_first_is_probing_does_nothing(env, monkeypatch):
+def test_a_second_run_while_the_first_is_probing_does_nothing(media_probe_env, monkeypatch):
     """Two deliveries of the same task: the second starts while the first is inside ffprobe. It finds the upload
     already claimed and leaves it alone, so the post is probed, published and announced once."""
-    post = stored_post(env)
+    post = stored_post(media_probe_env)
     real, probes, inner = media_tasks.run_ffprobe, [], []
 
     def probing(path):
@@ -646,18 +610,18 @@ def test_a_second_run_while_the_first_is_probing_does_nothing(env, monkeypatch):
 
     assert len(probes) == 1 and inner == [None]
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
-    assert env.tasks == [('make_post', {'post_id': post.id})] and env.notified == [post.id]
+    assert media_probe_env.tasks == [('make_post', {'post_id': post.id})] and media_probe_env.notified == [post.id]
 
 
-def test_a_failure_does_not_leave_the_upload_claimed(env):
-    post = run(stored_post(env, 'video_mpeg4.mp4'))
+def test_a_failure_does_not_leave_the_upload_claimed(media_probe_env):
+    post = run(stored_post(media_probe_env, 'video_mpeg4.mp4'))
     assert media_of(post)['status'] == 'failed'
 
 
-def test_a_local_copy_that_cannot_be_removed_after_its_upload_does_not_fail_the_post(env, s3, monkeypatch):
+def test_a_local_copy_that_cannot_be_removed_after_its_upload_does_not_fail_the_post(media_probe_env, media_probe_s3, monkeypatch):
     """The media and its thumbnail are safe in the bucket once uploaded, so a failed unlink of the local copies is
     logged and the post is published; post.url already names the bucket, so the object is not orphaned."""
-    post = stored_post(env)
+    post = stored_post(media_probe_env)
     local = media_local_path(post)
     name = os.path.basename(local)
     real_unlink = os.unlink
@@ -673,15 +637,15 @@ def test_a_local_copy_that_cannot_be_removed_after_its_upload_does_not_fail_the_
     key = f'posts/{name[0:2]}/{name[2:4]}/{name}'
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
     assert post.url == f'https://cdn.probeland.test/{key}'
-    assert s3.head_object(Bucket='pyfedi-test', Key=key)['ContentLength'] == media_of(post)['bytes']
+    assert media_probe_s3.head_object(Bucket='pyfedi-test', Key=key)['ContentLength'] == media_of(post)['bytes']
     assert post.image.source_url.startswith('https://cdn.probeland.test/posts/')
     assert os.path.exists(local)   # left behind, and logged
 
 
-def test_the_local_copy_goes_even_when_federating_the_published_post_fails(env, s3, monkeypatch):
+def test_the_local_copy_goes_even_when_federating_the_published_post_fails(media_probe_env, media_probe_s3, monkeypatch):
     """Once the commit names the bucket the local copy is only a leftover: an error federating or announcing the
     post after that commit must not keep it on disk forever."""
-    post = stored_post(env)
+    post = stored_post(media_probe_env)
     local = media_local_path(post)
 
     def broker_down(key, **kwargs):
@@ -697,25 +661,25 @@ def test_the_local_copy_goes_even_when_federating_the_published_post_fails(env, 
     assert not os.path.exists(local)
 
 
-def test_an_owner_without_the_moderator_flag_still_publishes(env, monkeypatch):
+def test_an_owner_without_the_moderator_flag_still_publishes(media_probe_env, monkeypatch):
     """The project's moderator is is_owner OR is_moderator (Community.moderators). An AP Remove can leave an owner
     with is_moderator False; that owner may upload, so the publish-time check must let the post through."""
-    post = stored_post(env)
+    post = stored_post(media_probe_env)
 
     def owner_only(other):
-        member = other.query(CommunityMember).filter_by(user_id=env.mod.id, community_id=post.community_id).one()
+        member = other.query(CommunityMember).filter_by(user_id=media_probe_env.mod.id, community_id=post.community_id).one()
         member.is_moderator, member.is_owner = False, True
     while_probing(monkeypatch, owner_only)
     post = run(post)
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
-    assert env.tasks == [('make_post', {'post_id': post.id})]
+    assert media_probe_env.tasks == [('make_post', {'post_id': post.id})]
 
 
 # ---------------------------------------------------------------- the stuck-probe sweep (A13.9)
 
 
-def test_a_claim_stamps_the_time_and_counts_the_attempt(env, monkeypatch):
-    post = stored_post(env)
+def test_a_claim_stamps_the_time_and_counts_the_attempt(media_probe_env, monkeypatch):
+    post = stored_post(media_probe_env)
 
     def broken(path):
         raise RuntimeError('a bug')
@@ -731,11 +695,11 @@ def test_a_claim_stamps_the_time_and_counts_the_attempt(env, monkeypatch):
 
 
 @pytest.fixture
-def sweep(env, monkeypatch):
+def sweep(media_probe_env, monkeypatch):
     queued = []
     monkeypatch.setattr(media_tasks, 'queue_probe', queued.append)
-    env.queued = queued
-    return env
+    media_probe_env.queued = queued
+    return media_probe_env
 
 
 def stuck(env, status, minutes_ago=None, attempts=1, title='Processing', **media):
@@ -896,10 +860,10 @@ def test_the_sweep_leaves_an_upload_a_live_probe_moved_first(sweep, monkeypatch,
     assert media_of(db.session.get(Post, post.id))['status'] == 'probing'
 
 
-def test_a_failed_release_does_not_hide_the_error_that_caused_it(env, monkeypatch, caplog):
+def test_a_failed_release_does_not_hide_the_error_that_caused_it(media_probe_env, monkeypatch, caplog):
     """The run fails unexpectedly, and then its release of the claim fails too (the database went away, say). The
     release's error is logged; the error raised is still the one that broke the run."""
-    post = stored_post(env)
+    post = stored_post(media_probe_env)
     real_move = media_tasks._move_media_status
 
     def broken(path):
@@ -945,70 +909,70 @@ def assert_left_to_the_second_run(env, post, media_file):
     assert files_on_disk() == [media_file]   # its thumbnail is gone; the media is the second run's to probe
 
 
-def test_a_run_that_lost_its_claim_does_not_publish(env, monkeypatch):
-    post = stored_post(env)
+def test_a_run_that_lost_its_claim_does_not_publish(media_probe_env, monkeypatch):
+    post = stored_post(media_probe_env)
     media_file = media_local_path(post)
     reclaimed_while_probing(monkeypatch, post)
     post = run(post)
-    assert_left_to_the_second_run(env, post, media_file)
-    assert post.url.startswith(env.app.config['SERVER_URL'])
+    assert_left_to_the_second_run(media_probe_env, post, media_file)
+    assert post.url.startswith(media_probe_env.app.config['SERVER_URL'])
 
 
-def test_a_run_that_lost_its_claim_does_not_fail_the_post(env, monkeypatch):
-    post = stored_post(env, 'video_mpeg4.mp4')
+def test_a_run_that_lost_its_claim_does_not_fail_the_post(media_probe_env, monkeypatch):
+    post = stored_post(media_probe_env, 'video_mpeg4.mp4')
     media_file = media_local_path(post)
     reclaimed_while_probing(monkeypatch, post)
     post = run(post)
-    assert_left_to_the_second_run(env, post, media_file)
+    assert_left_to_the_second_run(media_probe_env, post, media_file)
     assert 'error' not in media_of(post)
 
 
-def test_a_run_that_lost_its_claim_after_moving_to_s3_removes_only_its_thumbnail(env, s3, monkeypatch):
+def test_a_run_that_lost_its_claim_after_moving_to_s3_removes_only_its_thumbnail(media_probe_env, media_probe_s3, monkeypatch):
     """Both runs upload the media under the same key, so the loser leaves that object, and the local file the
     winner may still be reading; it removes the thumbnail object it uploaded under its own name."""
-    post = stored_post(env)
+    post = stored_post(media_probe_env)
     media_file = media_local_path(post)
     name = os.path.basename(media_file)
     reclaimed_while_probing(monkeypatch, post)
     post = run(post)
-    assert_left_to_the_second_run(env, post, media_file)
-    keys = [o['Key'] for o in s3.list_objects_v2(Bucket='pyfedi-test').get('Contents', [])]
+    assert_left_to_the_second_run(media_probe_env, post, media_file)
+    keys = [o['Key'] for o in media_probe_s3.list_objects_v2(Bucket='pyfedi-test').get('Contents', [])]
     assert keys == [f'posts/{name[0:2]}/{name[2:4]}/{name}']
-    assert post.url.startswith(env.app.config['SERVER_URL'])
+    assert post.url.startswith(media_probe_env.app.config['SERVER_URL'])
 
 
-def test_a_stale_release_leaves_the_live_claim_alone(env, monkeypatch):
-    post = stored_post(env)
+def test_a_stale_release_leaves_the_live_claim_alone(media_probe_env, monkeypatch):
+    post = stored_post(media_probe_env)
     media_file = media_local_path(post)
     reclaimed_while_probing(monkeypatch, post, then_raise=RuntimeError('a bug'))
     with pytest.raises(RuntimeError, match='a bug'):
         probe_media(False, post.id)
     db.session.expire_all()
-    assert_left_to_the_second_run(env, db.session.get(Post, post.id), media_file)
+    assert_left_to_the_second_run(media_probe_env, db.session.get(Post, post.id), media_file)
 
 
 # ---------------------------------------------------------------- ruling (final review #3): a failure removes the file
 
 
 @pytest.mark.parametrize('debug', [True, False])   # debug deletes in line; otherwise the delete is queued
-def test_a_failure_after_the_move_to_s3_removes_the_object(env, s3, monkeypatch, debug):
+def test_a_failure_after_the_move_to_s3_removes_the_object(media_probe_env, media_probe_s3, monkeypatch, debug):
     """The right is lost while probing, after the media is in the bucket: post.url names the object, and the failure
     removes it with the local copy."""
-    monkeypatch.setattr(env.app, 'debug', debug)
-    post = stored_post(env)
+    monkeypatch.setattr(media_probe_env.app, 'debug', debug)
+    post = stored_post(media_probe_env)
     local = media_local_path(post)
-    while_probing(monkeypatch, REVOCATIONS['the author is no longer a moderator'][0](env, post))
+    while_probing(monkeypatch, REVOCATIONS['the author is no longer a moderator'][0](media_probe_env, post))
     post = run(post)
 
     assert media_of(post)['status'] == 'failed' and post.url.startswith('https://cdn.probeland.test/posts/')
-    assert s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
+    assert media_probe_s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
     assert not os.path.exists(local) and files_on_disk() == []
 
 
-def test_a_failed_post_removes_its_bucket_object_even_when_a_link_names_it(env, s3, monkeypatch):
+def test_a_failed_post_removes_its_bucket_object_even_when_a_link_names_it(media_probe_env, media_probe_s3, monkeypatch):
     """Security ruling: a post that only links to the URL is not a reference, as for purge (A13.8)."""
-    post = stored_post(env)
-    other_id = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/other', title='Other').id
+    post = stored_post(media_probe_env)
+    other_id = make_post(media_probe_env.chan, media_probe_env.mod, ap_id='https://test.piefed.local/post/other', title='Other').id
     db.session.commit()
 
     def refused_after_a_crosspost(post):
@@ -1020,7 +984,7 @@ def test_a_failed_post_removes_its_bucket_object_even_when_a_link_names_it(env, 
     post = run(post)
 
     assert media_of(post)['status'] == 'failed' and db.session.get(Post, other_id).url == post.url
-    assert s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
+    assert media_probe_s3.list_objects_v2(Bucket='pyfedi-test').get('KeyCount') == 0
 
 
 def test_a_timed_out_upload_loses_its_file(sweep):
@@ -1030,8 +994,8 @@ def test_a_timed_out_upload_loses_its_file(sweep):
     assert media_of(post)['status'] == 'failed' and not os.path.exists(local)
 
 
-def test_a_failure_whose_file_is_already_gone_is_quiet(env, monkeypatch):
-    post = stored_post(env, 'video_mpeg4.mp4')
+def test_a_failure_whose_file_is_already_gone_is_quiet(media_probe_env, monkeypatch):
+    post = stored_post(media_probe_env, 'video_mpeg4.mp4')
     real = media_tasks.run_ffprobe
 
     def gone_meanwhile(path):
@@ -1058,25 +1022,25 @@ def test_the_sweep_does_not_load_a_failed_post(sweep, monkeypatch):
 # ---------------------------------------------------------------- final review M2: a sticky upload is featured when ready
 
 
-def test_a_sticky_upload_is_featured_once_it_is_published(env, monkeypatch):
-    monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: env.tasks.append((key, kw)))
-    post = run(stored_post(env, sticky=True))
+def test_a_sticky_upload_is_featured_once_it_is_published(media_probe_env, monkeypatch):
+    monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: media_probe_env.tasks.append((key, kw)))
+    post = run(stored_post(media_probe_env, sticky=True))
 
     assert post.status == POST_STATUS_PUBLISHED
-    assert env.tasks == [('make_post', {'post_id': post.id}), ('sticky_post', {'user_id': env.mod.id, 'post_id': post.id})]
+    assert media_probe_env.tasks == [('make_post', {'post_id': post.id}), ('sticky_post', {'user_id': media_probe_env.mod.id, 'post_id': post.id})]
     assert ModLog.query.filter_by(action='featured_post', post_id=post.id).count() == 1
 
 
-def test_a_sticky_upload_that_fails_is_never_featured(env, monkeypatch):
-    monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: env.tasks.append((key, kw)))
-    post = run(stored_post(env, 'video_mpeg4.mp4', sticky=True))
-    assert media_of(post)['status'] == 'failed' and env.tasks == [] and ModLog.query.count() == 0
+def test_a_sticky_upload_that_fails_is_never_featured(media_probe_env, monkeypatch):
+    monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: media_probe_env.tasks.append((key, kw)))
+    post = run(stored_post(media_probe_env, 'video_mpeg4.mp4', sticky=True))
+    assert media_of(post)['status'] == 'failed' and media_probe_env.tasks == [] and ModLog.query.count() == 0
 
 
-def test_a_post_not_marked_sticky_is_not_featured(env, monkeypatch):
-    monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: env.tasks.append((key, kw)))
-    post = run(stored_post(env))
-    assert env.tasks == [('make_post', {'post_id': post.id})] and ModLog.query.count() == 0
+def test_a_post_not_marked_sticky_is_not_featured(media_probe_env, monkeypatch):
+    monkeypatch.setattr(post_module, 'task_selector', lambda key, **kw: media_probe_env.tasks.append((key, kw)))
+    post = run(stored_post(media_probe_env))
+    assert media_probe_env.tasks == [('make_post', {'post_id': post.id})] and ModLog.query.count() == 0
 
 
 # ---------------------------------------------------------------- ruling (final review M3): a backlog is not stuck
@@ -1104,20 +1068,20 @@ def test_a_claimed_probe_gone_stale_keeps_thirty_minutes(sweep):
 # ---------------------------------------------------------------- final review M7: the thumbnail sizes before the announce
 
 
-def test_an_announce_error_still_queues_the_thumbnail_sizes(env, monkeypatch):
+def test_an_announce_error_still_queues_the_thumbnail_sizes(media_probe_env, monkeypatch):
     """The post is committed published before it is announced: an error federating it must not leave its thumbnail
     without the sizes listings show."""
     def broker_down(key, **kw):
         raise ConnectionError('the broker went away')
     monkeypatch.setattr(media_tasks, 'task_selector', broker_down)
-    post = stored_post(env)
+    post = stored_post(media_probe_env)
     with pytest.raises(ConnectionError):
         probe_media(False, post.id)
     db.session.expire_all()
     post = db.session.get(Post, post.id)
 
     assert post.status == POST_STATUS_PUBLISHED
-    assert env.sized == [(post.image_id, 512, 1200, 'posts', post.community.low_quality)]
+    assert media_probe_env.sized == [(post.image_id, 512, 1200, 'posts', post.community.low_quality)]
 
 
 # ---------------------------------------------------------------- security review: the sweep re-checks what it moves
@@ -1160,14 +1124,14 @@ def test_the_sweep_skips_an_unexpected_media_status(sweep, status):
     assert sweep.queued == [] and Notification.query.count() == 0
 
 
-def test_the_thumbnail_records_its_size(env):
-    post = run(stored_post(env))
+def test_the_thumbnail_records_its_size(media_probe_env):
+    post = run(stored_post(media_probe_env))
     with Image.open(post.image.local_path_for_url(post.image.source_url)) as saved:
         assert (post.image.width, post.image.height) == saved.size
     assert post.image.width and post.image.height
 
 
-def test_the_media_record_keeps_the_thumbnail_size(env):
-    post = run(stored_post(env))
+def test_the_media_record_keeps_the_thumbnail_size(media_probe_env):
+    post = run(stored_post(media_probe_env))
     with Image.open(post.image.local_path_for_url(post.image.source_url)) as saved:
         assert (media_of(post)['thumbnail_width'], media_of(post)['thumbnail_height']) == saved.size

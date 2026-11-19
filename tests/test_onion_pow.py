@@ -51,19 +51,6 @@ DIGITS = '0123456789abcdefghijklmnopqrstuvwxyz'
 # --------------------------------------------------------------------------
 
 @pytest.fixture
-def onion(app, site, monkeypatch, onion_redis):
-    monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)
-    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the login and register forms render their token
-    if not SiteDomain.query.filter_by(domain='test.piefed.local').first():
-        db.session.add(SiteDomain(domain='test.piefed.local', scheme='https', is_default=True))
-    db.session.add(SiteDomain(domain='abc.onion', scheme='http', federates=False))
-    db.session.commit()
-    clear_domain_cache()
-    yield onion_redis
-    clear_domain_cache()
-
-
-@pytest.fixture
 def clock(monkeypatch):
     now = SimpleNamespace(t=T0)
     monkeypatch.setattr('app.onion_guard._now', lambda: now.t)
@@ -71,37 +58,10 @@ def clock(monkeypatch):
 
 
 @pytest.fixture
-def easy(onion):
+def easy(onion_pow_onion):
     """Difficulty 8, so a test solves a challenge in a few hundred hashes. (The suite's cache is NullCache and each
     test starts on empty tables, so a setting needs no undoing.)"""
     set_setting('onion_pow_difficulty', 8)
-
-
-@pytest.fixture
-def alice(onion):
-    local = make_instance('test.piefed.local', software='piefed')
-    make_user(local, 'founder', local=True)   # id 1 is exempt from every ban check
-    user = make_user(local, 'alice', local=True)
-    user.site_domain_id = SiteDomain.query.filter_by(domain='abc.onion').first().id   # her login name is the onion's
-    user.email = 'alice@example.com'
-    user.verified = True
-    user.set_password(PASSWORD)
-    db.session.commit()
-    return user
-
-
-@pytest.fixture
-def dora(onion):
-    """An account of the DEFAULT domain: on the onion she is reached as dora@test.piefed.local."""
-    local = make_instance('test.piefed.local', software='piefed')
-    make_user(local, 'founder', local=True)
-    user = make_user(local, 'dora', local=True)
-    user.site_domain_id = SiteDomain.query.filter_by(domain='test.piefed.local').first().id
-    user.email = 'dora@example.com'
-    user.verified = True
-    user.set_password(PASSWORD)
-    db.session.commit()
-    return user
 
 
 def in_session(app, sid='sid-a', **data):
@@ -218,7 +178,7 @@ def test_leading_zero_bits_is_exact(digest, bits):
     assert leading_zero_bits(digest) == bits
 
 
-def test_the_shared_vector(app, onion, monkeypatch):
+def test_the_shared_vector(app, onion_pow_onion, monkeypatch):
     """tests/js/onion_pow.test.mjs finds the same nonce for the same salt, so the two sides agree on the check."""
     assert solve(SHARED_SALT, SHARED_BITS) == SHARED_NONCE
     assert zero_bits(SHARED_SALT, SHARED_NONCE) >= SHARED_BITS
@@ -275,7 +235,7 @@ def test_verify_pow_refuses_a_challenge_from_the_future(app, easy, clock):
 
 
 @pytest.mark.parametrize('nonce', ['', 'a' * 33, 'ab-c', 'ab c', '١', None, 12])
-def test_verify_pow_refuses_a_malformed_nonce(app, onion, nonce):
+def test_verify_pow_refuses_a_malformed_nonce(app, onion_pow_onion, nonce):
     set_setting('onion_pow_difficulty', 0)                # any well-formed nonce would do
     with in_session(app):
         token = issue_challenge()
@@ -314,7 +274,7 @@ def test_verify_pow_refuses_a_challenge_signed_for_something_else(app, easy):
 
 @pytest.mark.parametrize('body', [['ab', 0], {'salt': 'ab'}, {'salt': 3, 'bits': 0}, {'salt': 'ab', 'bits': True},
                                   {'salt': 'ab', 'bits': '0'}])
-def test_verify_pow_refuses_a_payload_it_did_not_shape(app, onion, body):
+def test_verify_pow_refuses_a_payload_it_did_not_shape(app, onion_pow_onion, body):
     set_setting('onion_pow_difficulty', 0)
     with in_session(app):
         token = URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='onion-pow').dumps(body)
@@ -335,7 +295,7 @@ def test_a_challenge_easier_than_the_setting_is_refused(app, easy):
         assert verify_pow(token, base36(number))
 
 
-def test_difficulty_zero_takes_any_nonce_but_still_once(app, onion):
+def test_difficulty_zero_takes_any_nonce_but_still_once(app, onion_pow_onion):
     set_setting('onion_pow_difficulty', 0)
     with in_session(app):
         token = issue_challenge()
@@ -345,12 +305,12 @@ def test_difficulty_zero_takes_any_nonce_but_still_once(app, onion):
 
 
 @pytest.mark.parametrize('stored, bits', [(16, 16), (0, 0), (24, 24), (-3, 0), (99, 24), ('12', 12)])
-def test_the_difficulty_setting_is_clamped(app, onion, stored, bits):
+def test_the_difficulty_setting_is_clamped(app, onion_pow_onion, stored, bits):
     set_setting('onion_pow_difficulty', stored)
     assert pow_difficulty() == bits
 
 
-def test_the_default_difficulty_is_16(app, onion):
+def test_the_default_difficulty_is_16(app, onion_pow_onion):
     assert DEFAULT_POW_DIFFICULTY == 16 and MAX_POW_DIFFICULTY == 24
     assert get_setting('onion_pow_difficulty', None) in (None, 16)
     assert pow_difficulty() == 16
@@ -360,7 +320,7 @@ def test_the_default_difficulty_is_16(app, onion):
 # The wait token
 # --------------------------------------------------------------------------
 
-def test_wait_token_ready_between_15_and_600_seconds(app, onion, clock):
+def test_wait_token_ready_between_15_and_600_seconds(app, onion_pow_onion, clock):
     with in_session(app):
         token = issue_wait_token()
         clock.t = T0 + 14
@@ -369,7 +329,7 @@ def test_wait_token_ready_between_15_and_600_seconds(app, onion, clock):
         assert wait_token_ready(token)
         assert not wait_token_ready(token)            # used
         salt = URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='onion-wait').loads(token)['salt']
-        assert onion.ttl(f'onion_wait_used:{salt}') == 660
+        assert onion_pow_onion.ttl(f'onion_wait_used:{salt}') == 660
         late = issue_wait_token()
         clock.t += 601
         assert not wait_token_ready(late)
@@ -378,7 +338,7 @@ def test_wait_token_ready_between_15_and_600_seconds(app, onion, clock):
 
 
 @pytest.mark.parametrize('token', ['', 'nonsense', None, 7])
-def test_a_bad_wait_token_is_not_ready(app, onion, clock, token):
+def test_a_bad_wait_token_is_not_ready(app, onion_pow_onion, clock, token):
     with in_session(app):
         assert not wait_token_ready(token)
 
@@ -392,7 +352,7 @@ def test_a_challenge_is_no_wait_token(app, easy, clock):
         assert not wait_token_ready(body)
 
 
-def test_wait_tokens_and_challenges_are_spent_in_their_own_namespaces(app, onion, clock, monkeypatch):
+def test_wait_tokens_and_challenges_are_spent_in_their_own_namespaces(app, onion_pow_onion, clock, monkeypatch):
     set_setting('onion_pow_difficulty', 0)
     monkeypatch.setattr(onion_guard, 'token_hex', lambda size: 'same')
     with in_session(app):
@@ -400,7 +360,7 @@ def test_wait_tokens_and_challenges_are_spent_in_their_own_namespaces(app, onion
         clock.t += 15
         assert verify_pow(challenge_token, '0')
         assert wait_token_ready(wait)
-    assert onion.get('onion_pow_used:same') and onion.get('onion_wait_used:same')
+    assert onion_pow_onion.get('onion_pow_used:same') and onion_pow_onion.get('onion_wait_used:same')
 
 
 # --------------------------------------------------------------------------
@@ -419,7 +379,7 @@ def test_a_challenge_from_another_session_is_refused(app, easy):
         assert verify_pow(token, nonce)               # the refusals spent nothing
 
 
-def test_a_wait_token_from_another_session_is_refused(app, onion, clock):
+def test_a_wait_token_from_another_session_is_refused(app, onion_pow_onion, clock):
     with in_session(app, 'sid-a'):
         token = issue_wait_token()
     clock.t += 15
@@ -431,7 +391,7 @@ def test_a_wait_token_from_another_session_is_refused(app, onion, clock):
         assert wait_token_ready(token)
 
 
-def test_a_sid_minted_during_this_request_is_refused(app, onion, clock):
+def test_a_sid_minted_during_this_request_is_refused(app, onion_pow_onion, clock):
     """A sid this request minted has not come back from the browser: it proves nothing about a session."""
     set_setting('onion_pow_difficulty', 0)
     with in_session(app, None):
@@ -447,18 +407,18 @@ def test_a_sid_minted_during_this_request_is_refused(app, onion, clock):
         wait = issue_wait_token()
         clock.t += 15
         assert not wait_token_ready(wait)
-    assert len(onion.keys('onion_wait_current:*')) == 1   # the minted sid's above, none for no session
+    assert len(onion_pow_onion.keys('onion_wait_current:*')) == 1   # the minted sid's above, none for no session
 
 
 @pytest.mark.parametrize('body', [{'salt': 'ab', 'bits': 0}, {'salt': 'ab', 'bits': 0, 'sid': 7}])
-def test_a_challenge_without_its_sid_is_refused(app, onion, body):
+def test_a_challenge_without_its_sid_is_refused(app, onion_pow_onion, body):
     set_setting('onion_pow_difficulty', 0)
     with in_session(app, 'sid-a'):
         token = URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='onion-pow').dumps(body)
         assert not verify_pow(token, '0')
 
 
-def test_a_new_wait_token_replaces_the_last(app, onion, clock):
+def test_a_new_wait_token_replaces_the_last(app, onion_pow_onion, clock):
     """One wait token outstanding per session, so one session cannot queue up many waits at once."""
     with in_session(app, 'sid-a'):
         first = issue_wait_token()
@@ -474,7 +434,7 @@ def test_a_new_wait_token_replaces_the_last(app, onion, clock):
         assert wait_token_ready(other)
 
 
-def test_the_wait_step_is_session_first(app, onion):
+def test_the_wait_step_is_session_first(app, onion_pow_onion):
     assert 'auth.onion_wait' in ONION_SESSION_ENDPOINTS
     client = app.test_client(use_cookies=False)
     response = onion_get(client, '/auth/onion_wait?form=login')
@@ -482,7 +442,7 @@ def test_the_wait_step_is_session_first(app, onion):
     assert response.headers['Location'] == '/auth/onion_wait?form=login&' + COOKIE_CHECK
 
 
-def test_a_proof_from_another_browser_is_refused(app, alice, easy, no_login):
+def test_a_proof_from_another_browser_is_refused(app, onion_pow_alice, easy, no_login):
     page = challenge(onion_page(app.test_client(), '/auth/login'))
     other = app.test_client()
     mine = challenge(onion_page(other, '/auth/login'))
@@ -494,7 +454,7 @@ def test_a_proof_from_another_browser_is_refused(app, alice, easy, no_login):
 # Login over the onion
 # --------------------------------------------------------------------------
 
-def test_valid_solution_accepted(app, alice, easy):
+def test_valid_solution_accepted(app, onion_pow_alice, easy):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     assert page.bits == 8
@@ -504,7 +464,7 @@ def test_valid_solution_accepted(app, alice, easy):
     assert logged_in(client)
 
 
-def test_a_default_domain_account_logs_in_on_the_onion_with_a_proof(app, dora, easy):
+def test_a_default_domain_account_logs_in_on_the_onion_with_a_proof(app, onion_pow_dora, easy):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     data = {**login_data(page.csrf, pow_token=page.token, pow_nonce=solve(page.salt, 8)),
@@ -513,7 +473,7 @@ def test_a_default_domain_account_logs_in_on_the_onion_with_a_proof(app, dora, e
     assert logged_in(client)
 
 
-def test_a_default_domain_name_without_a_proof_is_refused_before_any_lookup(app, dora, easy, no_login):
+def test_a_default_domain_name_without_a_proof_is_refused_before_any_lookup(app, onion_pow_dora, easy, no_login):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     post_refused(client, onion_guard.app_pkg.onion_redis_client, no_login,
@@ -538,7 +498,7 @@ def post_refused(client, onion, no_login, data):
     return response
 
 
-def test_expired(app, alice, easy, clock, no_login):
+def test_expired(app, onion_pow_alice, easy, clock, no_login):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     clock.t += 601
@@ -546,7 +506,7 @@ def test_expired(app, alice, easy, clock, no_login):
                  login_data(page.csrf, pow_token=page.token, pow_nonce=solve(page.salt, 8)))
 
 
-def test_bad_signature(app, alice, easy, no_login):
+def test_bad_signature(app, onion_pow_alice, easy, no_login):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     forged = URLSafeTimedSerializer('not the key', salt='onion-pow').dumps({'salt': page.salt, 'bits': 0})
@@ -554,7 +514,7 @@ def test_bad_signature(app, alice, easy, no_login):
                  login_data(page.csrf, pow_token=forged, pow_nonce='0'))
 
 
-def test_reused(app, alice, easy, monkeypatch):
+def test_reused(app, onion_pow_alice, easy, monkeypatch):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     proof = {'pow_token': page.token, 'pow_nonce': solve(page.salt, 8)}
@@ -572,7 +532,7 @@ def test_reused(app, alice, easy, monkeypatch):
 
 
 @pytest.mark.parametrize('proof', ['unsolved', 'no nonce', 'no token', 'nothing'])
-def test_unsolved(app, alice, easy, no_login, proof):
+def test_unsolved(app, onion_pow_alice, easy, no_login, proof):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     data = {'unsolved': {'pow_token': page.token, 'pow_nonce': miss(page.salt, 8)},
@@ -582,7 +542,7 @@ def test_unsolved(app, alice, easy, no_login, proof):
     post_refused(client, onion_guard.app_pkg.onion_redis_client, no_login, login_data(page.csrf, **data))
 
 
-def test_a_refusal_shows_a_new_challenge(app, alice, easy, no_login):
+def test_a_refusal_shows_a_new_challenge(app, onion_pow_alice, easy, no_login):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
     response = post_refused(client, onion_guard.app_pkg.onion_redis_client, no_login, login_data(page.csrf))
@@ -598,7 +558,7 @@ def visible_wait_links(page):
             if not a.find_parent('noscript') and not any(p.has_attr('hidden') for p in [a, *a.parents])]
 
 
-def test_a_refused_login_offers_the_wait_step(app, alice, easy, no_login):
+def test_a_refused_login_offers_the_wait_step(app, onion_pow_alice, easy, no_login):
     """Tor Browser at Safest runs no JavaScript, so the challenge is never solved: trying again can never work, and
     the refusal must show the way that does."""
     client = app.test_client()
@@ -609,7 +569,7 @@ def test_a_refused_login_offers_the_wait_step(app, alice, easy, no_login):
         ['/auth/onion_wait?form=login']
 
 
-def test_a_refused_registration_offers_the_wait_step(app, open_registration, easy):
+def test_a_refused_registration_offers_the_wait_step(app, onion_pow_open_registration, easy):
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/register'))
     response = onion_post(client, '/auth/register', data=register_data(page.csrf))
@@ -618,7 +578,7 @@ def test_a_refused_registration_offers_the_wait_step(app, open_registration, eas
         ['/auth/onion_wait?form=register']
 
 
-def test_the_proof_is_checked_before_the_login_delay(app, alice, easy):
+def test_the_proof_is_checked_before_the_login_delay(app, onion_pow_alice, easy):
     """The Task 9 delay reservation counts an attempt; a refused proof must not, so it cannot lock anyone out."""
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
@@ -627,7 +587,7 @@ def test_the_proof_is_checked_before_the_login_delay(app, alice, easy):
     gate.assert_not_called()
 
 
-def test_wait_token_too_early_then_ok(app, alice, clock):
+def test_wait_token_too_early_then_ok(app, onion_pow_alice, clock):
     client = app.test_client()
     seconds, url = wait_token_from(onion_page(client, '/auth/onion_wait?form=login'))
     assert seconds == 15
@@ -644,7 +604,7 @@ def test_wait_token_too_early_then_ok(app, alice, clock):
     assert logged_in(client)
 
 
-def test_an_unready_wait_token_falls_back_to_the_challenge(app, alice, easy, clock):
+def test_an_unready_wait_token_falls_back_to_the_challenge(app, onion_pow_alice, easy, clock):
     """Either proof will do: a wait token not yet good leaves a solved challenge to decide."""
     client = app.test_client()
     page = challenge(onion_page(client, '/auth/login'))
@@ -660,7 +620,7 @@ def test_an_unready_wait_token_falls_back_to_the_challenge(app, alice, easy, clo
 # The pages
 # --------------------------------------------------------------------------
 
-def test_noscript_link_present(app, onion):
+def test_noscript_link_present(app, onion_pow_onion):
     client = app.test_client()
     page = onion_page(client, '/auth/login?next=%2Fc%2Fnews')
     link = page.find('noscript').find('a')
@@ -678,7 +638,7 @@ def test_noscript_link_present(app, onion):
     assert 'onion' not in url and 'http' not in url and app.config['SERVER_NAME'] not in str(wait)
 
 
-def test_the_wait_step_for_registration(app, open_registration):
+def test_the_wait_step_for_registration(app, onion_pow_open_registration):
     client = app.test_client()
     page = onion_page(client, '/auth/register')
     link = page.find('noscript').find('a')
@@ -687,7 +647,7 @@ def test_the_wait_step_for_registration(app, open_registration):
     assert url.startswith('/auth/register?wait_token=')
 
 
-def test_an_unknown_wait_target_is_the_login_form(app, onion):
+def test_an_unknown_wait_target_is_the_login_form(app, onion_pow_onion):
     client = app.test_client()
     _, url = wait_token_from(onion_page(client, '/auth/onion_wait?form=https://evil.example'))
     assert url.startswith('/auth/login?wait_token=')
@@ -697,7 +657,7 @@ def test_the_wait_step_is_onion_only(app, site):
     assert app.test_client().get('/auth/onion_wait?form=login').status_code == 404
 
 
-def test_the_proof_fields_are_not_restored_by_the_browser(app, onion):
+def test_the_proof_fields_are_not_restored_by_the_browser(app, onion_pow_onion):
     """Firefox restores hidden inputs' values on reload but not their data attributes: an old token beside a new
     salt is a refusal. autocomplete=off stops the restore."""
     page = onion_page(app.test_client(), '/auth/login')
@@ -705,7 +665,7 @@ def test_the_proof_fields_are_not_restored_by_the_browser(app, onion):
         assert page.find('input', attrs={'name': name})['autocomplete'] == 'off'
 
 
-def test_pow_js_self_hosted(app, onion):
+def test_pow_js_self_hosted(app, onion_pow_onion):
     page = onion_page(app.test_client(), '/auth/login')
     sources = [script['src'] for script in page.find_all('script', src=True) if 'onion_pow' in script['src']]
     assert len(sources) == 1
@@ -740,20 +700,12 @@ def test_clearnet_has_no_pow(app, site, monkeypatch, redis_double, onion_redis):
 # Registration over the onion
 # --------------------------------------------------------------------------
 
-@pytest.fixture
-def open_registration(onion, site, monkeypatch):
-    """Open registration, with no admin around to keep it open: the abandoned-instance safety is not under test."""
-    monkeypatch.setattr('app.auth.routes.handle_abandoned_open_instance', lambda: None)
-    site.registration_mode = 'Open'
-    db.session.commit()
-
-
 def register_data(csrf_token, **proof):
     return {'user_name': 'newcomer', 'real_email': 'new@example.com', 'password': PASSWORD, 'password2': PASSWORD,
             'timezone': 'UTC', 'submit': 'Register', 'csrf_token': csrf_token, **proof}
 
 
-def test_registration_needs_a_proof(app, open_registration, easy, monkeypatch):
+def test_registration_needs_a_proof(app, onion_pow_open_registration, easy, monkeypatch):
     called = []
     monkeypatch.setattr('app.auth.routes.process_registration_form', lambda form: called.append(form) or 'registered')
     set_setting('captcha_enabled', False)
@@ -769,7 +721,7 @@ def test_registration_needs_a_proof(app, open_registration, easy, monkeypatch):
     assert len(called) == 1
 
 
-def test_a_refused_registration_proof_runs_no_form_validation(app, open_registration, easy, monkeypatch):
+def test_a_refused_registration_proof_runs_no_form_validation(app, onion_pow_open_registration, easy, monkeypatch):
     """The form's validators look the email and name up; a refused proof stops before them."""
     monkeypatch.setattr('app.auth.forms.RegistrationForm.validate_real_email',
                         lambda self, field: pytest.fail('email looked up'))

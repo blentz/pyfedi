@@ -31,37 +31,17 @@ def local_url(path):
     return f"https://{current_app.config['SERVER_NAME']}{path}"
 
 
-@pytest.fixture
-def env(app, api_baseline):
-    """Everything here is addressed by url, so each row's actor needs an
-    `ap_profile_id` on this instance."""
-    g.admin_ids = []
-    g.site = db.session.get(Site, 1)
-    user = api_baseline.user2
-    author = api_baseline.user3
-    community = make_community('general')
-    community.ap_profile_id = local_url('/c/general')
-    community.ap_id = None
-    post = api_baseline.post1
-    post.ap_id = local_url(f'/p/{post.id}')
-    reply = make_post_reply(post, author, body='a reply')
-    reply.body_html = '<p>a reply</p>'
-    reply.ap_id = local_url(f'/comment/{reply.id}')
-    db.session.commit()
-    return user, author, community, post, reply, api_baseline
-
-
 # --------------------------------------------------------------------------
 # D1189 -- the search guard
 # --------------------------------------------------------------------------
 
 
-def test_a_search_needs_both_a_query_and_a_type(app, env):
+def test_a_search_needs_both_a_query_and_a_type(app, api_search_resolve_env):
     """D1189. The guard asked for `q` OR `type_` and the body reads `type_`
     on the next line. Measured: `PROBE bj1 outcome: KeyError: 'type_'`."""
     from app.api.alpha.utils.misc import get_search
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     for data in ({'q': 'anything'}, {'type_': 'Posts'}, {}, None):
         with pytest.raises(Exception) as refused:
@@ -74,10 +54,10 @@ def test_a_search_needs_both_a_query_and_a_type(app, env):
                                        ('Url', 'posts'),
                                        ('Users', 'users'),
                                        ('Comments', 'comments')])
-def test_a_search_answers_under_the_key_for_its_type(app, env, type_, key):
+def test_a_search_answers_under_the_key_for_its_type(app, api_search_resolve_env, type_, key):
     from app.api.alpha.utils.misc import get_search
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_search(token(user), {'q': '', 'type_': type_})
 
@@ -85,12 +65,12 @@ def test_a_search_answers_under_the_key_for_its_type(app, env, type_, key):
     assert answer['type_'] == ('Posts' if type_ == 'Url' else type_)
 
 
-def test_the_listing_type_is_passed_on_as_the_type(app, env):
+def test_the_listing_type_is_passed_on_as_the_type(app, api_search_resolve_env):
     """`data['type_'] = listing_type` before the list is fetched: the list
     endpoints read `type_` as the LISTING type, not the search type."""
     from app.api.alpha.utils.misc import get_search
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.get_post_list',
                return_value={'posts': []}) as listed:
@@ -100,10 +80,10 @@ def test_the_listing_type_is_passed_on_as_the_type(app, env):
     assert listed.call_args.args[1]['type_'] == 'Local'
 
 
-def test_a_search_finds_a_post(app, env):
+def test_a_search_finds_a_post(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_search
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_search(token(user), {'q': post.title, 'type_': 'Posts'})
 
@@ -116,13 +96,13 @@ def test_a_search_finds_a_post(app, env):
 
 
 def test_a_comment_url_that_names_its_community_resolves_to_the_comment(app,
-                                                                        env):
+                                                                        api_search_resolve_env):
     """D1190. `and` binds tighter than `or`, so `('/comment/' not in query)`
     applied to the third disjunct alone and this url was dispatched as a
     community lookup. Measured: `PROBE bj2 outcome: ['community']`."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_resolve_object(token(user),
                                 {'q': local_url(f'/c/general/comment/{reply.id}')})
@@ -131,22 +111,22 @@ def test_a_comment_url_that_names_its_community_resolves_to_the_comment(app,
     assert answer['comment']['comment']['id'] == reply.id
 
 
-def test_a_community_url_still_resolves_to_the_community(app, env):
+def test_a_community_url_still_resolves_to_the_community(app, api_search_resolve_env):
     """The guard the fix must not break."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_resolve_object(token(user), {'q': local_url('/c/general')})
 
     assert answer['community']['community']['id'] == community.id
 
 
-def test_a_comment_url_without_a_community_resolves_too(app, env):
+def test_a_comment_url_without_a_community_resolves_too(app, api_search_resolve_env):
     """Measured alongside D1190 as `PROBE bj3 outcome: ['comment']`."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_resolve_object(
         token(user), {'q': local_url(f'/post/{post.id}/comment/{reply.id}')})
@@ -159,21 +139,21 @@ def test_a_comment_url_without_a_community_resolves_too(app, env):
 # --------------------------------------------------------------------------
 
 
-def test_a_query_that_is_already_a_known_comment(app, env):
+def test_a_query_that_is_already_a_known_comment(app, api_search_resolve_env):
     """The first lookup: the canonical ap_id of something this instance has."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_resolve_object(token(user), {'q': reply.ap_id})
 
     assert answer['comment']['comment']['id'] == reply.id
 
 
-def test_a_deleted_comment_is_not_found(app, env):
+def test_a_deleted_comment_is_not_found(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     reply.deleted = True
     db.session.commit()
 
@@ -183,20 +163,20 @@ def test_a_deleted_comment_is_not_found(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_query_that_is_already_a_known_post(app, env):
+def test_a_query_that_is_already_a_known_post(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_resolve_object(token(user), {'q': post.ap_id})
 
     assert answer['post']['post']['id'] == post.id
 
 
-def test_a_deleted_post_is_not_found(app, env):
+def test_a_deleted_post_is_not_found(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     post.user_id = author.id   # the author is shown a post that was deleted (follow-up F5: as the post page has it)
     post.deleted = True
     db.session.commit()
@@ -207,10 +187,10 @@ def test_a_deleted_post_is_not_found(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_banned_community_is_not_found(app, env):
+def test_a_banned_community_is_not_found(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     community.banned = True
     db.session.commit()
 
@@ -220,10 +200,10 @@ def test_a_banned_community_is_not_found(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_query_that_is_already_a_known_account(app, env):
+def test_a_query_that_is_already_a_known_account(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     author.ap_profile_id = local_url(f'/u/{author.user_name}')
     db.session.commit()
 
@@ -233,10 +213,10 @@ def test_a_query_that_is_already_a_known_account(app, env):
 
 
 @pytest.mark.parametrize('column', ['deleted', 'banned'])
-def test_an_account_that_is_gone_is_not_found(app, env, column):
+def test_an_account_that_is_gone_is_not_found(app, api_search_resolve_env, column):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     author.ap_profile_id = local_url(f'/u/{author.user_name}')
     setattr(author, column, True)
     db.session.commit()
@@ -247,10 +227,10 @@ def test_an_account_that_is_gone_is_not_found(app, env, column):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_query_that_is_already_a_known_feed(app, env):
+def test_a_query_that_is_already_a_known_feed(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.ap_profile_id = local_url('/f/newsfeed')
     feed.user_id = user.id
@@ -261,10 +241,10 @@ def test_a_query_that_is_already_a_known_feed(app, env):
     assert answer['feed']['id'] == feed.id
 
 
-def test_a_banned_feed_is_not_found(app, env):
+def test_a_banned_feed_is_not_found(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.ap_profile_id = local_url('/f/newsfeed')
     feed.user_id = user.id
@@ -282,10 +262,10 @@ def test_a_banned_feed_is_not_found(app, env):
 # --------------------------------------------------------------------------
 
 
-def test_a_resolve_needs_something_to_resolve(app, env):
+def test_a_resolve_needs_something_to_resolve(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     for data in ({}, None):
         with pytest.raises(Exception) as refused:
@@ -293,10 +273,10 @@ def test_a_resolve_needs_something_to_resolve(app, env):
         assert 'missing q parameter' in str(refused.value)
 
 
-def test_a_query_that_names_no_server_is_not_found(app, env):
+def test_a_query_that_names_no_server_is_not_found(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         get_resolve_object(token(user), {'q': 'just some words'})
@@ -305,7 +285,7 @@ def test_a_query_that_names_no_server_is_not_found(app, env):
 
 
 @pytest.mark.parametrize('remote', [True, False])
-def test_an_anonymous_caller_may_not_resolve_anything(app, env, remote):
+def test_an_anonymous_caller_may_not_resolve_anything(app, api_search_resolve_env, remote):
     """PERM-1, fixed (owner ruling). Resolving can fetch and store remote
     content, so it requires an authenticated caller: with no Authorization
     header the API's standard `incorrect_login` refusal (a 400) is raised,
@@ -314,7 +294,7 @@ def test_an_anonymous_caller_may_not_resolve_anything(app, env, remote):
     in the permission audit."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         get_resolve_object(None, {'q': 'https://remote.example/c/general' if remote
@@ -323,12 +303,12 @@ def test_an_anonymous_caller_may_not_resolve_anything(app, env, remote):
     assert str(refused.value) == 'incorrect_login'
 
 
-def test_a_banned_instance_is_not_resolved_from(app, env):
+def test_a_banned_instance_is_not_resolved_from(app, api_search_resolve_env):
     """A server this instance has banned is not fetched from, however the
     query is addressed."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     db.session.add(BannedInstances(domain='nasty.example'))
     db.session.commit()
 
@@ -343,10 +323,10 @@ def test_a_banned_instance_is_not_resolved_from(app, env):
 # --------------------------------------------------------------------------
 
 
-def test_a_community_in_bang_notation(app, env):
+def test_a_community_in_bang_notation(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     name = f"!general@{current_app.config['SERVER_NAME']}"
 
     with patch('app.api.alpha.utils.misc.search_for_community',
@@ -357,10 +337,10 @@ def test_a_community_in_bang_notation(app, env):
     assert searched.call_args.args[0] == name
 
 
-def test_a_person_in_at_notation(app, env):
+def test_a_person_in_at_notation(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     name = f"@{author.user_name}@{current_app.config['SERVER_NAME']}"
 
     with patch('app.api.alpha.utils.misc.search_for_user',
@@ -371,10 +351,10 @@ def test_a_person_in_at_notation(app, env):
     assert searched.call_args.args[0] == name.lower()   # R1: the handle whole, so it is looked up on its domain
 
 
-def test_a_feed_in_tilde_notation(app, env):
+def test_a_feed_in_tilde_notation(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.user_id = user.id
     db.session.commit()
@@ -386,10 +366,10 @@ def test_a_feed_in_tilde_notation(app, env):
     assert answer['feed']['id'] == feed.id
 
 
-def test_a_name_nobody_answers_to_is_not_found(app, env):
+def test_a_name_nobody_answers_to_is_not_found(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     name = f"!nosuch@{current_app.config['SERVER_NAME']}"
 
     with patch('app.api.alpha.utils.misc.search_for_community',
@@ -400,10 +380,10 @@ def test_a_name_nobody_answers_to_is_not_found(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_local_post_by_its_url(app, env):
+def test_a_local_post_by_its_url(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_resolve_object(token(user),
                                 {'q': local_url(f'/post/{post.id}')})
@@ -412,11 +392,11 @@ def test_a_local_post_by_its_url(app, env):
 
 
 @pytest.mark.parametrize('prefix', ['/post/', '/p/', '/t/'])
-def test_every_post_url_shape_this_instance_knows(app, env, prefix):
+def test_every_post_url_shape_this_instance_knows(app, api_search_resolve_env, prefix):
     """Lemmy writes /post/, recent PieFed /p/, mbin /t/."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_resolve_object(token(user),
                                 {'q': local_url(f'{prefix}{post.id}')})
@@ -424,10 +404,10 @@ def test_every_post_url_shape_this_instance_knows(app, env, prefix):
     assert answer['post']['post']['id'] == post.id
 
 
-def test_a_post_url_with_no_id_in_it(app, env):
+def test_a_post_url_with_no_id_in_it(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         get_resolve_object(token(user), {'q': local_url('/post/')})
@@ -435,10 +415,10 @@ def test_a_post_url_with_no_id_in_it(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_post_that_is_not_here(app, env):
+def test_a_post_that_is_not_here(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         get_resolve_object(token(user), {'q': local_url('/post/999999')})
@@ -446,10 +426,10 @@ def test_a_post_that_is_not_here(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_comment_that_is_not_here(app, env):
+def test_a_comment_that_is_not_here(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         get_resolve_object(token(user), {'q': local_url('/comment/999999')})
@@ -457,10 +437,10 @@ def test_a_comment_that_is_not_here(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_local_feed_by_its_url(app, env):
+def test_a_local_feed_by_its_url(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.user_id = user.id
     db.session.commit()
@@ -471,10 +451,10 @@ def test_a_local_feed_by_its_url(app, env):
     assert answer['feed']['id'] == feed.id
 
 
-def test_a_feed_url_that_names_no_feed(app, env):
+def test_a_feed_url_that_names_no_feed(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.search_for_feed', return_value=None):
         with pytest.raises(Exception) as refused:
@@ -483,10 +463,10 @@ def test_a_feed_url_that_names_no_feed(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_community_url_that_names_no_community(app, env):
+def test_a_community_url_that_names_no_community(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.search_for_community',
                return_value=None):
@@ -496,10 +476,10 @@ def test_a_community_url_that_names_no_community(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_local_account_by_its_url(app, env):
+def test_a_local_account_by_its_url(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.search_for_user',
                return_value=author):
@@ -509,10 +489,10 @@ def test_a_local_account_by_its_url(app, env):
     assert answer['person']['person']['id'] == author.id
 
 
-def test_a_user_url_that_names_nobody(app, env):
+def test_a_user_url_that_names_nobody(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.search_for_user', return_value=None):
         with pytest.raises(Exception) as refused:
@@ -526,10 +506,10 @@ def test_a_user_url_that_names_nobody(app, env):
 # --------------------------------------------------------------------------
 
 
-def test_a_person_suggestion_prefers_people_in_the_thread(app, env):
+def test_a_person_suggestion_prefers_people_in_the_thread(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_suggestion({'q': f'@{author.user_name[:3]}',
                              'post_id': post.id})
@@ -537,9 +517,9 @@ def test_a_person_suggestion_prefers_people_in_the_thread(app, env):
     assert author.lemmy_link() in answer['result']
 
 
-def test_the_api_passes_post_id_so_people_in_the_thread_come_first(app, env, monkeypatch):
+def test_the_api_passes_post_id_so_people_in_the_thread_come_first(app, api_search_resolve_env, monkeypatch):
     """post_id was not in the request schema, which drops unknown fields, so the thread was never consulted."""
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
     prefix = author.user_name[:3]
     for number in range(8):   # better known than the author: without the thread they fill all seven places
@@ -566,12 +546,12 @@ def _a_thread_replier_under_seven_namesakes(baseline, post, prefix):
     return replier, reply
 
 
-def test_a_post_the_caller_may_not_see_puts_nobody_first(app, env):
+def test_a_post_the_caller_may_not_see_puts_nobody_first(app, api_search_resolve_env):
     """A followers-only post answers as one nobody holds: its repliers are not named for being in it."""
     from app.api.alpha.utils.misc import get_suggestion
     from app.constants import VISIBILITY_FOLLOWERS
 
-    user, author, community, post, reply, baseline = env   # user wrote the post, so the caller is author
+    user, author, community, post, reply, baseline = api_search_resolve_env   # user wrote the post, so the caller is author
     replier, _ = _a_thread_replier_under_seven_namesakes(baseline, post, 'seen')
     post.visibility = VISIBILITY_FOLLOWERS
     db.session.commit()
@@ -581,11 +561,11 @@ def test_a_post_the_caller_may_not_see_puts_nobody_first(app, env):
         get_suggestion({'q': '@seen', 'post_id': 2 ** 31 - 1}, token(author))
 
 
-def test_a_private_community_post_puts_nobody_first_for_a_non_member(app, env):
+def test_a_private_community_post_puts_nobody_first_for_a_non_member(app, api_search_resolve_env):
     """Its comments are its members' (refuse_private_thread), so who wrote them is too."""
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env   # author is no member of the post's community
+    user, author, community, post, reply, baseline = api_search_resolve_env   # author is no member of the post's community
     replier, _ = _a_thread_replier_under_seven_namesakes(baseline, post, 'inner')
     assert replier.lemmy_link() in get_suggestion({'q': '@inner', 'post_id': post.id}, token(author))['result']
     post.community.private = True
@@ -595,20 +575,20 @@ def test_a_private_community_post_puts_nobody_first_for_a_non_member(app, env):
         get_suggestion({'q': '@inner', 'post_id': 2 ** 31 - 1}, token(author))
 
 
-def test_a_thread_lookup_failure_that_is_no_refusal_is_not_hidden(app, env):
+def test_a_thread_lookup_failure_that_is_no_refusal_is_not_hidden(app, api_search_resolve_env):
     """Only 'not found' and the private-community refusals mean no thread; anything else is a real error."""
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     with patch('app.api.alpha.utils.misc.a_post', side_effect=Exception('database is down')):
         with pytest.raises(Exception, match='database is down'):
             get_suggestion({'q': '@anyone', 'post_id': post.id}, token(author))
 
 
-def test_a_deleted_reply_puts_nobody_first(app, env):
+def test_a_deleted_reply_puts_nobody_first(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     replier, gone = _a_thread_replier_under_seven_namesakes(baseline, post, 'gone')
     gone.deleted = True
     db.session.commit()
@@ -616,11 +596,11 @@ def test_a_deleted_reply_puts_nobody_first(app, env):
     assert replier.lemmy_link() not in get_suggestion({'q': '@gone', 'post_id': post.id}, token(author))['result']
 
 
-def test_a_followers_only_reply_the_caller_may_not_see_puts_nobody_first(app, env):
+def test_a_followers_only_reply_the_caller_may_not_see_puts_nobody_first(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_suggestion
     from app.constants import VISIBILITY_FOLLOWERS
 
-    user, author, community, post, reply, baseline = env   # user wrote the post and sees what answers it
+    user, author, community, post, reply, baseline = api_search_resolve_env   # user wrote the post and sees what answers it
     replier, hidden = _a_thread_replier_under_seven_namesakes(baseline, post, 'quiet')
     assert replier.lemmy_link() in get_suggestion({'q': '@quiet', 'post_id': post.id}, token(author))['result']
     hidden.visibility = VISIBILITY_FOLLOWERS
@@ -629,21 +609,21 @@ def test_a_followers_only_reply_the_caller_may_not_see_puts_nobody_first(app, en
     assert replier.lemmy_link() not in get_suggestion({'q': '@quiet', 'post_id': post.id}, token(author))['result']
 
 
-def test_a_person_suggestion_without_a_thread(app, env):
+def test_a_person_suggestion_without_a_thread(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_suggestion({'q': f'@{author.user_name[:3]}'})
 
     assert author.lemmy_link() in answer['result']
 
 
-def test_a_person_suggestion_falls_back_to_a_looser_match(app, env):
+def test_a_person_suggestion_falls_back_to_a_looser_match(app, api_search_resolve_env):
     """The prefix search first, then `%name%` if seven have not been found."""
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     somebody = make_user(baseline.instance_local, 'xx_findme_xx', local=True)
     db.session.commit()
 
@@ -652,10 +632,10 @@ def test_a_person_suggestion_falls_back_to_a_looser_match(app, env):
     assert somebody.lemmy_link() in answer['result']
 
 
-def test_a_person_suggestion_stops_at_seven(app, env):
+def test_a_person_suggestion_stops_at_seven(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     for number in range(9):
         make_user(baseline.instance_local, f'samename{number}', local=True)
     db.session.commit()
@@ -665,20 +645,20 @@ def test_a_person_suggestion_stops_at_seven(app, env):
     assert len(answer['result']) == 7
 
 
-def test_a_community_suggestion(app, env):
+def test_a_community_suggestion(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_suggestion({'q': '!gen'})
 
     assert community.lemmy_link()[1:] in answer['result']
 
 
-def test_a_suggestion_about_neither(app, env):
+def test_a_suggestion_about_neither(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     assert get_suggestion({'q': 'general'}) == {'result': []}
 
@@ -703,12 +683,12 @@ def remote(name='faraway', profile_id=None):
     return community
 
 
-def test_a_remote_community_already_federated_is_answered_locally(app, env):
+def test_a_remote_community_already_federated_is_answered_locally(app, api_search_resolve_env):
     """`search_for_community(..., allow_fetch=False)` decides whether this is
     a local lookup: something already federated is not fetched again."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = remote(profile_id='https://remote.example/c/faraway')
 
     with patch('app.api.alpha.utils.misc.search_for_community',
@@ -718,10 +698,10 @@ def test_a_remote_community_already_federated_is_answered_locally(app, env):
     assert answer['community']['community']['id'] == theirs.id
 
 
-def test_a_remote_person_already_federated(app, env):
+def test_a_remote_person_already_federated(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = make_user(baseline.instance_remote, 'faraway')
     db.session.commit()
 
@@ -732,10 +712,10 @@ def test_a_remote_person_already_federated(app, env):
     assert answer['person']['person']['id'] == theirs.id
 
 
-def test_a_remote_feed_already_federated(app, env):
+def test_a_remote_feed_already_federated(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.user_id = user.id
     db.session.commit()
@@ -746,12 +726,12 @@ def test_a_remote_feed_already_federated(app, env):
     assert answer['feed']['id'] == feed.id
 
 
-def test_a_url_hint_sends_a_community_to_the_actor_fetch(app, env):
+def test_a_url_hint_sends_a_community_to_the_actor_fetch(app, api_search_resolve_env):
     """`/c/` in a url with no local match: `find_actor_or_create` is what
     goes and asks the other server."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = remote()
 
     with patch('app.api.alpha.utils.misc.find_actor_or_create',
@@ -763,10 +743,10 @@ def test_a_url_hint_sends_a_community_to_the_actor_fetch(app, env):
     fetched.assert_called_once()
 
 
-def test_a_url_hint_sends_a_person_to_the_actor_fetch(app, env):
+def test_a_url_hint_sends_a_person_to_the_actor_fetch(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = make_user(baseline.instance_remote, 'faraway')
     db.session.commit()
 
@@ -778,12 +758,12 @@ def test_a_url_hint_sends_a_person_to_the_actor_fetch(app, env):
     assert answer['person']['person']['id'] == theirs.id
 
 
-def test_a_remote_feed_document_becomes_a_feed(app, env):
+def test_a_remote_feed_document_becomes_a_feed(app, api_search_resolve_env):
     """A feed url carries no `/u/`, `/c/` or `/m/` hint, so it goes to the
     document fetch rather than the actor fetch."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.user_id = user.id
     feed.ap_profile_id = 'https://remote.example/other/newsfeed'
@@ -800,10 +780,10 @@ def test_a_remote_feed_document_becomes_a_feed(app, env):
     assert answer['feed']['id'] == feed.id
 
 
-def test_a_document_the_other_server_will_not_hand_over(app, env):
+def test_a_document_the_other_server_will_not_hand_over(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value=None):
@@ -816,11 +796,11 @@ def test_a_document_the_other_server_will_not_hand_over(app, env):
 
 @pytest.mark.parametrize('document', [{}, {'type': 'Note'},
                                       {'id': 'https://remote.example/x'}])
-def test_a_document_missing_what_it_needs(app, env, document):
+def test_a_document_missing_what_it_needs(app, api_search_resolve_env, document):
     """No `id`, or an `id` that matches and no `type`."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value=document):
@@ -830,12 +810,12 @@ def test_a_document_missing_what_it_needs(app, env, document):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_document_that_names_another_url_is_followed(app, env):
+def test_a_document_that_names_another_url_is_followed(app, api_search_resolve_env):
     """"query URL doesn't match original author's URL" -- the canonical id
     wins, and the function calls itself with it."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value={'id': post.ap_id}):
@@ -846,10 +826,10 @@ def test_a_document_that_names_another_url_is_followed(app, env):
 
 
 @pytest.mark.parametrize('actor_type', ['Person', 'Service', 'Application', 'Group'])
-def test_an_actor_document_becomes_an_actor(app, env, actor_type):
+def test_an_actor_document_becomes_an_actor(app, api_search_resolve_env, actor_type):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = make_user(baseline.instance_remote, f'faraway{actor_type}')
     db.session.commit()
 
@@ -866,10 +846,10 @@ def test_an_actor_document_becomes_an_actor(app, env, actor_type):
     assert built.call_args.args[1] == 'faraway'
 
 
-def test_an_actor_document_that_is_a_community(app, env):
+def test_an_actor_document_that_is_a_community(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = remote()
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
@@ -883,10 +863,10 @@ def test_an_actor_document_that_is_a_community(app, env):
     assert answer['community']['community']['id'] == theirs.id
 
 
-def test_a_post_document_is_created_in_its_community(app, env):
+def test_a_post_document_is_created_in_its_community(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = remote()
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
@@ -902,10 +882,10 @@ def test_a_post_document_is_created_in_its_community(app, env):
     assert created.call_args.args[3] is theirs
 
 
-def test_a_comment_document_is_created_too(app, env):
+def test_a_comment_document_is_created_too(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = remote()
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
@@ -920,12 +900,12 @@ def test_a_comment_document_is_created_too(app, env):
     assert answer['comment']['comment']['id'] == reply.id
 
 
-def test_a_document_whose_community_is_named_in_its_audience(app, env):
+def test_a_document_whose_community_is_named_in_its_audience(app, api_search_resolve_env):
     """With no community known, the audience/cc/to fields are resolved in
     turn until one of them answers with a community."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value={'id': 'https://remote.example/x', 'type': 'Page',
@@ -939,10 +919,10 @@ def test_a_document_whose_community_is_named_in_its_audience(app, env):
     assert created.call_args.args[3].id == community.id
 
 
-def test_a_document_whose_community_is_in_a_list(app, env):
+def test_a_document_whose_community_is_in_a_list(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value={'id': 'https://remote.example/x', 'type': 'Page',
@@ -957,10 +937,10 @@ def test_a_document_whose_community_is_in_a_list(app, env):
     assert created.call_args.args[3].id == community.id
 
 
-def test_a_reply_takes_its_community_from_what_it_answers(app, env):
+def test_a_reply_takes_its_community_from_what_it_answers(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value={'id': 'https://remote.example/x', 'type': 'Note',
@@ -974,10 +954,10 @@ def test_a_reply_takes_its_community_from_what_it_answers(app, env):
     assert created.call_args.args[3].id == post.community_id
 
 
-def test_a_reply_to_a_comment_takes_its_community_too(app, env):
+def test_a_reply_to_a_comment_takes_its_community_too(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value={'id': 'https://remote.example/x', 'type': 'Note',
@@ -991,10 +971,10 @@ def test_a_reply_to_a_comment_takes_its_community_too(app, env):
     assert created.call_args.args[3].id == reply.community_id
 
 
-def test_a_document_with_no_community_anywhere(app, env):
+def test_a_document_with_no_community_anywhere(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value={'id': 'https://remote.example/x', 'type': 'Page'}):
@@ -1006,10 +986,10 @@ def test_a_document_with_no_community_anywhere(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_document_that_cannot_be_created_at_all(app, env):
+def test_a_document_that_cannot_be_created_at_all(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = remote()
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
@@ -1025,12 +1005,12 @@ def test_a_document_that_cannot_be_created_at_all(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_reply_whose_parent_is_fetched_first(app, env):
+def test_a_reply_whose_parent_is_fetched_first(app, api_search_resolve_env):
     """"if object can't be created due to missing a parent post or reply" --
     the parent is resolved and the creation tried once more."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = remote()
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
@@ -1047,7 +1027,7 @@ def test_a_reply_whose_parent_is_fetched_first(app, env):
     assert created.call_count == 2
 
 
-def test_an_actor_document_with_no_name_is_not_found(app, env):
+def test_an_actor_document_with_no_name_is_not_found(app, api_search_resolve_env):
     """D1191. `type == 'Person' or ... or type == 'Feed' and
     'preferredUsername' in ap_json` -- `and` binds tighter, so the membership
     test guarded the Feed arm alone while the line below read the key for all
@@ -1055,7 +1035,7 @@ def test_an_actor_document_with_no_name_is_not_found(app, env):
     'preferredUsername'`. D1190's shape, second instance in this file."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value={'id': 'https://remote.example/x',
@@ -1071,12 +1051,12 @@ def test_an_actor_document_with_no_name_is_not_found(app, env):
 # --------------------------------------------------------------------------
 
 
-def test_a_local_person_addressed_with_this_instances_domain(app, env):
+def test_a_local_person_addressed_with_this_instances_domain(app, api_search_resolve_env):
     """`@name@this-instance` is passed whole, on both the local-request test
     and the search itself: R1, a bare name matched that name on every domain."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     name = f"@{author.user_name}@{current_app.config['SERVER_NAME']}"
 
     with patch('app.api.alpha.utils.misc.search_for_user',
@@ -1087,11 +1067,11 @@ def test_a_local_person_addressed_with_this_instances_domain(app, env):
                for call in searched.call_args_list)
 
 
-def test_a_community_url_with_no_name_in_it(app, env):
+def test_a_community_url_with_no_name_in_it(app, api_search_resolve_env):
     """The `/c/` regex matches nothing, so there is no name to look up."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.search_for_community', return_value=None):
         with pytest.raises(Exception) as refused:
@@ -1100,11 +1080,11 @@ def test_a_community_url_with_no_name_in_it(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_community_url_carrying_its_domain(app, env):
+def test_a_community_url_carrying_its_domain(app, api_search_resolve_env):
     """A name that already names its instance is not given ours as well."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.search_for_community',
                return_value=community) as searched:
@@ -1114,10 +1094,10 @@ def test_a_community_url_carrying_its_domain(app, env):
     assert searched.call_args.args[0] == '!general@elsewhere.example'
 
 
-def test_a_person_url_carrying_this_instances_domain(app, env):
+def test_a_person_url_carrying_this_instances_domain(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     name = f"{author.user_name}@{current_app.config['SERVER_NAME']}"
 
     with patch('app.api.alpha.utils.misc.search_for_user',
@@ -1127,10 +1107,10 @@ def test_a_person_url_carrying_this_instances_domain(app, env):
     assert searched.call_args.args[0] == name.lower()   # R1: `/u/name@host` names its own domain
 
 
-def test_a_person_url_with_no_name_in_it(app, env):
+def test_a_person_url_with_no_name_in_it(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.search_for_user', return_value=None):
         with pytest.raises(Exception) as refused:
@@ -1139,10 +1119,10 @@ def test_a_person_url_with_no_name_in_it(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_feed_url_with_no_name_in_it(app, env):
+def test_a_feed_url_with_no_name_in_it(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.search_for_feed', return_value=None):
         with pytest.raises(Exception) as refused:
@@ -1151,10 +1131,10 @@ def test_a_feed_url_with_no_name_in_it(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_feed_in_tilde_notation_that_names_no_feed(app, env):
+def test_a_feed_in_tilde_notation_that_names_no_feed(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     name = f"~nosuch@{current_app.config['SERVER_NAME']}"
 
     with patch('app.api.alpha.utils.misc.search_for_feed', return_value=None):
@@ -1164,10 +1144,10 @@ def test_a_feed_in_tilde_notation_that_names_no_feed(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_feed_url_carrying_its_domain(app, env):
+def test_a_feed_url_carrying_its_domain(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.user_id = user.id
     db.session.commit()
@@ -1180,12 +1160,12 @@ def test_a_feed_url_carrying_its_domain(app, env):
     assert searched.call_args.args[0] == '~newsfeed@elsewhere.example'
 
 
-def test_a_bang_query_with_no_local_match_is_fetched(app, env):
+def test_a_bang_query_with_no_local_match_is_fetched(app, api_search_resolve_env):
     """The hint block below the local one: `!name@server` that this instance
     does not already have goes out to fetch it."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = remote()
 
     with patch('app.api.alpha.utils.misc.search_for_community',
@@ -1195,10 +1175,10 @@ def test_a_bang_query_with_no_local_match_is_fetched(app, env):
     assert answer['community']['community']['id'] == theirs.id
 
 
-def test_an_at_query_with_no_local_match_is_fetched(app, env):
+def test_an_at_query_with_no_local_match_is_fetched(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     theirs = make_user(baseline.instance_remote, 'faraway')
     db.session.commit()
 
@@ -1209,10 +1189,10 @@ def test_an_at_query_with_no_local_match_is_fetched(app, env):
     assert answer['person']['person']['id'] == theirs.id
 
 
-def test_a_tilde_query_with_no_local_match_is_fetched(app, env):
+def test_a_tilde_query_with_no_local_match_is_fetched(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.user_id = user.id
     feed.ap_profile_id = 'https://remote.example/other/newsfeed'
@@ -1225,12 +1205,12 @@ def test_a_tilde_query_with_no_local_match_is_fetched(app, env):
     assert answer['feed']['id'] == feed.id
 
 
-def test_an_actor_fetch_that_answers_a_feed(app, env):
+def test_an_actor_fetch_that_answers_a_feed(app, api_search_resolve_env):
     """`/m/` without `/t/` is the mbin community shape, and the fetch can
     answer with any of the three actor kinds."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.user_id = user.id
     db.session.commit()
@@ -1243,12 +1223,12 @@ def test_an_actor_fetch_that_answers_a_feed(app, env):
     assert answer['feed']['id'] == feed.id
 
 
-def test_an_actor_fetch_that_finds_nothing_falls_through(app, env):
+def test_an_actor_fetch_that_finds_nothing_falls_through(app, api_search_resolve_env):
     """`find_actor_or_create` answering None is not the end: the document
     fetch below it still runs."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.find_actor_or_create',
                return_value=None):
@@ -1261,12 +1241,12 @@ def test_an_actor_fetch_that_finds_nothing_falls_through(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_reply_whose_parent_is_itself_fetched(app, env):
+def test_a_reply_whose_parent_is_itself_fetched(app, api_search_resolve_env):
     """The parent is not here, so it is resolved recursively and its
     community used."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     def fetched(query, retry_delay=3):
         if query == 'https://remote.example/x':
@@ -1286,20 +1266,20 @@ def test_a_reply_whose_parent_is_itself_fetched(app, env):
     assert answer['comment']['comment']['id'] == reply.id
 
 
-def test_a_suggestion_for_a_name_nobody_has(app, env):
+def test_a_suggestion_for_a_name_nobody_has(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     assert get_suggestion({'q': '@nobodyatall'}) == {'result': []}
 
 
-def test_an_anonymous_feed_lookup_carries_empty_lists(app, env):
+def test_an_anonymous_feed_lookup_carries_empty_lists(app, api_search_resolve_env):
     """`feed_view_arguments` without a caller: nothing is subscribed, nothing
     is blocked, and no database lookup is made for any of it."""
     from app.api.alpha.utils.misc import feed_view_arguments
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     arguments = feed_view_arguments(None)
 
@@ -1308,11 +1288,11 @@ def test_an_anonymous_feed_lookup_carries_empty_lists(app, env):
     assert arguments['blocked_instance_ids'] == []
 
 
-def test_a_bare_name_with_no_server_in_it(app, env):
+def test_a_bare_name_with_no_server_in_it(app, api_search_resolve_env):
     """`!name` with no `@server`: there is no instance to ask."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         get_resolve_object(token(user), {'q': '!general'})
@@ -1320,11 +1300,11 @@ def test_a_bare_name_with_no_server_in_it(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_post_url_the_regex_cannot_read(app, env):
+def test_a_post_url_the_regex_cannot_read(app, api_search_resolve_env):
     """`/p/` with a non-numeric id: the pattern matches nothing."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         get_resolve_object(token(user), {'q': local_url('/p/notanumber')})
@@ -1332,10 +1312,10 @@ def test_a_post_url_the_regex_cannot_read(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_comment_url_the_regex_cannot_read(app, env):
+def test_a_comment_url_the_regex_cannot_read(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         get_resolve_object(token(user), {'q': local_url('/comment/notanumber')})
@@ -1343,12 +1323,12 @@ def test_a_comment_url_the_regex_cannot_read(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_local_url_that_is_none_of_the_shapes(app, env):
+def test_a_local_url_that_is_none_of_the_shapes(app, api_search_resolve_env):
     """A url on this instance naming nothing the dispatch recognises falls
     past every branch."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value=None):
@@ -1358,12 +1338,12 @@ def test_a_local_url_that_is_none_of_the_shapes(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_local_feed_already_known_by_its_profile_id(app, env):
+def test_a_local_feed_already_known_by_its_profile_id(app, api_search_resolve_env):
     """The early lookup answers a feed without the query having to look like
     one -- which is what D1192 was about."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.ap_profile_id = local_url('/other/newsfeed')
     feed.user_id = user.id
@@ -1374,11 +1354,11 @@ def test_a_local_feed_already_known_by_its_profile_id(app, env):
     assert answer['feed']['id'] == feed.id
 
 
-def test_a_document_whose_audience_names_nothing_useful(app, env):
+def test_a_document_whose_audience_names_nothing_useful(app, api_search_resolve_env):
     """The w3 namespace and a followers collection are both skipped."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value={'id': 'https://remote.example/x', 'type': 'Page',
@@ -1393,10 +1373,10 @@ def test_a_document_whose_audience_names_nothing_useful(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_reply_whose_parent_cannot_be_resolved_either(app, env):
+def test_a_reply_whose_parent_cannot_be_resolved_either(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     def fetched(query, retry_delay=3):
         if query == 'https://remote.example/x':
@@ -1414,25 +1394,25 @@ def test_a_reply_whose_parent_cannot_be_resolved_either(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_suggestion_does_not_repeat_somebody(app, env):
+def test_a_suggestion_does_not_repeat_somebody(app, api_search_resolve_env):
     """Somebody who replied to the post and also matches the looser search is
     listed once."""
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     answer = get_suggestion({'q': f'@{author.user_name}', 'post_id': post.id})
 
     assert answer['result'].count(author.lemmy_link()) == 1
 
 
-def test_a_remote_comment_url_that_names_its_community(app, env):
+def test_a_remote_comment_url_that_names_its_community(app, api_search_resolve_env):
     """D1190's twin, on the path that reaches off the instance: the same
     precedence bug decided whether a remote comment permalink was fetched as
     an actor."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.find_actor_or_create') as fetched:
         with patch('app.api.alpha.utils.misc.remote_object_to_json',
@@ -1445,12 +1425,12 @@ def test_a_remote_comment_url_that_names_its_community(app, env):
     fetched.assert_not_called()
 
 
-def test_a_bare_feed_url_is_given_this_instances_domain(app, env):
+def test_a_bare_feed_url_is_given_this_instances_domain(app, api_search_resolve_env):
     """`/f/newsfeed` with no `@` names a feed here, and the lookup is made
     with the full address."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     feed = make_local_feed('newsfeed', public=True)
     feed.user_id = user.id
     # Not the url under test: the early `filter_by(ap_profile_id=query)`
@@ -1466,12 +1446,12 @@ def test_a_bare_feed_url_is_given_this_instances_domain(app, env):
         f"~newsfeed@{current_app.config['SERVER_NAME']}"
 
 
-def test_seven_suggestions_even_when_the_thread_fills_them(app, env):
+def test_seven_suggestions_even_when_the_thread_fills_them(app, api_search_resolve_env):
     """The cap is checked inside the loop, not only by the query's limit: the
     people who replied to the post are added first."""
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     # Seven from the thread fills the list, so the loop below it breaks on
     # its first iteration rather than running out of candidates.
     for number in range(7):
@@ -1487,13 +1467,13 @@ def test_seven_suggestions_even_when_the_thread_fills_them(app, env):
     assert len(answer['result']) == 7
 
 
-def test_a_lookalike_domain_is_not_this_instance(app, env):
+def test_a_lookalike_domain_is_not_this_instance(app, api_search_resolve_env):
     """`@name@sub.<server>` ends with our domain but is not it. R1: the old
     suffix test trimmed it to a bare name and found OUR account; it is asked
     for whole now, as the remote handle it is."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     name = f"@{author.user_name}@sub.{current_app.config['SERVER_NAME']}"
 
     with patch('app.api.alpha.utils.misc.search_for_user',
@@ -1504,12 +1484,12 @@ def test_a_lookalike_domain_is_not_this_instance(app, env):
     assert searched.call_args_list[0].args[0] == name.lower()
 
 
-def test_seven_suggestions_from_the_looser_search_too(app, env):
+def test_seven_suggestions_from_the_looser_search_too(app, api_search_resolve_env):
     """The cap is checked in the second loop as well, which only runs when
     the first one left room."""
     from app.api.alpha.utils.misc import get_suggestion
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     # Six whose name STARTS with the query, so the prefix loop leaves room
     # for exactly one more -- and two that only the `%name%` search finds,
     # given the reputation to sort FIRST in it. The second loop then reaches
@@ -1527,12 +1507,12 @@ def test_seven_suggestions_from_the_looser_search_too(app, env):
     assert len(answer['result']) == 7
 
 
-def test_an_at_query_that_names_nobody_here(app, env):
+def test_an_at_query_that_names_nobody_here(app, api_search_resolve_env):
     """The at-notation branch of a local request: the name is ours to
     resolve, and nobody answers to it."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     name = f"@nosuch@{current_app.config['SERVER_NAME']}"
 
     with patch('app.api.alpha.utils.misc.search_for_user',
@@ -1581,9 +1561,9 @@ def test_an_author_on_another_host_is_not_the_object_s_author(app):
                                                               'type': 'Person'}}) is None
 
 
-def test_a_banned_podcasts_episode_is_dropped(app, env):
+def test_a_banned_podcasts_episode_is_dropped(app, api_search_resolve_env):
     """D24: a top-level episode whose podcast twin is banned is not resolved into microblogs."""
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     from app.models import Instance
     instance = Instance.query.filter_by(domain='remote.example').first()
     if instance is None:
@@ -1602,10 +1582,10 @@ def test_a_banned_podcasts_episode_is_dropped(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_an_audience_that_is_not_a_community_is_not_taken_for_one(app, env):
+def test_an_audience_that_is_not_a_community_is_not_taken_for_one(app, api_search_resolve_env):
     """The audience resolves to a post here, so it cannot supply the community; with no other source the
     document is not found."""
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         resolve_document(user, {'id': REMOTE_X, 'type': 'Page', 'audience': post.ap_id})
@@ -1613,11 +1593,11 @@ def test_an_audience_that_is_not_a_community_is_not_taken_for_one(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_parent_that_resolves_to_nothing_gives_no_community(app, env):
+def test_a_parent_that_resolves_to_nothing_gives_no_community(app, api_search_resolve_env):
     """The parent is resolved recursively; when that answers nothing the reply has no community."""
     from app.api.alpha.utils import misc
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     real = misc.get_resolve_object
 
     def only_the_outer_call(auth, data, user_id=None, recursive=False):
@@ -1631,8 +1611,8 @@ def test_a_parent_that_resolves_to_nothing_gives_no_community(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_an_object_the_caller_may_not_view_is_not_found(app, env):
-    user, author, community, post, reply, baseline = env
+def test_an_object_the_caller_may_not_view_is_not_found(app, api_search_resolve_env):
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with pytest.raises(Exception) as refused:
         resolve_document(user, {'id': REMOTE_X, 'type': 'Page'}, community=community,
@@ -1641,10 +1621,10 @@ def test_an_object_the_caller_may_not_view_is_not_found(app, env):
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_created_object_that_is_neither_post_nor_reply_is_not_found(app, env):
+def test_a_created_object_that_is_neither_post_nor_reply_is_not_found(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.remote_object_to_json',
                return_value={'id': REMOTE_X, 'type': 'Page'}), \
@@ -1661,11 +1641,11 @@ def test_a_created_object_that_is_neither_post_nor_reply_is_not_found(app, env):
     ('@someone@remote.example', 'search_for_user'),
     ('~somefeed@remote.example', 'search_for_feed'),
 ])
-def test_a_hint_that_finds_nothing_falls_through_to_the_fetch(app, env, query, finder):
+def test_a_hint_that_finds_nothing_falls_through_to_the_fetch(app, api_search_resolve_env, query, finder):
     """A !, @ or ~ query nobody answers to goes on to the actor fetch and the document fetch."""
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch(f'app.api.alpha.utils.misc.{finder}', return_value=None), \
             patch('app.api.alpha.utils.misc.find_actor_or_create', return_value=None), \
@@ -1677,10 +1657,10 @@ def test_a_hint_that_finds_nothing_falls_through_to_the_fetch(app, env, query, f
     asked.assert_called_once()
 
 
-def test_an_actor_fetch_that_answers_something_unexpected_falls_through(app, env):
+def test_an_actor_fetch_that_answers_something_unexpected_falls_through(app, api_search_resolve_env):
     from app.api.alpha.utils.misc import get_resolve_object
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.find_actor_or_create', return_value=object()), \
             patch('app.api.alpha.utils.misc.remote_object_to_json', return_value=None):
@@ -1691,10 +1671,10 @@ def test_an_actor_fetch_that_answers_something_unexpected_falls_through(app, env
 
 
 @pytest.mark.parametrize('model', [None, object()])
-def test_an_actor_document_that_makes_no_known_actor_falls_through(app, env, model):
+def test_an_actor_document_that_makes_no_known_actor_falls_through(app, api_search_resolve_env, model):
     """actor_json_to_model answering nothing (or something that is not an actor) leaves a Group document with
     no community to be posted into."""
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
 
     with patch('app.api.alpha.utils.misc.actor_json_to_model', return_value=model):
         with pytest.raises(Exception) as refused:
@@ -1703,12 +1683,12 @@ def test_an_actor_document_that_makes_no_known_actor_falls_through(app, env, mod
     assert str(refused.value) == 'No object found.'
 
 
-def test_a_suggestion_lists_a_person_once(app, env):
+def test_a_suggestion_lists_a_person_once(app, api_search_resolve_env):
     """Two accounts that print as the same handle are one suggestion, not two."""
     from app.api.alpha.utils.misc import get_suggestion
     from app.models import Instance
 
-    user, author, community, post, reply, baseline = env
+    user, author, community, post, reply, baseline = api_search_resolve_env
     instance = Instance.query.filter_by(domain='remote.example').first()
     if instance is None:
         instance = Instance(domain='remote.example')

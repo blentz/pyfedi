@@ -17,8 +17,8 @@ from app.onion_media import DEFAULT_CACHE_BYTES, evict, proxy_url
 from app.onion_media_fill import BG_SLOT_KEY, MAX_REQUEUES, fill, fill_task
 from app.utils import get_setting
 from tests.test_admin_routes_entry import _seed, _settings_admin, login
-from tests.test_onion_guard_limits import onion, onion_get  # noqa: F401
-from tests.test_onion_media_fill import free_disk, image, remote  # noqa: F401
+from tests.test_onion_guard_limits import onion_get
+from tests.test_onion_media_fill import free_disk, image
 
 IMAGE = 'https://media.example/pictrs/image/a.png'
 REFUSED = 'onion media cache directory unavailable, fill refused'
@@ -52,13 +52,13 @@ def test_default_cache_cap_is_5_gib_in_the_admin_form(app, db_session):
         client.get('/admin/misc')
     assert render.call_args.kwargs['form'].onion_media_cache_mb.data == 5120
 
-def test_onion_page_renders_when_the_cache_dir_is_absent(app, onion, absent, caplog):    # noqa: F811
+def test_onion_page_renders_when_the_cache_dir_is_absent(app, onion_guard_limits_onion, absent, caplog):
     response = onion_get(app.test_client(), proxy_url(IMAGE))
     assert response.status_code == 404          # a refused fill, not a 500
     assert not absent.parent.exists()
     assert [record.getMessage() for record in refusals(caplog)] == [REFUSED]
 
-def test_fill_refused_without_error_when_the_dir_is_absent(remote, absent, caplog):     # noqa: F811
+def test_fill_refused_without_error_when_the_dir_is_absent(remote, absent, caplog):
     remote.routes[IMAGE] = image()
     assert fill(IMAGE, max_seconds=5) is None
     assert remote.seen == []                    # nothing was fetched
@@ -66,12 +66,12 @@ def test_fill_refused_without_error_when_the_dir_is_absent(remote, absent, caplo
     assert [record.getMessage() for record in refusals(caplog)] == [REFUSED]
     assert IMAGE not in caplog.text and str(absent) not in caplog.text and 'example' not in caplog.text
 
-def test_the_absent_dir_warning_is_logged_once_per_process(remote, absent, caplog):     # noqa: F811
+def test_the_absent_dir_warning_is_logged_once_per_process(remote, absent, caplog):
     for _ in range(3):
         assert fill(IMAGE, max_seconds=5) is None
     assert [record.getMessage() for record in refusals(caplog)] == [REFUSED]
 
-def test_fill_refused_when_the_dir_is_not_writable(remote, tmp_path, monkeypatch, caplog):      # noqa: F811
+def test_fill_refused_when_the_dir_is_not_writable(remote, tmp_path, monkeypatch, caplog):
     remote.routes[IMAGE] = image()
     monkeypatch.setattr('app.onion_media_fill.os.access', lambda path, mode: False)
     assert fill(IMAGE, max_seconds=5) is None
@@ -92,35 +92,35 @@ def _echoing(*args, **kwargs):
     raise RedisError(f'down: {IMAGE}')
 
 
-def _not_cached(remote):                # noqa: F811
+def _not_cached(remote):
     assert fill(IMAGE, max_seconds=5) is None               # a 404 from the remote: refused, remembered dead
 
 
-def _could_not_store(remote, monkeypatch):      # noqa: F811
+def _could_not_store(remote, monkeypatch):
     remote.routes[IMAGE] = image()
     free_disk(monkeypatch, 0)                               # under the disk reserve: NoRoom, an OSError
     assert fill(IMAGE, max_seconds=5) is None
 
 
-def _could_not_count(remote, monkeypatch):      # noqa: F811
+def _could_not_count(remote, monkeypatch):
     remote.routes[IMAGE] = image()
     monkeypatch.setattr('app.onion_redis_client.incrby', _echoing)
     assert fill(IMAGE, max_seconds=5) is not None
 
 
-def _could_not_remember(remote, monkeypatch):   # noqa: F811
+def _could_not_remember(remote, monkeypatch):
     monkeypatch.setattr('app.onion_redis_client.set', _echoing)
     assert fill(IMAGE, max_seconds=5) is None
 
 
-def _slot_stayed_busy(remote, monkeypatch):     # noqa: F811
+def _slot_stayed_busy(remote, monkeypatch):
     app_pkg.onion_redis_client.set(BG_SLOT_KEY, 'another task', ex=630)
     fill_task(IMAGE, MAX_REQUEUES)
 
 
 @pytest.mark.parametrize('branch', [_could_not_store, _could_not_count, _could_not_remember, _slot_stayed_busy,
                                     _not_cached])
-def test_no_fill_log_line_names_the_media_url(remote, monkeypatch, caplog, branch):     # noqa: F811
+def test_no_fill_log_line_names_the_media_url(remote, monkeypatch, caplog, branch):
     """A Celery task is not an onion request, so the log scrub never sees these lines: they must not name the URL."""
     caplog.set_level(logging.INFO, logger='app')
     if branch is _not_cached:

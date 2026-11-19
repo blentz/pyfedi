@@ -26,28 +26,12 @@ from tests.test_community_lifecycle import able_to_create, csrf, login, url
 pytestmark = pytest.mark.usefixtures('site')
 
 
-@pytest.fixture
-def domains(db_session):
-    """The default clearnet row and an onion row, over the local instance row (id 1)."""
-    make_instance('test.piefed.local')
-    default = db.session.query(SiteDomain).filter_by(is_default=True).first()
-    if default is None:
-        default = SiteDomain(domain='default.example', is_default=True)
-        db.session.add(default)
-    onion = SiteDomain(domain='abc.onion', scheme='http', federates=False)
-    db.session.add(onion)
-    db.session.commit()
-    clear_domain_cache()
-    yield default, onion
-    clear_domain_cache()
-
-
 def _form(name):
     return SimpleNamespace(user_name=SimpleNamespace(data=name), real_email=SimpleNamespace(data=f'{name}@example.com'),
                            password=SimpleNamespace(data='password123'), timezone=SimpleNamespace(data='UTC'))
 
 
-def test_the_default_base_url_is_server_url_exactly(app, db_session, domains):
+def test_the_default_base_url_is_server_url_exactly(app, db_session, per_domain_creation_domains):
     assert domain_base_url(default_domain()) == app.config['SERVER_URL']
     clear_domain_cache()
     db.session.query(SiteDomain).delete()
@@ -56,14 +40,14 @@ def test_the_default_base_url_is_server_url_exactly(app, db_session, domains):
     assert domain_base_url(default_domain()) == app.config['SERVER_URL']
 
 
-def test_an_onion_base_url_is_its_scheme_and_host(app, db_session, domains):
-    default, onion = domains
+def test_an_onion_base_url_is_its_scheme_and_host(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     assert domain_base_url(default_domain()) == app.config['SERVER_URL']
     assert domain_base_url(domain_by_id(onion.id)) == 'http://abc.onion'
 
 
-def test_registering_on_a_storefront_stamps_its_domain(app, db_session, domains):
-    default, onion = domains
+def test_registering_on_a_storefront_stamps_its_domain(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     with app.test_request_context(base_url='http://abc.onion'):
         app.preprocess_request()
         on_onion = create_new_user(_form('wakko'), '127.0.0.1', 'GB', 'token')
@@ -74,8 +58,8 @@ def test_registering_on_a_storefront_stamps_its_domain(app, db_session, domains)
     assert on_default.site_domain_id == default.id
 
 
-def test_a_default_domain_user_gets_exactly_todays_urls(app, db_session, domains):
-    default, onion = domains
+def test_a_default_domain_user_gets_exactly_todays_urls(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     user = make_user(None, 'Dot', local=True)
     user.site_domain_id = default.id
     db.session.commit()
@@ -86,8 +70,8 @@ def test_a_default_domain_user_gets_exactly_todays_urls(app, db_session, domains
     assert user.ap_inbox_url == f'{base}/u/dot/inbox'
 
 
-def test_an_onion_user_gets_onion_urls(app, db_session, domains):
-    default, onion = domains
+def test_an_onion_user_gets_onion_urls(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     user = make_user(None, 'Dot', local=True)
     user.site_domain_id = onion.id
     db.session.commit()
@@ -97,8 +81,8 @@ def test_an_onion_user_gets_onion_urls(app, db_session, domains):
     assert user.ap_inbox_url == 'http://abc.onion/u/dot/inbox'
 
 
-def test_an_admin_added_onion_user_gets_onion_urls(app, db_session, domains):
-    default, onion = domains
+def test_an_admin_added_onion_user_gets_onion_urls(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     instance = db.session.get(Instance, 1)
     make_user(instance, 'founder', local=True)
     admin = make_user(instance, 'useradmin', local=True)
@@ -120,8 +104,8 @@ def test_an_admin_added_onion_user_gets_onion_urls(app, db_session, domains):
     assert user.ap_inbox_url == 'http://abc.onion/u/newbie/inbox'
 
 
-def test_an_admin_added_user_defaults_to_the_default_domain(app, db_session, domains):
-    default, onion = domains
+def test_an_admin_added_user_defaults_to_the_default_domain(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     instance = db.session.get(Instance, 1)
     make_user(instance, 'founder', local=True)
     admin = make_user(instance, 'useradmin', local=True)
@@ -141,8 +125,8 @@ def test_an_admin_added_user_defaults_to_the_default_domain(app, db_session, dom
     assert user.ap_profile_id == f"{app.config['SERVER_URL']}/u/newbie"
 
 
-def test_ldap_and_oauth_users_belong_to_the_default_domain(app, db_session, domains):
-    default, onion = domains
+def test_ldap_and_oauth_users_belong_to_the_default_domain(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     with app.test_request_context(base_url='http://abc.onion'):
         app.preprocess_request()
         ldap_user = create_new_user_from_ldap('ldapper', 'ldapper@example.com', 'password123', '127.0.0.1')
@@ -153,30 +137,13 @@ def test_ldap_and_oauth_users_belong_to_the_default_domain(app, db_session, doma
     assert oauth_user.site_domain_id == default.id
 
 
-def test_the_microblogs_community_belongs_to_the_default_domain(app, db_session, domains):
-    default, onion = domains
+def test_the_microblogs_community_belongs_to_the_default_domain(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     make_user(db.session.get(Instance, 1), 'founder', local=True)
     community = find_microblogging_community()
     assert community.site_domain_id == default.id
     assert community.ap_profile_id == f"{app.config['SERVER_URL']}/c/microblogs"
     assert community.ap_domain == app.config['SERVER_NAME']
-
-
-@pytest.fixture
-def creators(app, db_session, domains):
-    default, onion = domains
-    instance = db.session.get(Instance, 1)
-    founder = make_user(instance, 'founder', local=True)
-    able_to_create(founder)
-    founder.site_domain_id = default.id
-    other = make_user(instance, 'onionite', local=True)
-    able_to_create(other)
-    other.site_domain_id = onion.id
-    db.session.add(Language(code='und', name='Undetermined'))
-    db.session.add(Language(code='en', name='English'))
-    db.session.get(Site, 1).community_creation_admin_only = False
-    db.session.commit()
-    return founder, other
 
 
 def _create(app, user, host, **overrides):
@@ -199,8 +166,8 @@ def _create(app, user, host, **overrides):
     return Community.query.filter(db.func.lower(Community.name) == overrides['url'].lower()).first()
 
 
-def test_a_community_belongs_to_its_creators_home_domain(app, creators, domains):
-    default, onion = domains
+def test_a_community_belongs_to_its_creators_home_domain(app, creators, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     founder, other = creators
     base = app.config['SERVER_URL']
 
@@ -226,8 +193,8 @@ def _api_creator(name, domain):
     return user
 
 
-def test_the_api_make_community_builds_an_onion_creators_urls(app, db_session, domains):
-    default, onion = domains
+def test_the_api_make_community_builds_an_onion_creators_urls(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     make_user(db.session.get(Instance, 1), 'founder', local=True)
     _seed_und_language()
     user = _api_creator('onionite', onion)
@@ -240,8 +207,8 @@ def test_the_api_make_community_builds_an_onion_creators_urls(app, db_session, d
     assert community.ap_domain == 'abc.onion'
 
 
-def test_add_local_takes_a_name_only_on_the_creators_own_domain(app, creators, domains):
-    default, onion = domains
+def test_add_local_takes_a_name_only_on_the_creators_own_domain(app, creators, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     founder, other = creators
 
     def named(name):
@@ -255,8 +222,8 @@ def test_add_local_takes_a_name_only_on_the_creators_own_domain(app, creators, d
     assert named('shared_name') == sorted([default.id, onion.id])
 
 
-def test_an_admin_added_user_cannot_take_a_community_name_of_its_own_domain(app, db_session, domains):
-    default, onion = domains
+def test_an_admin_added_user_cannot_take_a_community_name_of_its_own_domain(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     instance = db.session.get(Instance, 1)
     make_user(instance, 'founder', local=True)
     admin = make_user(instance, 'useradmin', local=True)
@@ -282,7 +249,7 @@ def test_an_admin_added_user_cannot_take_a_community_name_of_its_own_domain(app,
 AP = {'Accept': 'application/activity+json'}
 
 
-def test_a_storefront_home_community_and_user_resolve_by_name(app, creators, domains):
+def test_a_storefront_home_community_and_user_resolve_by_name(app, creators, per_domain_creation_domains):
     """A community and an account owned by a domain other than the default resolve by their local name. On a
     federating storefront, because the onion's are local-only and answer an ActivityPub request 404 (plan B task 8,
     tests/test_local_only_invisible.py)."""
@@ -304,7 +271,7 @@ def test_a_storefront_home_community_and_user_resolve_by_name(app, creators, dom
     assert client.get('/u/onionite', headers={**AP, 'Host': 'shop.example'}).status_code == 200
 
 
-def test_a_default_domain_community_document_is_unchanged(app, creators, domains):
+def test_a_default_domain_community_document_is_unchanged(app, creators, per_domain_creation_domains):
     founder, other = creators
     made = _create(app, founder, 'abc.onion', url='clearnet')
     response = app.test_client().get('/c/clearnet', headers={**AP, 'Host': 'default.example'})

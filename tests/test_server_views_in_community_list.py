@@ -15,7 +15,7 @@ from app.models import BannedInstances, Community, CommunityBan, CommunityBlock,
 from app.utils import utcnow
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance, make_post, make_user
-from tests.test_microblog_live import client, live, login  # noqa: F401
+from tests.test_microblog_live import login
 
 pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 
@@ -267,145 +267,145 @@ VIEW_LINK = 'href="/c/microblogs@mastodon.example"'
 
 class TestTheList:
 
-    def test_search_microblogs_lists_every_server_view(self, client, live):
+    def test_search_microblogs_lists_every_server_view(self, microblog_live_client, live):
         live.toot()
         server(live, 'infosec.exchange')
 
-        html = client.get('/communities?search=microblogs').get_data(as_text=True)
+        html = microblog_live_client.get('/communities?search=microblogs').get_data(as_text=True)
 
         assert VIEW_LINK in html and 'href="/c/microblogs@infosec.exchange"' in html
 
-    def test_a_host_search_finds_its_view(self, client, live):
+    def test_a_host_search_finds_its_view(self, microblog_live_client, live):
         live.toot()
         server(live, 'infosec.exchange')
 
-        html = client.get('/communities?search=infosec').get_data(as_text=True)
+        html = microblog_live_client.get('/communities?search=infosec').get_data(as_text=True)
 
         assert 'href="/c/microblogs@infosec.exchange"' in html and VIEW_LINK not in html
 
-    def test_the_unfiltered_list_includes_views(self, client, live):
+    def test_the_unfiltered_list_includes_views(self, microblog_live_client, live):
         live.toot()
 
-        assert VIEW_LINK in client.get('/communities').get_data(as_text=True)
+        assert VIEW_LINK in microblog_live_client.get('/communities').get_data(as_text=True)
 
-    def test_a_view_row_joins_the_server_view(self, client, live):
+    def test_a_view_row_joins_the_server_view(self, microblog_live_client, live):
         # It joins the server view, never the microblogs community (spec 2026-10-13, which
         # reverses this spec's non-goal); tests/test_server_view_join.py covers Leave.
         live.toot()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/communities?search=microblogs').get_data(as_text=True)
+        html = microblog_live_client.get('/communities?search=microblogs').get_data(as_text=True)
 
         assert VIEW_LINK in html
         assert '/community/microblogs@mastodon.example/subscribe' in html
 
     @pytest.mark.parametrize('query', ['home_select=local', 'topic_id=1',
                                        'language_id=1', 'feed_id=1', 'platform=peertube', 'nsfw=yes'])
-    def test_filters_a_view_cannot_match_drop_views(self, client, live, query):
+    def test_filters_a_view_cannot_match_drop_views(self, microblog_live_client, live, query):
         live.toot()
         Site.query.first().enable_nsfw = True   # with NSFW hidden by the site or the viewer, nsfw=yes is ignored
         live.viewer.hide_nsfw = 0
         db.session.commit()
         cache.clear()   # the site settings are cached
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        response = client.get(f'/communities?{query}')
+        response = microblog_live_client.get(f'/communities?{query}')
 
         assert response.status_code == 200 and VIEW_LINK not in response.get_data(as_text=True)
 
-    def test_subscribed_lists_the_server_views_the_viewer_joined_and_no_others(self, client, live):
+    def test_subscribed_lists_the_server_views_the_viewer_joined_and_no_others(self, microblog_live_client, live):
         live.toot()
         server(live, 'infosec.exchange')
         join_server_view(live.viewer.id, live.remote)
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/communities?subscribe_select=subscribed').get_data(as_text=True)
+        html = microblog_live_client.get('/communities?subscribe_select=subscribed').get_data(as_text=True)
 
         assert VIEW_LINK in html and 'href="/c/microblogs@infosec.exchange"' not in html
 
-    def test_not_subscribed_lists_the_server_views_the_viewer_has_not_joined(self, client, live):
+    def test_not_subscribed_lists_the_server_views_the_viewer_has_not_joined(self, microblog_live_client, live):
         live.toot()
         server(live, 'infosec.exchange')
         join_server_view(live.viewer.id, live.remote)
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/communities?subscribe_select=not_subscribed').get_data(as_text=True)
+        html = microblog_live_client.get('/communities?subscribe_select=not_subscribed').get_data(as_text=True)
 
         assert VIEW_LINK not in html and 'href="/c/microblogs@infosec.exchange"' in html
 
-    def test_subscribed_lists_no_server_view_for_a_viewer_who_joined_none(self, client, live):
+    def test_subscribed_lists_no_server_view_for_a_viewer_who_joined_none(self, microblog_live_client, live):
         live.toot()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert VIEW_LINK not in client.get('/communities?subscribe_select=subscribed').get_data(as_text=True)
+        assert VIEW_LINK not in microblog_live_client.get('/communities?subscribe_select=subscribed').get_data(as_text=True)
 
     @pytest.mark.parametrize('query', ['home_select=remote', 'nsfw=no', 'instance=mastodon.example'])
-    def test_filters_a_view_can_match_keep_views(self, client, live, query):
+    def test_filters_a_view_can_match_keep_views(self, microblog_live_client, live, query):
         live.toot()
 
-        assert VIEW_LINK in client.get(f'/communities?{query}').get_data(as_text=True)
+        assert VIEW_LINK in microblog_live_client.get(f'/communities?{query}').get_data(as_text=True)
 
-    def test_a_blocked_server_is_not_listed_for_its_blocker(self, client, live):
+    def test_a_blocked_server_is_not_listed_for_its_blocker(self, microblog_live_client, live):
         live.toot()
         db.session.add(InstanceBlock(user_id=live.viewer.id, instance_id=live.remote.id))
         db.session.commit()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert VIEW_LINK not in client.get('/communities?search=microblogs').get_data(as_text=True)
+        assert VIEW_LINK not in microblog_live_client.get('/communities?search=microblogs').get_data(as_text=True)
 
-    def test_a_community_search_takes_wildcards_literally(self, client, live):
+    def test_a_community_search_takes_wildcards_literally(self, microblog_live_client, live):
         make_community('plain')
 
-        assert 'href="/c/plain"' not in client.get('/communities?search=%25').get_data(as_text=True)
+        assert 'href="/c/plain"' not in microblog_live_client.get('/communities?search=%25').get_data(as_text=True)
 
     @pytest.mark.parametrize('sort_by', ['', 'title asc', 'post_count desc', 'nonsense', '1; DROP TABLE x'])
-    def test_every_sort_answers(self, client, live, sort_by):
+    def test_every_sort_answers(self, microblog_live_client, live, sort_by):
         live.toot()
 
-        assert client.get('/communities', query_string={'sort_by': sort_by}).status_code == 200
+        assert microblog_live_client.get('/communities', query_string={'sort_by': sort_by}).status_code == 200
 
-    def test_pagination_crosses_from_communities_to_views(self, client, live):
+    def test_pagination_crosses_from_communities_to_views(self, microblog_live_client, live):
         for n in range(60):
             community(f'c{n:02d}', 100 + n)
         live.toot()
 
-        first = client.get('/communities?sort_by=post_count desc').get_data(as_text=True)
-        second = client.get('/communities?sort_by=post_count desc&page=2').get_data(as_text=True)
+        first = microblog_live_client.get('/communities?sort_by=post_count desc').get_data(as_text=True)
+        second = microblog_live_client.get('/communities?sort_by=post_count desc&page=2').get_data(as_text=True)
 
         assert VIEW_LINK not in first and 'page=2' in first
         assert VIEW_LINK in second
 
-    def test_a_blocked_microblogs_community_hides_the_views(self, client, live):
+    def test_a_blocked_microblogs_community_hides_the_views(self, microblog_live_client, live):
         live.toot()
         db.session.add(CommunityBlock(user_id=live.viewer.id, community_id=live.microblogs.id))
         db.session.commit()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert VIEW_LINK not in client.get('/communities?search=microblogs').get_data(as_text=True)
+        assert VIEW_LINK not in microblog_live_client.get('/communities?search=microblogs').get_data(as_text=True)
 
-    def test_a_ban_from_the_microblogs_community_hides_the_views(self, client, live):
+    def test_a_ban_from_the_microblogs_community_hides_the_views(self, microblog_live_client, live):
         live.toot()
         db.session.add(CommunityBan(user_id=live.viewer.id, community_id=live.microblogs.id))
         db.session.commit()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert VIEW_LINK not in client.get('/communities?search=microblogs').get_data(as_text=True)
+        assert VIEW_LINK not in microblog_live_client.get('/communities?search=microblogs').get_data(as_text=True)
 
-    def test_a_keyword_filter_hides_matching_views_only(self, client, live):
+    def test_a_keyword_filter_hides_matching_views_only(self, microblog_live_client, live):
         live.toot()
         server(live, 'infosec.exchange')
         live.viewer.community_keyword_filter = 'mastodon.example'
         db.session.commit()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/communities?search=microblogs').get_data(as_text=True)
+        html = microblog_live_client.get('/communities?search=microblogs').get_data(as_text=True)
 
         assert VIEW_LINK not in html and 'href="/c/microblogs@infosec.exchange"' in html
 
-    def test_a_filtered_out_microblogs_community_hides_the_views(self, client, live):
+    def test_a_filtered_out_microblogs_community_hides_the_views(self, microblog_live_client, live):
         live.toot()
         live.viewer.community_keyword_filter = 'microblogs'
         db.session.commit()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert VIEW_LINK not in client.get('/communities?search=microblogs').get_data(as_text=True)
+        assert VIEW_LINK not in microblog_live_client.get('/communities?search=microblogs').get_data(as_text=True)

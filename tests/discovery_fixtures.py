@@ -21,20 +21,6 @@ def fresh_cache():
     cache.clear()
 
 
-@pytest.fixture
-def admin(app, db_session):
-    """A logged-in local user holding 'change instance settings': returns (client, csrf_token)."""
-    instance = make_instance('test.piefed.local', software='piefed')
-    make_user(instance, 'founder', local=True)
-    user = make_user(instance, 'settingsadmin', local=True)
-    user.verified = True
-    db.session.commit()
-    grant_permission(user, 'change instance settings')
-    client = app.test_client()
-    login(client, user)
-    return client, csrf(app, client)
-
-
 def add_entry(name, followers=1, platform='peertube', kind='community', nsfw=False, host=None, url=None):
     """Store one DiscoveryEntry; host and actor url default from the name."""
     host = host or f'{name.lower()}.example'

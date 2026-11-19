@@ -30,7 +30,7 @@ from app.storefront import acting_domain, acting_for, clear_domain_cache, domain
 from app.user.utils import search_for_user
 from app.utils import authorise_api_user, user_agent
 from tests.factories import a_keypair, inbox_activity, make_community, make_instance, make_site, make_user
-from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401 -- two_domains is a fixture
+from tests.two_domains import FIRST, ONION, request_on
 
 SHOP = 'shop.example'
 REMOTE = 'https://remote.example'
@@ -72,7 +72,7 @@ class Domains:
 
 
 @pytest.fixture
-def domains(app, two_domains):  # noqa: F811 -- two_domains is the imported fixture
+def domains(app, two_domains):  # -- two_domains is the imported fixture
     _signing_site()
     yield Domains(two_domains)
     clear_domain_cache()

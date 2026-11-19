@@ -22,7 +22,7 @@ from app.shared.domain import block_domain
 from app.storefront import clear_domain_cache
 from app.utils import display_back_button, is_local_image_url, is_safe_redirect_target
 from tests.factories import cavage_signed_headers, inbox_activity, make_community, make_instance, make_site, make_user
-from tests.test_api_search_resolve import env, token  # noqa: F401 -- env is a fixture
+from tests.test_api_search_resolve import token
 
 ALIAS = 'abc.onion'
 CANONICAL = 'https://test.piefed.local'
@@ -235,11 +235,11 @@ def test_a_cavage_signature_for_the_alias_on_another_port_is_refused(app, federa
 
 
 @pytest.mark.parametrize('origin', [CANONICAL, f'http://{ALIAS}', f'https://{ALIAS.upper()}:443'])
-def test_local_link_on_alias_is_local(app, env, origin):  # noqa: F811 -- env is the imported fixture
+def test_local_link_on_alias_is_local(app, api_search_resolve_env, origin):  # -- env is the imported fixture
     """get_resolve_object is what turns a pasted URL into a local object without a fetch. An onion link to a
     local post resolves to that post, as the canonical link does."""
     _register_domains()
-    user, _author, _community, post, _reply, _baseline = env
+    user, _author, _community, post, _reply, _baseline = api_search_resolve_env
     with patch('app.api.alpha.utils.misc.remote_object_to_json') as fetch:
         answer = get_resolve_object(token(user), {'q': f'{origin}/post/{post.id}'})
     assert answer['post']['post']['id'] == post.id

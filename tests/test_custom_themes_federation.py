@@ -12,7 +12,6 @@ from app.models import CustomTheme
 from tests.test_ap_actor_json_group import PEER, _group
 from tests.test_ap_refresh_profiles import _group_document, _remote_community
 from tests.factories import peer_instance
-from tests.two_domains import two_domains  # noqa: F401  (a fixture)
 
 
 def make_theme(domain_id, base_theme):

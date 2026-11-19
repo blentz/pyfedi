@@ -19,10 +19,9 @@ from app.models import Post, utcnow
 from tests.conftest import forget_login
 from tests.factories import (grant_permission, make_community, make_instance, make_post, make_post_vote,
                              make_user)
-from tests.test_instance_visible_here import scene  # noqa: F401 -- scene is a fixture
-from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
+from tests.test_per_domain_ap_routes import onion_proxy
 from tests.test_per_domain_html_routes import Visitor
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -122,18 +121,18 @@ def test_the_downvotes_name_their_authors(app, staff, monkeypatch):
 
 
 @pytest.mark.parametrize('view', VIEWS)
-def test_the_onions_account_is_not_shown_on_the_clearnet(app, scene, view):  # noqa: F811
-    grant_permission(scene.first_bob, 'manage users')
+def test_the_onions_account_is_not_shown_on_the_clearnet(app, instance_visible_here_scene, view):
+    grant_permission(instance_visible_here_scene.first_bob, 'manage users')
 
-    on_first = Visitor(app, scene.first_bob, FIRST).get(f'/u/{scene.onion_bob.user_name}@{ONION}/{view}')
+    on_first = Visitor(app, instance_visible_here_scene.first_bob, FIRST).get(f'/u/{instance_visible_here_scene.onion_bob.user_name}@{ONION}/{view}')
 
     assert on_first.status_code == 404
 
 
-def test_downvotes_on_the_onion_are_left_out_on_the_clearnet(app, scene, monkeypatch):  # noqa: F811
-    grant_permission(scene.first_bob, 'manage users')
+def test_downvotes_on_the_onion_are_left_out_on_the_clearnet(app, instance_visible_here_scene, monkeypatch):
+    grant_permission(instance_visible_here_scene.first_bob, 'manage users')
     onion_post = Post.query.filter_by(title='ONIONPOST').one()
-    make_post_vote(scene.first_bob, onion_post, -1)
+    make_post_vote(instance_visible_here_scene.first_bob, onion_post, -1)
     seen = {}
 
     def capture(template, **context):
@@ -141,6 +140,6 @@ def test_downvotes_on_the_onion_are_left_out_on_the_clearnet(app, scene, monkeyp
         return 'rendered'
     monkeypatch.setattr('app.user.routes.render_template', capture)
 
-    Visitor(app, scene.first_bob, FIRST).get(f'/u/{scene.first_bob.user_name}/voting_patterns_down')
+    Visitor(app, instance_visible_here_scene.first_bob, FIRST).get(f'/u/{instance_visible_here_scene.first_bob.user_name}/voting_patterns_down')
 
     assert seen['votes'] == [] and seen['authors'] == {}

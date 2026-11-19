@@ -4,7 +4,7 @@ import pytest
 from app.local_names import local_named, local_path_name, split_local_name
 from app import db
 from app.models import Community, User
-from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, default_request, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 

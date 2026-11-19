@@ -9,7 +9,7 @@ from flask import g
 from app import db
 from app.models import File, Site
 from tests.test_api_user_settings import settings
-from tests.test_storefront_api import CANONICAL, ONION, onion  # noqa: F401  (the fixture registers abc.onion)
+from tests.test_storefront_api import CANONICAL, ONION
 from tests.factories import make_instance, make_user
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -19,7 +19,7 @@ PATH = '/static/media/{}/zz/yy/zzyyuploaded.png'
 
 @pytest.mark.parametrize('route, destination', [('community_image', 'communities'), ('user_image', 'users')])
 @pytest.mark.parametrize('origin', [f'http://{ONION}', f'https://{CANONICAL}'])
-def test_the_upload_answers_with_a_url_on_the_storefront(app, onion, monkeypatch, route, destination, origin):
+def test_the_upload_answers_with_a_url_on_the_storefront(app, storefront_api_onion, monkeypatch, route, destination, origin):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
     g.site = db.session.get(Site, 1)
     user = make_user(make_instance(CANONICAL, software='piefed'), 'uploader', local=True)
@@ -33,7 +33,7 @@ def test_the_upload_answers_with_a_url_on_the_storefront(app, onion, monkeypatch
 
 
 @pytest.mark.parametrize('field', ['avatar', 'cover'])
-def test_saving_an_onion_image_url_stores_the_canonical_one(app, onion, api_baseline, field):
+def test_saving_an_onion_image_url_stores_the_canonical_one(app, storefront_api_onion, api_baseline, field):
     g.admin_ids = []
     g.site = db.session.get(Site, 1)
     user = api_baseline.user2

@@ -43,7 +43,7 @@ from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import a_keypair, make_community, make_community_member, make_instance, make_post, \
     make_post_reply, make_user
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
-from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401  (fixture)
+from tests.two_domains import FIRST, ONION, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -63,30 +63,6 @@ def _keyed(row, kind):
     row.ap_public_url = row.ap_profile_id
     if kind == 'u':
         row.ap_inbox_url = f'{row.ap_profile_id}/inbox'
-
-
-@pytest.fixture
-def sites(app, two_domains):
-    """hal on the first domain, sam on shop.example, a community on each (pit, wares), a peer following both, and rem on
-    the peer."""
-    first, onion = two_domains.domains
-    db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
-    db.session.commit()
-    clear_domain_cache()
-    shop = domain_for_host(SHOP)
-    hal, sam = two_domains.local_user('hal', first), two_domains.local_user('sam', shop)
-    pit, wares = two_domains.local_community('pit', first), two_domains.local_community('wares', shop)
-    for row, kind in ((hal, 'u'), (sam, 'u'), (pit, 'c'), (wares, 'c')):
-        _keyed(row, kind)
-    peer = make_instance('peer.example', software='lemmy')
-    peer.inbox = 'https://peer.example/inbox'
-    rem = make_user(peer, 'rem')
-    for community in (pit, wares):
-        make_community_member(rem, community)
-    db.session.commit()
-    cache.clear()
-    return SimpleNamespace(first=first, onion=onion, shop=shop, hal=hal, sam=sam, pit=pit, wares=wares, peer=peer,
-                           rem=rem)
 
 
 def captured(monkeypatch, *modules):

@@ -12,7 +12,7 @@ from tests.factories import make_feed_member, make_post
 from tests.test_onion_feeds_hidden import answer, login, signed_get
 from tests.test_per_domain_feed_routes import csrf
 from tests.test_onion_hidden_api_ids import call
-from tests.three_domains import FIRST, ONION, three_domains, two_domains  # noqa: F401
+from tests.three_domains import FIRST, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -27,7 +27,7 @@ def public_site(site):
 
 
 @pytest.fixture
-def secret(three_domains):  # noqa: F811
+def secret(three_domains):
     d = three_domains
     owner, member, stranger = (d.account(name, d.first) for name in ('owner', 'member', 'stranger'))
     feed = d.local_feed('secretfeed', d.first, owner, public=False)
@@ -124,7 +124,7 @@ def test_turning_on_a_private_feeds_notifications_answers_a_stranger_as_a_missin
                        data={'csrf_token': token}).status_code == 200
 
 
-def test_a_subscriber_who_may_no_longer_read_a_private_feed_is_not_notified(app, secret, two_domains):  # noqa: F811
+def test_a_subscriber_who_may_no_longer_read_a_private_feed_is_not_notified(app, secret, two_domains):
     """The feed was made private after the stranger turned its notifications on: a new post in it tells the member,
     and not the stranger."""
     feed, owner, member, stranger = secret
@@ -175,7 +175,7 @@ def test_the_feed_alerts_list_leaves_out_a_feed_its_subscriber_may_no_longer_rea
 
 
 def test_a_clearnet_account_that_subscribed_on_the_onion_sees_no_onion_feed_in_its_alerts_on_the_first_domain(
-        app, three_domains):  # noqa: F811
+        app, three_domains):
     d = three_domains
     bob = d.account('clearbob', d.first)
     onion_feed = d.local_feed('onionpublic', d.onion, d.account('onionowner', d.onion))

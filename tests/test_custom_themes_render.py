@@ -14,8 +14,8 @@ from app.login_gate import LAPSED_OPEN
 from app.models import Community, CustomTheme, CustomThemeFile, Site
 from app.storefront import clear_domain_cache
 from app.utils import current_theme, template_theme, theme_label, theme_stylesheet_url
-from tests.test_branding_pages import branded, onion_branding, page, visit  # noqa: F401  (branded is a fixture)
-from tests.two_domains import default_request, onion_request, two_domains  # noqa: F401  (a fixture)
+from tests.test_branding_pages import onion_branding, page, visit
+from tests.two_domains import default_request, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 

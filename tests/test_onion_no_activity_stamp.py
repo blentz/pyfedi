@@ -18,9 +18,8 @@ from app.shared.post import delete_post, mark_post_read, restore_post
 from app.utils import finalize_user_setup
 from tests.factories import bearer, make_post, make_post_reply
 from tests.test_onion_marker import ONION, PROXY, onion_context, proxy_ip
-from tests.test_onion_unlinkable_ip import (CLEARNET_IP, WORLD, a_post, a_reply, account, api_login, oauth_login,
-                                            refreshed, web_login, world)  # noqa: F401  (world is a fixture)
-from tests.two_domains import default_request, two_domains  # noqa: F401  (a fixture)
+from tests.test_onion_unlinkable_ip import CLEARNET_IP, WORLD, a_post, a_reply, account, api_login, oauth_login, refreshed, web_login
+from tests.two_domains import default_request
 
 LONG_AGO = datetime(2020, 1, 1, 12, 0, 0)
 FROZEN = datetime(2026, 10, 26, 3, 4, 5)
@@ -76,11 +75,11 @@ ACTIONS = [web_login, oauth_login, api_login, a_post, a_reply, vote_on_post, vot
 
 
 @pytest.fixture
-def stampable(world):
-    WORLD['reply'] = make_post_reply(WORLD['post'], world.local_user('replied', world.domains[0]))
-    WORLD['own_post'] = make_post(WORLD['post'].community, world.local_user('poster', world.domains[0]),
+def stampable(onion_unlinkable_ip_world):
+    WORLD['reply'] = make_post_reply(WORLD['post'], onion_unlinkable_ip_world.local_user('replied', onion_unlinkable_ip_world.domains[0]))
+    WORLD['own_post'] = make_post(WORLD['post'].community, onion_unlinkable_ip_world.local_user('poster', onion_unlinkable_ip_world.domains[0]),
                                       'https://elsewhere.example/p/2')
-    return world
+    return onion_unlinkable_ip_world
 
 
 def stamps(user):

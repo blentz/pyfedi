@@ -9,7 +9,6 @@ from app import db
 from app.models import OAuthCode, OAuthToken
 from app.oauth_server import server, tokens
 from tests.factories import make_user
-from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
 CALLBACK = 'https://app.example/cb'
 VERIFIER = 'v' * 60

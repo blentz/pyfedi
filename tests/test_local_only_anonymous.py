@@ -33,7 +33,7 @@ from tests.conftest import forget_login
 from tests.factories import bearer, make_community, make_domain, make_feed_item, make_instance, make_local_feed, \
     make_user
 from tests.test_community_lifecycle import login
-from tests.test_local_only_invisible import _post, _reply, world  # noqa: F401 -- world is a fixture
+from tests.test_local_only_invisible import _post, _reply
 from tests.two_domains import onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -50,7 +50,7 @@ def _content(post_or_reply, text):
 
 
 @pytest.fixture
-def scene(app, world, monkeypatch):
+def scene(app, local_only_invisible_world, monkeypatch):
     """On a public instance: the first domain's `clearnet` community, in a topic and a public feed, holding a public post
     and a local-only one (same tag, same link domain), and on the public post an ordinary reply and a local-only one.
     alice has an RSS token."""
@@ -66,15 +66,15 @@ def scene(app, world, monkeypatch):
     db.session.add_all([tag, shared_tag, hidden_tag])
     domain = make_domain('example.com')
     db.session.commit()
-    world.clearnet.topic_id = topic.id
-    world.clearnet.show_all = world.clearnet.show_popular = True
+    local_only_invisible_world.clearnet.topic_id = topic.id
+    local_only_invisible_world.clearnet.show_all = local_only_invisible_world.clearnet.show_popular = True
     feed = make_local_feed('lofeed', public=True)
-    feed.user_id = world.alice.id
-    make_feed_item(feed, world.clearnet)
-    world.alice.rss_token = 'alice-rss-token'
-    world.alice.ap_profile_id = f"{app.config['SERVER_URL']}/u/alice"   # what /u/alice/feed looks the account up by
-    public = _post(app, world.clearnet, world.alice)
-    hidden = _post(app, world.clearnet, world.alice, local_only=True)
+    feed.user_id = local_only_invisible_world.alice.id
+    make_feed_item(feed, local_only_invisible_world.clearnet)
+    local_only_invisible_world.alice.rss_token = 'alice-rss-token'
+    local_only_invisible_world.alice.ap_profile_id = f"{app.config['SERVER_URL']}/u/alice"   # what /u/alice/feed looks the account up by
+    public = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.alice)
+    hidden = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.alice, local_only=True)
     for post, text in ((public, 'PUBLICPOST'), (hidden, 'HIDDENPOST')):
         _content(post, text)
         post.url = f'https://example.com/{text.lower()}'
@@ -82,8 +82,8 @@ def scene(app, world, monkeypatch):
         post.tags.extend([tag, shared_tag])
         post.indexable = True
     hidden.tags.append(hidden_tag)
-    ordinary = _reply(app, public, world.alice)
-    hidden_reply = _reply(app, public, world.alice, local_only=True)
+    ordinary = _reply(app, public, local_only_invisible_world.alice)
+    hidden_reply = _reply(app, public, local_only_invisible_world.alice, local_only=True)
     _content(ordinary, 'PUBLICREPLY')
     _content(hidden_reply, 'HIDDENREPLY')
     for reply in (ordinary, hidden_reply):
@@ -91,8 +91,8 @@ def scene(app, world, monkeypatch):
     public.reply_count = 2
     db.session.commit()
     g.admin_ids = []
-    return SimpleNamespace(world=world, public=public, hidden=hidden, ordinary=ordinary, hidden_reply=hidden_reply,
-                           domain=domain, alice=world.alice)
+    return SimpleNamespace(world=local_only_invisible_world, public=public, hidden=hidden, ordinary=ordinary, hidden_reply=hidden_reply,
+                           domain=domain, alice=local_only_invisible_world.alice)
 
 
 def _client(app):

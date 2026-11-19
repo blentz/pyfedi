@@ -22,11 +22,10 @@ from app.models import Conversation, Instance, Notification, SiteDomain, User
 from app.storefront import domain_for_host
 from app.utils import patch_db_session
 from tests.factories import make_local_feed, make_post_reply
-from tests.test_instance_visible_here import scene  # noqa: F401 -- a fixture
-from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
-from tests.test_onion_hidden_on_clearnet import MIGRATION, alpha, onion, queries_in, stamped_notice  # noqa: F401
-from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401 -- fixtures
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401 -- two_domains is a fixture
+from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB
+from tests.test_onion_hidden_on_clearnet import MIGRATION, queries_in, stamped_notice
+from tests.test_per_domain_ap_routes import onion_proxy
+from tests.two_domains import FIRST, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -124,27 +123,27 @@ def shapes(world, with_onion, with_first, onion_reply, first_reply):
     return rows
 
 
-def test_the_python_stamp_covers_every_notification_the_migrations_backfill_stamps(app, alpha):
+def test_the_python_stamp_covers_every_notification_the_migrations_backfill_stamps(app, onion_hidden_on_clearnet_alpha):
     """The hook's rule (Python) and the backfill's frozen copy (SQL) must agree, or rows written before the
     migration and after it are stamped by different rules. Stamping more than the backfill is safe; stamping less
     is a leak: a notification that names an onion row but is unstamped is counted, and listed, on the clearnet."""
-    alpha.onion_bob.alt_user_name = 'quietotter'
+    onion_hidden_on_clearnet_alpha.onion_bob.alt_user_name = 'quietotter'
     for table, start in (('conversation', 5000), ('post_reply', 7000)):   # ids no row of another kind has
         db.session.execute(text(f"SELECT setval('{table}_id_seq', {start})"))
-    with_onion, with_first = Conversation(user_id=alpha.first_bob.id), Conversation(user_id=alpha.first_bob.id)
-    with_onion.members.extend([alpha.first_bob, alpha.onion_bob])
-    with_first.members.extend([alpha.first_bob, alpha.admin])
-    first_reply = make_post_reply(alpha.first_post, alpha.first_bob, 'FIRSTREPLY')
+    with_onion, with_first = Conversation(user_id=onion_hidden_on_clearnet_alpha.first_bob.id), Conversation(user_id=onion_hidden_on_clearnet_alpha.first_bob.id)
+    with_onion.members.extend([onion_hidden_on_clearnet_alpha.first_bob, onion_hidden_on_clearnet_alpha.onion_bob])
+    with_first.members.extend([onion_hidden_on_clearnet_alpha.first_bob, onion_hidden_on_clearnet_alpha.admin])
+    first_reply = make_post_reply(onion_hidden_on_clearnet_alpha.first_post, onion_hidden_on_clearnet_alpha.first_bob, 'FIRSTREPLY')
     db.session.add_all([with_onion, with_first])
     db.session.commit()
-    rows = shapes(alpha, with_onion.id, with_first.id, alpha.reply.id, first_reply.id)
+    rows = shapes(onion_hidden_on_clearnet_alpha, with_onion.id, with_first.id, onion_hidden_on_clearnet_alpha.reply.id, first_reply.id)
     # a feed's notification names it by `feed_id` (per-domain feeds Task 7), which the backfill predates: the hook
     # stamps the onion's feed and a first-filed one an onion account owns (N-m8), and not the first domain's own
     first, onion_domain = (domain_for_host(host) for host in (FIRST, ONION))
-    feeds = [make_local_feed('onionfeed', True, onion_domain, alpha.onion_bob),
-             make_local_feed('legacyfeed', True, first, alpha.onion_bob),
-             make_local_feed('firstfeed', True, first, alpha.first_bob)]
-    feed_rows = [SimpleNamespace(url=f'/post/{alpha.first_post.id}', targets={'feed_id': feed.id}, author_id=None)
+    feeds = [make_local_feed('onionfeed', True, onion_domain, onion_hidden_on_clearnet_alpha.onion_bob),
+             make_local_feed('legacyfeed', True, first, onion_hidden_on_clearnet_alpha.onion_bob),
+             make_local_feed('firstfeed', True, first, onion_hidden_on_clearnet_alpha.first_bob)]
+    feed_rows = [SimpleNamespace(url=f'/post/{onion_hidden_on_clearnet_alpha.first_post.id}', targets={'feed_id': feed.id}, author_id=None)
                  for feed in feeds]
     assert local_only.notification_stamps(feed_rows, db.session) == [True, True, False]
     rows += feed_rows
@@ -167,11 +166,11 @@ def test_the_python_stamp_covers_every_notification_the_migrations_backfill_stam
 
 
 @pytest.mark.parametrize('unread_only', [True, False])
-def test_the_count_reads_the_partial_index_of_the_stamped_notifications(app, alpha, unread_only):
+def test_the_count_reads_the_partial_index_of_the_stamped_notifications(app, onion_hidden_on_clearnet_alpha, unread_only):
     """M1 (re-review 4): the counts' predicate must be the index's own, `WHERE local_only`, or the planner cannot use
     the partial index and reads every notification of the account from the heap. The suite never ANALYZEs, so the
     sequential scan is turned off: what is left to choose is which index."""
-    query = hidden_routes._stamped_notifications(alpha.first_bob.id, unread_only)
+    query = hidden_routes._stamped_notifications(onion_hidden_on_clearnet_alpha.first_bob.id, unread_only)
     sql = str(query.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
     db.session.execute(text('SET LOCAL enable_seqscan = off'))
     plan = '\n'.join(db.session.execute(text(f'EXPLAIN {sql}')).scalars())
@@ -179,11 +178,11 @@ def test_the_count_reads_the_partial_index_of_the_stamped_notifications(app, alp
     assert 'ix_notification_user_local_only' in plan, plan
 
 
-def test_the_backfill_stamps_in_id_batches_and_leaves_no_helper(app, alpha):
+def test_the_backfill_stamps_in_id_batches_and_leaves_no_helper(app, onion_hidden_on_clearnet_alpha):
     """M2 (re-review 4): each batch is its own short UPDATE over an id range, so no statement holds the table for the
     whole scan; the stamps are the hook's, and the frozen rule is dropped once it is done."""
-    rows = [stamped_notice(alpha.first_bob, url) for url in
-            (f'/post/{alpha.first_post.id}', f'/post/{alpha.post.id}', f'/u/{ONION_BOB}', '/admin/reports', None)]
+    rows = [stamped_notice(onion_hidden_on_clearnet_alpha.first_bob, url) for url in
+            (f'/post/{onion_hidden_on_clearnet_alpha.first_post.id}', f'/post/{onion_hidden_on_clearnet_alpha.post.id}', f'/u/{ONION_BOB}', '/admin/reports', None)]
     stamps = [row.local_only for row in rows]
     db.session.execute(text('UPDATE notification SET local_only = false'))
     low, high = db.session.execute(text('SELECT min(id), max(id) FROM notification')).one()
@@ -263,9 +262,9 @@ def stamps_of(ids):
     return [db.session.get(Notification, id_).local_only for id_ in ids]
 
 
-def test_restamp_notifications_since_an_id_stamps_those_and_is_idempotent(commands, alpha):
+def test_restamp_notifications_since_an_id_stamps_those_and_is_idempotent(commands, onion_hidden_on_clearnet_alpha):
     """M3 (re-review 4): run once after the deploy, it stamps what code without the hook wrote meanwhile."""
-    ids = corrupted(alpha)
+    ids = corrupted(onion_hidden_on_clearnet_alpha)
     first = commands.invoke(args=['restamp-notifications', '--since-id', str(ids[1])])
     again = commands.invoke(args=['restamp-notifications', '--since-id', str(ids[1])])
     assert (first.exit_code, first.output, again.exit_code, again.output) == \
@@ -273,8 +272,8 @@ def test_restamp_notifications_since_an_id_stamps_those_and_is_idempotent(comman
     assert stamps_of(ids) == [True, True, True]   # the one before the id is left as it was
 
 
-def test_restamp_notifications_since_a_time_or_all_of_them(commands, alpha):
-    ids = corrupted(alpha)
+def test_restamp_notifications_since_a_time_or_all_of_them(commands, onion_hidden_on_clearnet_alpha):
+    ids = corrupted(onion_hidden_on_clearnet_alpha)
     db.session.execute(text("UPDATE notification SET created_at = '2026-01-01' WHERE id = :id"), {'id': ids[1]})
     db.session.commit()
     since = commands.invoke(args=['restamp-notifications', '--since', '2026-06-01'])
@@ -284,16 +283,16 @@ def test_restamp_notifications_since_a_time_or_all_of_them(commands, alpha):
         (0, 'notifications restamped: 1\n', [True, True, True])
 
 
-def test_restamping_never_clears_a_stamp(commands, alpha):
+def test_restamping_never_clears_a_stamp(commands, onion_hidden_on_clearnet_alpha):
     """Re-review 5, m3: over-including is the safe side, so a stamp the rule no longer gives (a stale domain list, a
     rule regression) stays."""
-    ids = corrupted(alpha)
+    ids = corrupted(onion_hidden_on_clearnet_alpha)
     result = commands.invoke(args=['restamp-notifications', '--all'])
     assert (result.exit_code, stamps_of(ids)[0]) == (0, True)   # the first names only the first domain's post
 
 
-def test_restamping_goes_a_batch_at_a_time(app, alpha):
-    ids = corrupted(alpha)
+def test_restamping_goes_a_batch_at_a_time(app, onion_hidden_on_clearnet_alpha):
+    ids = corrupted(onion_hidden_on_clearnet_alpha)
     statements = queries_in(lambda: local_only.restamp_notifications(batch=2))
     assert stamps_of(ids) == [True, True, True]
     assert len([statement for statement in statements if statement.startswith('SELECT notification.id')]) == 3

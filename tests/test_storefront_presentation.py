@@ -28,7 +28,6 @@ from app.storefront import clear_domain_cache, domain_for_host, is_local_host
 from app.utils import community_link_to_href, feed_link_to_href, person_link_to_href, utcnow
 from tests.factories import (grant_permission, make_community, make_community_member, make_domain, make_instance,
                              make_post, make_user, make_user_registration)
-from tests.podcast_fixtures import episode_post  # noqa: F401  (a fixture)
 
 ONION = 'abc.onion'
 CANONICAL = 'test.piefed.local'
@@ -36,43 +35,6 @@ MEDIA = 'app/static/media/posts/ab/cd/abcdefghijklmno.jpg'
 THUMB = 'app/static/media/posts/ab/cd/abcdefghijklmno_t.webp'
 
 pytestmark = pytest.mark.usefixtures('site')
-
-
-@pytest.fixture
-def onion(db_session):
-    if SiteDomain.query.filter_by(domain=CANONICAL).first() is None:   # the canonical host stays served
-        db.session.add(SiteDomain(domain=CANONICAL, scheme='https', is_default=True))
-    db.session.add(SiteDomain(domain=ONION, scheme='http', federates=False))
-    db.session.commit()
-    clear_domain_cache()
-    cache.clear()
-    yield ONION
-    clear_domain_cache()
-
-
-@pytest.fixture
-def world(app, onion):
-    site = db.session.get(Site, 1)
-    site.private_instance = False
-    local = make_instance(CANONICAL, software='piefed')
-    founder = make_user(local, 'founder', local=True)
-    author = make_user(local, 'author', local=True)
-    author.ap_profile_id = f'https://{CANONICAL}/u/author'
-    author.ap_public_url = f'https://{CANONICAL}/u/author'
-    community = make_community('general')
-    make_community_member(author, community)
-    image = File(file_path=MEDIA, thumbnail_path=THUMB, source_url=f'https://{CANONICAL}/static/media/posts/ab/cd/'
-                                                                    'abcdefghijklmno.jpg')
-    db.session.add(image)
-    db.session.commit()
-    post = make_post(community, author, f'https://{CANONICAL}/post/1', title='a picture')
-    post.type = POST_TYPE_IMAGE
-    post.image_id = image.id
-    post.url = image.source_url
-    post.body_html = '<p>the body</p>'
-    author.post_count = 1
-    db.session.commit()
-    return founder, author, community, post, image
 
 
 def on_onion(app, user=None):
@@ -103,8 +65,8 @@ def absolute_urls(html):
     return found
 
 
-def test_page_urls_stay_on_storefront(app, world):
-    founder, author, community, post, image = world
+def test_page_urls_stay_on_storefront(app, storefront_presentation_world):
+    founder, author, community, post, image = storefront_presentation_world
     # canonical sources (ActivityPub ids, stored content) are moved onto the storefront by the response rewrite
     pages = {'/': None, f'/c/general@{CANONICAL}': None, f'/post/{post.id}': None, f'/u/author@{CANONICAL}': None, '/auth/login': None,
              '/auth/register': None, '/user/settings': founder, '/search?q=x': None,
@@ -128,12 +90,12 @@ def test_page_urls_stay_on_storefront(app, world):
     assert offenders == [], offenders
 
 
-def test_page_urls_on_the_canonical_host_are_unchanged(app, world):
+def test_page_urls_on_the_canonical_host_are_unchanged(app, storefront_presentation_world):
     response = on_onion(app).get('/c/general', headers={'Host': CANONICAL})
     assert f'https://{CANONICAL}/community/general/feed' in response.get_data(as_text=True)
 
 
-def test_media_url_on_storefront(app, onion):
+def test_media_url_on_storefront(app, storefront_presentation_onion):
     image = File(file_path=MEDIA, thumbnail_path=THUMB)
     with app.test_request_context(base_url=f'http://{ONION}'):
         app.preprocess_request()
@@ -148,7 +110,7 @@ def test_media_url_on_storefront(app, onion):
             f'https://{CANONICAL}/static/media/posts/ab/cd/abcdefghijklmno_t.webp'
 
 
-def test_served_by_us_knows_the_canonical_media_urls(app, onion):
+def test_served_by_us_knows_the_canonical_media_urls(app, storefront_presentation_onion):
     image = File(file_path=MEDIA, thumbnail_path=THUMB)
     with app.test_request_context(base_url=f'http://{ONION}'):
         app.preprocess_request()
@@ -156,10 +118,10 @@ def test_served_by_us_knows_the_canonical_media_urls(app, onion):
         assert served_by_us(f'https://{CANONICAL}/static/media/posts/ab/cd/abcdefghijklmno.jpg', image)
 
 
-def test_post_ap_json_image_is_canonical(app, world):
+def test_post_ap_json_image_is_canonical(app, storefront_presentation_world):
     """The post is the canonical domain's, so the onion answers its ActivityPub fetch with a 404 (owner ruling, plan
     C3 task 3), and the canonical document names the canonical image."""
-    founder, author, community, post, image = world
+    founder, author, community, post, image = storefront_presentation_world
     response = on_onion(app).get(f'/post/{post.id}', headers={'Host': ONION, 'Accept': 'application/activity+json'})
     assert response.status_code == 404
     response = app.test_client().get(f'/post/{post.id}', headers={'Accept': 'application/activity+json'})
@@ -167,7 +129,7 @@ def test_post_ap_json_image_is_canonical(app, world):
     assert urlsplit(response.get_json()['image']['url']).hostname == CANONICAL
 
 
-def test_feed_on_storefront(app, onion, episode_post):
+def test_feed_on_storefront(app, storefront_presentation_onion, episode_post):
     db.session.get(Site, 1).private_instance = False
     db.session.commit()
     response = on_onion(app).get(f'/community/pod@{CANONICAL}/feed', headers={'Host': ONION})   # The first domain's, by handle (C1)
@@ -182,8 +144,8 @@ def test_feed_on_storefront(app, onion, episode_post):
 # A bare name on the onion is the onion's own (plan C1): the first domain's rows are named by their handle there
 @pytest.mark.parametrize('path', ['/index/feed', '/d/{domain}/feed', '/tag/pics/feed', f'/u/author@{CANONICAL}/feed',
                                   f'/community/general@{CANONICAL}/feed'])
-def test_other_feeds_link_to_the_storefront(app, world, path):
-    founder, author, community, post, image = world
+def test_other_feeds_link_to_the_storefront(app, storefront_presentation_world, path):
+    founder, author, community, post, image = storefront_presentation_world
     domain = make_domain('pics.example')
     tag = Tag(name='pics', display_as='Pics')
     db.session.add(tag)
@@ -201,8 +163,8 @@ def test_other_feeds_link_to_the_storefront(app, world, path):
     assert f'"https://{CANONICAL}/static' not in text
 
 
-def test_reset_email_uses_the_accounts_home_domain(app, world):
-    founder = world[0]
+def test_reset_email_uses_the_accounts_home_domain(app, storefront_presentation_world):
+    founder = storefront_presentation_world[0]
     founder.site_domain_id = SiteDomain.query.filter_by(domain=ONION).one().id   # an onion account (spec §3.2)
     db.session.commit()
     with patch('app.email.send_email') as send:
@@ -215,8 +177,8 @@ def test_reset_email_uses_the_accounts_home_domain(app, world):
         assert CANONICAL not in body
 
 
-def test_background_email_uses_default(app, world):
-    founder, author, community, post, image = world
+def test_background_email_uses_default(app, storefront_presentation_world):
+    founder, author, community, post, image = storefront_presentation_world
     author.email_unread = True
     author.email_unread_sent = False
     author.last_seen = utcnow() - timedelta(days=2)
@@ -236,7 +198,7 @@ def test_background_email_uses_default(app, world):
     assert ONION not in sent[0]
 
 
-def test_link_filters_use_the_storefront(app, onion):
+def test_link_filters_use_the_storefront(app, storefront_presentation_onion):
     with app.test_request_context(base_url=f'http://{ONION}'):
         app.preprocess_request()
         assert f'href="http://{ONION}/community/lookup/' in community_link_to_href('!a@b.example')
@@ -245,7 +207,7 @@ def test_link_filters_use_the_storefront(app, onion):
         assert 'href="https://x.example/community/lookup/' in community_link_to_href('!a@b.example', 'x.example')
 
 
-def test_storefront_link_moves_only_our_urls(app, onion):
+def test_storefront_link_moves_only_our_urls(app, storefront_presentation_onion):
     with app.test_request_context(base_url=f'http://{ONION}'):
         app.preprocess_request()
         assert storefront.storefront_host() == ONION
@@ -260,7 +222,7 @@ def test_storefront_link_moves_only_our_urls(app, onion):
         assert storefront.storefront_link(f'http://{ONION}/a') == f'https://{CANONICAL}/a'
 
 
-def test_rsl_link_header_and_manifest_on_storefront(app, world):
+def test_rsl_link_header_and_manifest_on_storefront(app, storefront_presentation_world):
     client = on_onion(app)
     with patch.dict(current_app.config, {'ALLOW_AI_CRAWLERS': False}):
         response = client.get('/', headers={'Host': ONION})
@@ -269,8 +231,8 @@ def test_rsl_link_header_and_manifest_on_storefront(app, world):
     assert manifest.get_json()['id'] == f'http://{ONION}'
 
 
-def test_oembed_on_storefront(app, world):
-    post = world[3]
+def test_oembed_on_storefront(app, storefront_presentation_world):
+    post = storefront_presentation_world[3]
     response = on_onion(app).get(f'/post/{post.id}/oembed', headers={'Host': ONION})
     data = response.get_json()
     assert data['provider_url'] == f'http://{ONION}'
@@ -311,7 +273,7 @@ def _assert_on_default(bodies):
     assert not any(ONION in body for body in bodies)
 
 
-def test_default_storefront_renders_under_the_default_and_restores(app, onion):
+def test_default_storefront_renders_under_the_default_and_restores(app, storefront_presentation_onion):
     with app.test_request_context(base_url=f'http://{ONION}'):
         app.preprocess_request()
         with storefront.default_storefront():
@@ -329,8 +291,8 @@ def test_default_storefront_renders_under_the_default_and_restores(app, onion):
             assert storefront.storefront_url() == f'https://{CANONICAL}'
 
 
-def test_newsletter_sent_from_the_onion_links_to_the_default(app, world):
-    founder = world[0]
+def test_newsletter_sent_from_the_onion_links_to_the_default(app, storefront_presentation_world):
+    founder = storefront_presentation_world[0]
     grant_permission(founder, 'change instance settings')
     sent = []
     with patch('app.admin.util.send_email', side_effect=lambda **kwargs: sent.append(kwargs)):
@@ -340,8 +302,8 @@ def test_newsletter_sent_from_the_onion_links_to_the_default(app, world):
     _assert_on_default([body for kwargs in sent for body in (kwargs['text_body'], kwargs['html_body'])])
 
 
-def test_registration_approved_from_the_onion_links_to_the_default(app, world):
-    founder = world[0]
+def test_registration_approved_from_the_onion_links_to_the_default(app, storefront_presentation_world):
+    founder = storefront_presentation_world[0]
     grant_permission(founder, 'approve registrations')
     newcomer = make_user(None, 'newcomer', local=True)
     make_user_registration(newcomer)
@@ -351,8 +313,8 @@ def test_registration_approved_from_the_onion_links_to_the_default(app, world):
     _assert_on_default([send.call_args.kwargs['html_body']])
 
 
-def test_verification_resent_by_an_admin_on_the_onion_links_to_the_default(app, world):
-    founder, author = world[0], world[1]
+def test_verification_resent_by_an_admin_on_the_onion_links_to_the_default(app, storefront_presentation_world):
+    founder, author = storefront_presentation_world[0], storefront_presentation_world[1]
     grant_permission(founder, 'administer all users')
     with patch('app.email.send_email') as send:
         response = post_on_onion(app, founder, f'/admin/user/{author.id}/resend_email', headers={'HX-Request': 'true'})
@@ -360,8 +322,8 @@ def test_verification_resent_by_an_admin_on_the_onion_links_to_the_default(app, 
     _assert_on_default([send.call_args.kwargs['text_body'], send.call_args.kwargs['html_body']])
 
 
-def test_community_invite_from_the_onion_links_to_the_default(app, world):
-    author, community = world[1], world[2]
+def test_community_invite_from_the_onion_links_to_the_default(app, storefront_presentation_world):
+    author, community = storefront_presentation_world[1], storefront_presentation_world[2]
     with app.test_request_context(base_url=f'http://{ONION}'):
         app.preprocess_request()
         login_user(author)
@@ -370,8 +332,8 @@ def test_community_invite_from_the_onion_links_to_the_default(app, world):
     _assert_on_default([send.call_args.args[3], send.call_args.args[4]])
 
 
-def test_topic_suggestion_from_the_onion_links_to_the_default(app, world):
-    author = world[1]
+def test_topic_suggestion_from_the_onion_links_to_the_default(app, storefront_presentation_world):
+    author = storefront_presentation_world[1]
     with app.test_request_context(base_url=f'http://{ONION}'):
         app.preprocess_request()
         with patch('app.email.send_email') as send:
@@ -379,8 +341,8 @@ def test_topic_suggestion_from_the_onion_links_to_the_default(app, world):
     _assert_on_default([send.call_args.kwargs['html_body']])
 
 
-def test_community_move_request_from_the_onion_links_to_the_default(app, world):
-    author = world[1]
+def test_community_move_request_from_the_onion_links_to_the_default(app, storefront_presentation_world):
+    author = storefront_presentation_world[1]
     remote = make_community('elsewhere', host='remote.example')
     remote.ap_id = 'elsewhere@remote.example'
     db.session.commit()
@@ -393,16 +355,16 @@ def test_community_move_request_from_the_onion_links_to_the_default(app, world):
 
 # --- page snippets that name the storefront's origin (fix round 1, I2) ---------------------------------------------
 
-def test_embed_code_names_the_storefront_origin(app, world):
-    post = world[3]
+def test_embed_code_names_the_storefront_origin(app, storefront_presentation_world):
+    post = storefront_presentation_world[3]
     response = on_onion(app).get(f'/post/{post.id}/embed_code', base_url=f'https://{ONION}')
     text = response.get_data(as_text=True)
     assert f'<script src="http://{ONION}/static/js/embed.js"' in text
     assert f'https://{ONION}' not in text
 
 
-def test_share_bookmarklet_names_the_storefront_origin(app, world):
-    author, post = world[1], world[3]
+def test_share_bookmarklet_names_the_storefront_origin(app, storefront_presentation_world):
+    author, post = storefront_presentation_world[1], storefront_presentation_world[3]
     post.type, post.url, post.image_id = POST_TYPE_ARTICLE, None, None   # an image post's edit page HEADs its url
     db.session.commit()
     with patch.dict(app.config, {'WTF_CSRF_ENABLED': True}):   # the edit form renders its token
@@ -435,8 +397,8 @@ def _json_ld_urls(html):
 
 
 @pytest.mark.parametrize('host, origin', [(ONION, f'http://{ONION}'), (CANONICAL, f'https://{CANONICAL}')])
-def test_json_ld_urls_name_the_storefront(app, world, host, origin):
-    founder, author, community, post, image = world
+def test_json_ld_urls_name_the_storefront(app, storefront_presentation_world, host, origin):
+    founder, author, community, post, image = storefront_presentation_world
     post.type = POST_TYPE_LINK   # a link post's image is in the JSON-LD
     author.indexable = author.searchable = post.indexable = True
     author.extra_fields.append(UserExtraField(label='home', text=f'https://{CANONICAL}/u/author'))

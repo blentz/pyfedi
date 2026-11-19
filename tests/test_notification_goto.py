@@ -10,7 +10,7 @@ from app import db
 from app.constants import NOTIF_NEW_MOD
 from app.local_names import notification_href
 from app.models import Notification
-from tests.two_domains import default_request, onion_request, two_domains  # noqa: F401  (the fixture)
+from tests.two_domains import default_request, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 

@@ -9,7 +9,7 @@ from app.api.alpha.utils.misc import get_resolve_object
 from app.constants import POST_STATUS_DRAFT, VISIBILITY_FOLLOWERS
 from app.models import Site
 from tests.factories import make_user
-from tests.test_local_only_invisible import _post, world  # noqa: F401
+from tests.test_local_only_invisible import _post
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -56,27 +56,27 @@ HIDDEN = [_followers_only, _draft, _deleted, _banned_community, _private_communi
 
 
 @pytest.mark.parametrize('path', ['/post/{id}', '/c/clearnet/p/{id}/a-post', '/p/{id}'])
-def test_resolve_object_returns_the_local_post_for_a_first_domain_url(app, world, path):
-    post = _post(app, world.clearnet, world.bob)
+def test_resolve_object_returns_the_local_post_for_a_first_domain_url(app, local_only_invisible_world, path):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     found = resolve(caller(), f"https://{app.config['SERVER_NAME']}{path.format(id=post.id)}")
     assert found['post']['post']['id'] == post.id
 
 
-def test_resolve_object_returns_the_local_post_for_an_onion_url(app, world):
-    post = _post(app, world.hidden, world.onionite)
+def test_resolve_object_returns_the_local_post_for_an_onion_url(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.hidden, local_only_invisible_world.onionite)
     assert resolve(caller(), f'http://abc.onion/post/{post.id}')['post']['post']['id'] == post.id
 
 
-def test_resolve_object_returns_it_for_the_posts_stored_url_too(app, world):
-    post = _post(app, world.clearnet, world.bob)
+def test_resolve_object_returns_it_for_the_posts_stored_url_too(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     assert resolve(caller(), post.ap_id)['post']['post']['id'] == post.id
 
 
 @pytest.mark.parametrize('hide', HIDDEN)
 @pytest.mark.parametrize('how', ['path', 'stored'])
-def test_resolve_object_does_not_return_a_post_the_caller_may_not_open(app, world, hide, how):
-    post = _post(app, world.clearnet, world.bob)
-    hide(post, world)
+def test_resolve_object_does_not_return_a_post_the_caller_may_not_open(app, local_only_invisible_world, hide, how):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
+    hide(post, local_only_invisible_world)
     db.session.commit()
     url = post.ap_id if how == 'stored' else f"https://{app.config['SERVER_NAME']}/post/{post.id}"
     with pytest.raises(Exception) as refused:
@@ -84,9 +84,9 @@ def test_resolve_object_does_not_return_a_post_the_caller_may_not_open(app, worl
     assert str(refused.value) == 'No object found.'
 
 
-def test_resolve_object_over_http_returns_the_local_post(app, world, monkeypatch):
+def test_resolve_object_over_http_returns_the_local_post(app, local_only_invisible_world, monkeypatch):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    post = _post(app, world.clearnet, world.bob)
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     user = caller()
     response = app.test_client().get('/api/alpha/resolve_object',
                                      query_string={'q': f"https://{app.config['SERVER_NAME']}/post/{post.id}"},
@@ -105,14 +105,14 @@ def handler(app, user, url, host=None):
     return client.get('/protocol_handler', query_string={'to': url}, base_url=base_url)
 
 
-def test_the_protocol_handler_opens_the_local_post_on_the_current_domain(app, world):
-    post = _post(app, world.clearnet, world.bob)
+def test_the_protocol_handler_opens_the_local_post_on_the_current_domain(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     response = handler(app, caller(), f"web+ap://{app.config['SERVER_NAME']}/post/{post.id}")
     assert response.status_code == 302 and response.headers['Location'].endswith(f'/post/{post.id}')
 
 
-def test_the_protocol_handler_on_the_onion_stays_on_the_onion(app, world):
-    post = _post(app, world.clearnet, world.bob)
+def test_the_protocol_handler_on_the_onion_stays_on_the_onion(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     response = handler(app, caller(), f"web+ap://{app.config['SERVER_NAME']}/post/{post.id}", host='abc.onion')
     location = response.headers['Location']
     assert response.status_code == 302 and location.endswith(f'/post/{post.id}')
@@ -120,9 +120,9 @@ def test_the_protocol_handler_on_the_onion_stays_on_the_onion(app, world):
 
 
 @pytest.mark.parametrize('hide', HIDDEN)
-def test_the_protocol_handler_does_not_open_a_post_the_viewer_may_not_open(app, world, hide):
-    post = _post(app, world.clearnet, world.bob)
-    hide(post, world)
+def test_the_protocol_handler_does_not_open_a_post_the_viewer_may_not_open(app, local_only_invisible_world, hide):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
+    hide(post, local_only_invisible_world)
     db.session.commit()
     response = handler(app, caller(), f"web+ap://{app.config['SERVER_NAME']}/post/{post.id}")
     assert response.status_code == 302 and not response.headers['Location'].endswith(f'/post/{post.id}')

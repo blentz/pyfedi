@@ -19,8 +19,8 @@ from app.utils import archive_post
 from tests.factories import make_post, make_post_reply
 from tests.test_community_lifecycle import _add_payload as add_payload
 from tests.test_community_lifecycle import able_to_create
-from tests.test_per_domain_html_routes import BASE, other, signed_in, world  # noqa: F401
-from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
+from tests.test_per_domain_html_routes import BASE, other, signed_in
+from tests.two_domains import FIRST, ONION, default_request, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -37,9 +37,9 @@ def blocked(viewer) -> set[int]:
 
 
 @pytest.mark.parametrize('host', [ONION, FIRST])
-def test_the_profiles_block_and_unblock_buttons_act_on_the_profiles_account(app, world, host):
+def test_the_profiles_block_and_unblock_buttons_act_on_the_profiles_account(app, per_domain_html_routes_world, host):
     """Critical 1: on one storefront, the other domain's bob's profile blocks and unblocks that bob."""
-    viewer, theirs = world.viewers[host], world.bob[other(host)]
+    viewer, theirs = per_domain_html_routes_world.viewers[host], per_domain_html_routes_world.bob[other(host)]
     client = signed_in(app, viewer, host)
     if host == FIRST:   # follow-up F6: off the onion its rows are unknown
         assert client.get(f'/u/bob@{other(host)}').status_code == 404
@@ -55,9 +55,9 @@ def test_the_profiles_block_and_unblock_buttons_act_on_the_profiles_account(app,
 
 
 @pytest.mark.parametrize('host', [ONION, FIRST])
-def test_the_block_lists_unblock_button_unblocks_that_account(app, world, host, monkeypatch):
+def test_the_block_lists_unblock_button_unblocks_that_account(app, per_domain_html_routes_world, host, monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the page renders its form's token
-    viewer, theirs = world.viewers[host], world.bob[other(host)]
+    viewer, theirs = per_domain_html_routes_world.viewers[host], per_domain_html_routes_world.bob[other(host)]
     db.session.add(UserBlock(blocker_id=viewer.id, blocked_id=theirs.id))
     db.session.commit()
     client = signed_in(app, viewer, host)
@@ -81,11 +81,11 @@ def shows(app, world, host, path) -> set[str]:
 
 
 @pytest.fixture
-def titled(world):
-    for domain, bob in world.bob.items():
+def titled(per_domain_html_routes_world):
+    for domain, bob in per_domain_html_routes_world.bob.items():
         bob.title = f'Bob of {domain}'
     db.session.commit()
-    return world
+    return per_domain_html_routes_world
 
 
 @pytest.mark.parametrize('reporter_host', [ONION, FIRST])
@@ -121,21 +121,21 @@ def test_a_follow_notification_from_the_onions_bob_links_to_the_onions_bob(app, 
     assert f'/user/{world.bob[ONION].id}"' not in page and 'Open this on the onion to see it.' in page
 
 
-def test_a_stored_name_is_the_same_on_every_storefront(app, world):
+def test_a_stored_name_is_the_same_on_every_storefront(app, per_domain_html_routes_world):
     """Bare on the default domain (the first domain's stored data stays byte-identical), `name@domain` on another."""
     for request_on in (default_request, onion_request):
         with request_on(app):
-            assert world.bob[FIRST].stored_link() == 'bob'
-            assert world.bob[ONION].stored_link() == f'bob@{ONION}'
-            assert world.art[FIRST].stored_link() == 'art'
-            assert world.art[ONION].stored_link() == f'art@{ONION}'
+            assert per_domain_html_routes_world.bob[FIRST].stored_link() == 'bob'
+            assert per_domain_html_routes_world.bob[ONION].stored_link() == f'bob@{ONION}'
+            assert per_domain_html_routes_world.art[FIRST].stored_link() == 'art'
+            assert per_domain_html_routes_world.art[ONION].stored_link() == f'art@{ONION}'
 
 
-def test_an_archived_reply_by_the_onions_bob_links_to_the_onions_bob(app, world):
+def test_an_archived_reply_by_the_onions_bob_links_to_the_onions_bob(app, per_domain_html_routes_world):
     """An archive keeps the author's name; the author it is read back into links by the domain the archive kept."""
-    post = make_post(world.art[FIRST], world.viewers[FIRST], f'https://{FIRST}/post/archived')
+    post = make_post(per_domain_html_routes_world.art[FIRST], per_domain_html_routes_world.viewers[FIRST], f'https://{FIRST}/post/archived')
     post.body, post.body_html = 'x' * 300, '<p>archived</p>'
-    make_post_reply(post, world.bob[ONION], body='a reply from the onion')
+    make_post_reply(post, per_domain_html_routes_world.bob[ONION], body='a reply from the onion')
     post.reply_count = 1
     db.session.commit()
     written = set(glob.glob(f'{ARCHIVED_DIR}/*'))
@@ -158,9 +158,9 @@ def community_shown(app, world, host, path) -> set[str]:
     return {domain for domain, art in world.art.items() if art.title in page}
 
 
-def test_creating_a_community_on_the_onion_lands_on_the_new_community(app, world, two_domains):
+def test_creating_a_community_on_the_onion_lands_on_the_new_community(app, per_domain_html_routes_world, two_domains):
     """A first-domain account creating on the onion makes a first-domain community: the redirect names the first domain."""
-    creator = world.viewers[FIRST]
+    creator = per_domain_html_routes_world.viewers[FIRST]
     able_to_create(creator)
     two_domains.local_community('fresh', two_domains.domains[1]).title = 'Onion fresh'
     db.session.add_all([Language(code='und', name='Undetermined'), Language(code='en', name='English')])
@@ -194,10 +194,10 @@ def test_a_profiles_pagination_stays_on_the_profiles_account(app, titled, host):
 
 
 @pytest.mark.parametrize('host', [ONION, FIRST])
-def test_deleting_a_post_returns_to_its_own_community(app, world, host):
-    author = world.viewers[host]
-    post = make_post(world.art[other(host)], author, f'{BASE[host]}/post/to-delete', title='doomed')
-    post.local_only = content_local_only(author, world.art[other(host)])   # as creation stamps it
+def test_deleting_a_post_returns_to_its_own_community(app, per_domain_html_routes_world, host):
+    author = per_domain_html_routes_world.viewers[host]
+    post = make_post(per_domain_html_routes_world.art[other(host)], author, f'{BASE[host]}/post/to-delete', title='doomed')
+    post.local_only = content_local_only(author, per_domain_html_routes_world.art[other(host)])   # as creation stamps it
     db.session.commit()
     with patch('app.shared.post.task_selector'):
         response = signed_in(app, author, host).post(f'/post/{post.id}/delete', data={'reason': ''})
@@ -205,35 +205,35 @@ def test_deleting_a_post_returns_to_its_own_community(app, world, host):
         assert response.status_code == 404
         return
     assert response.status_code == 302
-    assert community_shown(app, world, host, response.headers['Location']) == {other(host)}
+    assert community_shown(app, per_domain_html_routes_world, host, response.headers['Location']) == {other(host)}
 
 
 @pytest.mark.parametrize('host', [ONION, FIRST])
-def test_the_block_lists_community_link_names_that_domains_community(app, world, host, monkeypatch):
+def test_the_block_lists_community_link_names_that_domains_community(app, per_domain_html_routes_world, host, monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the page renders its form's token
-    viewer = world.viewers[host]
-    db.session.add(CommunityBlock(user_id=viewer.id, community_id=world.art[other(host)].id))
+    viewer = per_domain_html_routes_world.viewers[host]
+    db.session.add(CommunityBlock(user_id=viewer.id, community_id=per_domain_html_routes_world.art[other(host)].id))
     db.session.commit()
     page = signed_in(app, viewer, host).get('/user/settings/filters').get_data(as_text=True)
     if host == FIRST:   # follow-up F6: the list names no onion community there
         assert re.findall(r'href="(/c/art[^"]*)"', page) == []
         return
     [link] = re.findall(r'href="(/c/art[^"]*)"', page)
-    assert community_shown(app, world, host, link) == {other(host)}
+    assert community_shown(app, per_domain_html_routes_world, host, link) == {other(host)}
 
 
 # Minors
 
-def test_the_posting_pattern_counts_only_this_accounts_posts(app, world):
+def test_the_posting_pattern_counts_only_this_accounts_posts(app, per_domain_html_routes_world):
     """Minor 5: the hour-of-day graphs counted every account with the name, now another domain's too. The graph is
     an admin's, so the values are read where the view hands them to the template."""
     for number in range(3):
-        make_post(world.art[ONION], world.bob[ONION], f'{BASE[ONION]}/post/hours-{number}', title=f'hours {number}')
+        make_post(per_domain_html_routes_world.art[ONION], per_domain_html_routes_world.bob[ONION], f'{BASE[ONION]}/post/hours-{number}', title=f'hours {number}')
     db.session.commit()
 
     def posts_per_hour(path):
         with patch('app.user.routes.render_template', return_value='rendered') as render:
-            signed_in(app, world.viewers[ONION], ONION).get(path)   # the onion's bob is shown there only (F6)
+            signed_in(app, per_domain_html_routes_world.viewers[ONION], ONION).get(path)   # the onion's bob is shown there only (F6)
         return render.call_args.kwargs['posting_pattern_values']
 
     assert posts_per_hour(f'/u/bob@{FIRST}') == [0] * 24

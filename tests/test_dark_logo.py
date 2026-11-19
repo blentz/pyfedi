@@ -25,12 +25,11 @@ from app.models import DomainBranding, Site
 from app.request_hooks import BrandingOnUse
 from app.storefront import clear_domain_cache
 from tests.conftest import forget_login
-from tests.test_admin_domain_branding import (ELSEWHERE, REPO, admin, domains, media, media_files, own_row,  # noqa: F401
-                                              png, save)
+from tests.test_admin_domain_branding import ELSEWHERE, REPO, media_files, own_row, png, save
 from tests.test_admin_site_profile import HOSTILE_SVG, SVG
 from tests.test_branding import load_migration
-from tests.test_branding_pages import branded, onion_branding, page  # noqa: F401  (fixtures)
-from tests.two_domains import onion_request, two_domains  # noqa: F401  (a fixture)
+from tests.test_branding_pages import onion_branding, page
+from tests.two_domains import onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -192,138 +191,138 @@ def site_dark_logo() -> tuple:
     return site.logo_dark, site.logo_dark_152
 
 
-def test_a_png_dark_icon_keeps_its_upload_and_header_copies(admin, domains, media):
-    assert site_save(admin, icon_dark=(io.BytesIO(png(300, 300)), 'dark.png')).status_code == 200
+def test_a_png_dark_icon_keeps_its_upload_and_header_copies(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    assert site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(png(300, 300)), 'dark.png')).status_code == 200
     dark, dark_152 = site_dark_logo()
     assert re.fullmatch(r'/static/media/logo_\w{5}_100\.png', dark)
     assert dark_152 == dark.replace('_100.png', '_152.png')
-    assert media_files(media) == {dark.rsplit('/', 1)[1], dark_152.rsplit('/', 1)[1]}
+    assert media_files(admin_domain_branding_media) == {dark.rsplit('/', 1)[1], dark_152.rsplit('/', 1)[1]}
     site = db.session.get(Site, 1)
     assert not site.logo   # the icon is untouched
 
 
-def test_an_svg_dark_icon_is_kept_as_uploaded(admin, domains, media):
-    assert site_save(admin, icon_dark=(io.BytesIO(SVG), 'dark.svg')).status_code == 200
+def test_an_svg_dark_icon_is_kept_as_uploaded(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    assert site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(SVG), 'dark.svg')).status_code == 200
     dark, dark_152 = site_dark_logo()
     assert re.fullmatch(r'/static/media/logo_\w{5}\.svg', dark) and dark_152 == ''
-    assert media_files(media) == {dark.rsplit('/', 1)[1]}
+    assert media_files(admin_domain_branding_media) == {dark.rsplit('/', 1)[1]}
 
 
-def test_a_save_without_a_dark_upload_keeps_the_dark_icon(admin, domains, media):
-    site_save(admin, icon_dark=(io.BytesIO(SVG), 'dark.svg'))
+def test_a_save_without_a_dark_upload_keeps_the_dark_icon(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(SVG), 'dark.svg'))
     kept = site_dark_logo()
-    assert site_save(admin).status_code == 200
+    assert site_save(admin_domain_branding_admin).status_code == 200
     assert site_dark_logo() == kept
 
 
-def test_replacing_and_removing_the_dark_icon_removes_its_files(admin, domains, media):
-    site_save(admin, icon_dark=(io.BytesIO(png()), 'one.png'))
-    site_save(admin, icon_dark=(io.BytesIO(png()), 'two.png'))
+def test_replacing_and_removing_the_dark_icon_removes_its_files(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(png()), 'one.png'))
+    site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(png()), 'two.png'))
     second = site_dark_logo()
-    assert media_files(media) == {path.rsplit('/', 1)[1] for path in second}
-    assert site_save(admin, remove_icon_dark='y').status_code == 200
+    assert media_files(admin_domain_branding_media) == {path.rsplit('/', 1)[1] for path in second}
+    assert site_save(admin_domain_branding_admin, remove_icon_dark='y').status_code == 200
     assert site_dark_logo() == ('', '')
-    assert media_files(media) == set()
+    assert media_files(admin_domain_branding_media) == set()
 
 
-def test_both_icons_in_one_save(admin, domains, media):
-    response = site_save(admin, icon=(io.BytesIO(png()), 'light.png'), icon_dark=(io.BytesIO(SVG), 'dark.svg'))
+def test_both_icons_in_one_save(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    response = site_save(admin_domain_branding_admin, icon=(io.BytesIO(png()), 'light.png'), icon_dark=(io.BytesIO(SVG), 'dark.svg'))
     assert response.status_code == 200
     site = db.session.get(Site, 1)
     assert site.logo_152 and site.logo_dark.endswith('.svg')
     assert site.logo_dark not in (site.logo, site.logo_152)
 
 
-def test_a_refused_dark_icon_leaves_everything_alone(admin, domains, media):
-    site_save(admin, icon_dark=(io.BytesIO(SVG), 'dark.svg'))
-    before, files = site_dark_logo(), media_files(media)
-    assert site_save(admin, icon_dark=(io.BytesIO(HOSTILE_SVG), 'bad.svg')).status_code == 400
-    assert site_dark_logo() == before and media_files(media) == files
+def test_a_refused_dark_icon_leaves_everything_alone(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(SVG), 'dark.svg'))
+    before, files = site_dark_logo(), media_files(admin_domain_branding_media)
+    assert site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(HOSTILE_SVG), 'bad.svg')).status_code == 400
+    assert site_dark_logo() == before and media_files(admin_domain_branding_media) == files
 
 
-def test_a_refused_icon_takes_the_dark_icon_uploaded_with_it(admin, domains, media):
-    response = site_save(admin, icon=(io.BytesIO(b'not an image'), 'light.png'),
+def test_a_refused_icon_takes_the_dark_icon_uploaded_with_it(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    response = site_save(admin_domain_branding_admin, icon=(io.BytesIO(b'not an image'), 'light.png'),
                          icon_dark=(io.BytesIO(png()), 'dark.png'))
     assert response.status_code == 400
     assert site_dark_logo() == ('', '')
-    assert media_files(media) == set()
+    assert media_files(admin_domain_branding_media) == set()
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 # A domain's dark mode logo
 
-def test_a_domain_uploads_and_removes_its_dark_logo(admin, domains, media):
-    shop = domains['shop']
-    assert save(admin, shop, logo_dark=(io.BytesIO(png()), 'dark.png')).status_code == 302
+def test_a_domain_uploads_and_removes_its_dark_logo(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    shop = admin_domain_branding_domains['shop']
+    assert save(admin_domain_branding_admin, shop, logo_dark=(io.BytesIO(png()), 'dark.png')).status_code == 302
     row = own_row(shop)
     assert row.logo_dark.endswith('_100.png') and row.logo_dark_152.endswith('_152.png')
     assert not row.logo   # the logo is untouched
-    assert media_files(media) == {row.logo_dark.rsplit('/', 1)[1], row.logo_dark_152.rsplit('/', 1)[1]}
+    assert media_files(admin_domain_branding_media) == {row.logo_dark.rsplit('/', 1)[1], row.logo_dark_152.rsplit('/', 1)[1]}
     assert branding_for(shop).header_logo_dark == row.logo_dark_152
-    assert save(admin, shop).status_code == 302
+    assert save(admin_domain_branding_admin, shop).status_code == 302
     assert own_row(shop).logo_dark == row.logo_dark   # kept by a save without an upload
-    assert save(admin, shop, remove_logo_dark='y').status_code == 302
+    assert save(admin_domain_branding_admin, shop, remove_logo_dark='y').status_code == 302
     row = own_row(shop)
     assert (row.logo_dark, row.logo_dark_152) == ('', '')
-    assert media_files(media) == set()
+    assert media_files(admin_domain_branding_media) == set()
 
 
-def test_a_domains_logo_and_dark_logo_in_one_save(admin, domains, media):
-    shop = domains['shop']
-    response = save(admin, shop, logo=(io.BytesIO(png()), 'light.png'), logo_dark=(io.BytesIO(SVG), 'dark.svg'))
+def test_a_domains_logo_and_dark_logo_in_one_save(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    shop = admin_domain_branding_domains['shop']
+    response = save(admin_domain_branding_admin, shop, logo=(io.BytesIO(png()), 'light.png'), logo_dark=(io.BytesIO(SVG), 'dark.svg'))
     assert response.status_code == 302
     row = own_row(shop)
     assert row.logo and row.logo_dark.endswith('.svg') and row.logo_dark_152 == ''
-    assert save(admin, shop, remove_logo='y').status_code == 302
+    assert save(admin_domain_branding_admin, shop, remove_logo='y').status_code == 302
     assert own_row(shop).logo_dark == row.logo_dark   # removing the logo keeps the dark logo
 
 
-def test_a_domains_refused_logo_takes_its_dark_logo_with_it(admin, domains, media):
-    shop = domains['shop']
-    response = save(admin, shop, logo=(io.BytesIO(b'not an image'), 'light.png'),
+def test_a_domains_refused_logo_takes_its_dark_logo_with_it(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    shop = admin_domain_branding_domains['shop']
+    response = save(admin_domain_branding_admin, shop, logo=(io.BytesIO(b'not an image'), 'light.png'),
                     logo_dark=(io.BytesIO(png()), 'dark.png'))
     assert response.status_code == 400
     assert own_row(shop) is None
-    assert media_files(media) == set()
+    assert media_files(admin_domain_branding_media) == set()
 
 
-def test_deleting_a_domain_removes_its_dark_logo(admin, domains, media):
-    shop = domains['shop']
-    save(admin, shop, logo_dark=(io.BytesIO(png()), 'dark.png'))
-    assert media_files(media)
-    client, token = admin
+def test_deleting_a_domain_removes_its_dark_logo(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    shop = admin_domain_branding_domains['shop']
+    save(admin_domain_branding_admin, shop, logo_dark=(io.BytesIO(png()), 'dark.png'))
+    assert media_files(admin_domain_branding_media)
+    client, token = admin_domain_branding_admin
     forget_login()
     assert client.post(f'/admin/domains/{shop.id}/delete', data={'csrf_token': token}).status_code == 302
-    assert media_files(media) == set()
+    assert media_files(admin_domain_branding_media) == set()
 
 
-def test_a_dark_logo_the_site_names_is_never_removed(admin, domains, media):
-    shop = domains['shop']
-    save(admin, shop, logo_dark=(io.BytesIO(SVG), 'dark.svg'))
+def test_a_dark_logo_the_site_names_is_never_removed(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    shop = admin_domain_branding_domains['shop']
+    save(admin_domain_branding_admin, shop, logo_dark=(io.BytesIO(SVG), 'dark.svg'))
     shared = own_row(shop).logo_dark
     site = db.session.get(Site, 1)
     site.logo_dark = shared
     db.session.commit()
-    save(admin, shop, remove_logo_dark='y')
-    assert shared.rsplit('/', 1)[1] in media_files(media)
+    save(admin_domain_branding_admin, shop, remove_logo_dark='y')
+    assert shared.rsplit('/', 1)[1] in media_files(admin_domain_branding_media)
 
 
-def test_the_onion_refuses_a_stored_offsite_dark_logo(admin, domains, media):
-    onion = domains['onion']
+def test_the_onion_refuses_a_stored_offsite_dark_logo(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    onion = admin_domain_branding_domains['onion']
     db.session.add(DomainBranding(site_domain_id=onion.id, logo_dark=f'{ELSEWHERE}/dark.png'))
     db.session.commit()
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
-        assert save(admin, onion).status_code == 200
+        assert save(admin_domain_branding_admin, onion).status_code == 200
     form = render.call_args.kwargs['form']
     assert form.logo_dark.errors == [f'Off the onion: {ELSEWHERE}/dark.png']
-    assert save(admin, onion, remove_logo_dark='y').status_code == 302
+    assert save(admin_domain_branding_admin, onion, remove_logo_dark='y').status_code == 302
     assert own_row(onion).logo_dark == ''
 
 
-def test_the_branding_page_shows_the_dark_logo(admin, domains, media):
-    shop = domains['shop']
-    save(admin, shop, logo_dark=(io.BytesIO(SVG), 'dark.svg'))
-    client, _token = admin
+def test_the_branding_page_shows_the_dark_logo(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
+    shop = admin_domain_branding_domains['shop']
+    save(admin_domain_branding_admin, shop, logo_dark=(io.BytesIO(SVG), 'dark.svg'))
+    client, _token = admin_domain_branding_admin
     forget_login()
     body = client.get(f'/admin/domains/{shop.id}/branding').get_data(as_text=True)
     assert f'<img src="{own_row(shop).logo_dark}" alt="This domain\'s dark mode logo" height="50">' in body

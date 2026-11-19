@@ -26,9 +26,9 @@ from app.utils import user_name_is_taken
 from tests.factories import bearer, make_user
 from tests.test_admin_user_administration import _add_payload, _roles
 from tests.test_community_lifecycle import csrf, login
-from tests.test_per_domain_creation import _api_creator, _form, creators, domains  # noqa: F401  (fixtures)
+from tests.test_per_domain_creation import _api_creator, _form
 from tests.test_shared_community_lifecycle import _api_input, _seed_und_language
-from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401  (fixture)
+from tests.two_domains import FIRST, ONION, default_request, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -75,12 +75,12 @@ def _registration_error(app, name):
 # accounts
 # --------------------------------------------------------------------------
 
-def test_an_admin_can_add_an_onion_bob_when_first_has_one(app, domains):
-    default, onion = domains
+def test_an_admin_can_add_an_onion_bob_when_first_has_one(app, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     first_bob = make_user(None, 'bob', local=True)
     first_bob.site_domain_id = default.id
     db.session.commit()
-    client, token = _admin(app, domains)
+    client, token = _admin(app, per_domain_creation_domains)
 
     response = _admin_adds(client, token, 'bob', site_domain=str(onion.id))
 
@@ -99,14 +99,14 @@ def test_registering_first_bob_works_when_only_the_onion_has_a_bob(app, two_doma
     assert _count('bob') == 2
 
 
-def test_an_admin_added_bob_is_refused_on_the_domain_that_has_one(app, domains):
-    default, onion = domains
+def test_an_admin_added_bob_is_refused_on_the_domain_that_has_one(app, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     first_bob = make_user(None, 'bob', local=True)
     first_bob.site_domain_id = default.id
     onion_alice = make_user(None, 'alice', local=True)
     onion_alice.site_domain_id = onion.id
     db.session.commit()
-    client, token = _admin(app, domains)
+    client, token = _admin(app, per_domain_creation_domains)
 
     _admin_adds(client, token, 'BOB', site_domain=str(default.id))
     _admin_adds(client, token, 'alice', site_domain=str(onion.id))
@@ -160,8 +160,8 @@ def test_oauth_and_ldap_names_are_checked_on_the_default_domain(app, two_domains
 # communities
 # --------------------------------------------------------------------------
 
-def test_a_community_name_on_one_domain_does_not_block_the_other(app, db_session, domains):
-    default, onion = domains
+def test_a_community_name_on_one_domain_does_not_block_the_other(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     make_user(db.session.get(Instance, 1), 'founder', local=True)
     _seed_und_language()
     clearnet = _api_creator('clearnetter', default)
@@ -174,8 +174,8 @@ def test_a_community_name_on_one_domain_does_not_block_the_other(app, db_session
     assert Community.query.filter_by(name='pets').count() == 2
 
 
-def test_a_user_name_on_one_domain_does_not_block_a_community_on_the_other(app, db_session, domains):
-    default, onion = domains
+def test_a_user_name_on_one_domain_does_not_block_a_community_on_the_other(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     make_user(db.session.get(Instance, 1), 'founder', local=True)
     _seed_und_language()
     clearnet = _api_creator('clearnetter', default)
@@ -272,16 +272,16 @@ def test_a_feed_url_is_checked_against_names_on_the_owners_home_domain(app, two_
 # every new local row has a domain
 # --------------------------------------------------------------------------
 
-def test_a_new_local_row_never_has_a_null_domain(app, domains):
-    default, onion = domains
-    client, token = _admin(app, domains)
+def test_a_new_local_row_never_has_a_null_domain(app, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
+    client, token = _admin(app, per_domain_creation_domains)
     _admin_adds(client, token, 'nodomain')
     assert User.query.filter_by(user_name='nodomain').one().site_domain_id == default.id
 
 
-def test_the_cli_admin_name_must_be_free(app, db_session, domains):
+def test_the_cli_admin_name_must_be_free(app, db_session, per_domain_creation_domains):
     cli.register(app)
-    default, onion = domains
+    default, onion = per_domain_creation_domains
     taken = make_user(None, 'taken', local=True)
     taken.site_domain_id = default.id
     db.session.commit()

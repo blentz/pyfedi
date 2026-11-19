@@ -11,7 +11,7 @@ from app.storefront import clear_domain_cache, domain_for_host, public_registrat
 from tests.factories import make_instance, make_user
 from tests.test_admin_user_administration import _add_payload
 from tests.test_community_lifecycle import csrf, login
-from tests.test_onion_guard_limits import FROM_CADDY, MARKER, ONION_URL, a_session, onion, onion_get, onion_post  # noqa: F401
+from tests.test_onion_guard_limits import FROM_CADDY, MARKER, ONION_URL, a_session, onion_get, onion_post
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -39,7 +39,7 @@ def _register_payload(**overrides):
     return data
 
 
-def test_the_onion_register_page_refuses(app, onion):
+def test_the_onion_register_page_refuses(app, onion_guard_limits_onion):
     _mode('Open')
     _onion_row('closed')
     client = app.test_client()
@@ -52,7 +52,7 @@ def test_the_onion_register_page_refuses(app, onion):
     assert User.query.filter_by(user_name='newcomer').count() == 0
 
 
-def test_a_staff_row_refuses_public_sign_up(app, onion):
+def test_a_staff_row_refuses_public_sign_up(app, onion_guard_limits_onion):
     _mode('Open')
     _onion_row('closed')
     client = app.test_client()
@@ -63,7 +63,7 @@ def test_a_staff_row_refuses_public_sign_up(app, onion):
 
 
 @pytest.mark.parametrize('mode,closed', [('Open', False), ('RequireApplication', False), ('Closed', True)])
-def test_an_anyone_row_follows_the_site_registration_mode(app, onion, mode, closed, monkeypatch):
+def test_an_anyone_row_follows_the_site_registration_mode(app, onion_guard_limits_onion, mode, closed, monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the open form renders a csrf_token field
     monkeypatch.setattr('app.auth.routes.handle_abandoned_open_instance', lambda: None)   # no admin has logged in here
     _mode(mode)
@@ -75,13 +75,13 @@ def test_an_anyone_row_follows_the_site_registration_mode(app, onion, mode, clos
     assert (FORM_TEXT in text) is not closed
 
 
-def test_public_registration_open_is_true_only_for_anyone(app, onion):
+def test_public_registration_open_is_true_only_for_anyone(app, onion_guard_limits_onion):
     for registration, expected in (('anyone', True), ('closed', False)):
         _onion_row(registration)
         assert public_registration_open(domain_for_host('abc.onion')) is expected
 
 
-def test_api_registration_follows_the_storefront(app, onion):
+def test_api_registration_follows_the_storefront(app, onion_guard_limits_onion):
     """The API has no register endpoint yet (D1181); what it can do is advertise the mode, and a refused domain
     advertises Closed."""
     _mode('Open')
@@ -126,7 +126,7 @@ def _add_user(app, who, domain_id):
                                content_type='multipart/form-data')
 
 
-def test_adding_a_user_to_a_closed_row_allows_a_holder_of_the_permission(app, onion):
+def test_adding_a_user_to_a_closed_row_allows_a_holder_of_the_permission(app, onion_guard_limits_onion):
     row, staff, admin = _staff_and_admin('closed')
     _add_user(app, staff, row.id)
     assert User.query.filter_by(user_name='newbie').one().site_domain_id == row.id
@@ -134,7 +134,7 @@ def test_adding_a_user_to_a_closed_row_allows_a_holder_of_the_permission(app, on
 
 @pytest.mark.parametrize('row, mode, staff_may', [('closed', 'Open', True), ('closed', 'RequireApplication', True),
                                                   ('anyone', 'Closed', True)])
-def test_adding_a_default_domain_user_is_open_to_an_instance_wide_holder_in_every_mode(app, onion, row, mode, staff_may):
+def test_adding_a_default_domain_user_is_open_to_an_instance_wide_holder_in_every_mode(app, onion_guard_limits_onion, row, mode, staff_may):
     """F7: the default domain's own `registration` column is dead data. An instance-wide holder of `administer all
     users` adds accounts whatever the mode, a Closed site's included."""
     _, staff, admin = _staff_and_admin('anyone')
@@ -156,7 +156,7 @@ def _default_row(registration):
 
 
 @pytest.mark.parametrize('row,mode,closed', [('closed', 'Open', False), ('anyone', 'Closed', True)])
-def test_the_default_domain_follows_the_site_mode_whatever_its_row_says(app, onion, monkeypatch, row, mode, closed):
+def test_the_default_domain_follows_the_site_mode_whatever_its_row_says(app, onion_guard_limits_onion, monkeypatch, row, mode, closed):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
     monkeypatch.setattr('app.auth.routes.handle_abandoned_open_instance', lambda: None)
     _mode(mode)
@@ -166,7 +166,7 @@ def test_the_default_domain_follows_the_site_mode_whatever_its_row_says(app, oni
     assert (FORM_TEXT in text) is not closed
 
 
-def test_a_new_oauth_account_is_refused_off_the_default_domain(app, onion):
+def test_a_new_oauth_account_is_refused_off_the_default_domain(app, onion_guard_limits_onion):
     from app.auth.oauth_util import refuse_new_oauth_account
     _mode('Open')
     _onion_row('anyone')
@@ -177,7 +177,7 @@ def test_a_new_oauth_account_is_refused_off_the_default_domain(app, onion):
             assert (refuse_new_oauth_account() is not None) is refused
 
 
-def test_an_existing_oauth_user_logs_in_on_a_refused_storefront(app, onion):
+def test_an_existing_oauth_user_logs_in_on_a_refused_storefront(app, onion_guard_limits_onion):
     from app.auth.oauth_util import handle_oauth_authorize
     _mode('Open')
     _onion_row('closed')

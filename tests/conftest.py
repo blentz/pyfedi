@@ -122,6 +122,68 @@ from xdist.scheduler import LoadScopeScheduling
 # config module. Imported for that side effect alone, without binding the name `app`, which the fixture below takes.
 importlib.import_module('app')
 
+# Fixtures more than one test module requests, by name rather than by import (tests/shared_fixtures/). Here, not in a
+# conftest.py at the repository root: these modules import the app, which must come after the environment
+# set up above.
+pytest_plugins = [
+    'tests.shared_fixtures.admin_domain_branding',
+    'tests.shared_fixtures.admin_site_profile',
+    'tests.shared_fixtures.ap_new_instance_profile',
+    'tests.shared_fixtures.api_post_actions',
+    'tests.shared_fixtures.api_routes_post',
+    'tests.shared_fixtures.api_search_resolve',
+    'tests.shared_fixtures.branding_pages',
+    'tests.shared_fixtures.c3_golden_documents',
+    'tests.shared_fixtures.community_add_post',
+    'tests.shared_fixtures.community_kind_rules',
+    'tests.shared_fixtures.community_show',
+    'tests.shared_fixtures.custom_themes_admin',
+    'tests.shared_fixtures.discovery',
+    'tests.shared_fixtures.front_page_view_filters',
+    'tests.shared_fixtures.hidden_routes',
+    'tests.shared_fixtures.hosted_url_lookup',
+    'tests.shared_fixtures.instance_visible_here',
+    'tests.shared_fixtures.local_only_actors_hidden',
+    'tests.shared_fixtures.local_only_invisible',
+    'tests.shared_fixtures.local_only_outbound',
+    'tests.shared_fixtures.login_gate',
+    'tests.shared_fixtures.main_front_page',
+    'tests.shared_fixtures.mastodon_statuses',
+    'tests.shared_fixtures.media_probe',
+    'tests.shared_fixtures.media_upload',
+    'tests.shared_fixtures.microblog_live',
+    'tests.shared_fixtures.models_post_new_branches',
+    'tests.shared_fixtures.models_post_reply_new',
+    'tests.shared_fixtures.no_http_to_hosted',
+    'tests.shared_fixtures.onion_feeds_hidden',
+    'tests.shared_fixtures.onion_guard_limits',
+    'tests.shared_fixtures.onion_hidden_api_ids',
+    'tests.shared_fixtures.onion_hidden_on_clearnet',
+    'tests.shared_fixtures.onion_media_fill',
+    'tests.shared_fixtures.onion_pow',
+    'tests.shared_fixtures.onion_unlinkable_ip',
+    'tests.shared_fixtures.peertube_video',
+    'tests.shared_fixtures.per_domain_actor_documents',
+    'tests.shared_fixtures.per_domain_ap_routes',
+    'tests.shared_fixtures.per_domain_creation',
+    'tests.shared_fixtures.per_domain_feed_creation',
+    'tests.shared_fixtures.per_domain_html_routes',
+    'tests.shared_fixtures.per_domain_object_ids',
+    'tests.shared_fixtures.podcast',
+    'tests.shared_fixtures.post_replies',
+    'tests.shared_fixtures.shared_post_upload',
+    'tests.shared_fixtures.storefront_api',
+    'tests.shared_fixtures.storefront_presentation',
+    'tests.shared_fixtures.three_domains',
+    'tests.shared_fixtures.two_domains',
+    'tests.shared_fixtures.user_files_notifications',
+    'tests.shared_fixtures.user_moderation',
+    'tests.shared_fixtures.visibility_moderation',
+    'tests.shared_fixtures.visibility_reply_tree',
+    'tests.shared_fixtures.visibility_single_object',
+    'tests.shared_fixtures.vote_direction_route',
+]
+
 from app import celery
 from app.activitypub.ld_contexts import ld_document_loader
 from config import Config

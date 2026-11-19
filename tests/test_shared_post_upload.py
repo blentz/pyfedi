@@ -293,21 +293,6 @@ def make_upload(filename='pic.png', fmt='PNG', size=(8, 8), colour=(10, 20, 30),
                        content_type=content_type or f'image/{fmt.lower()}')
 
 
-@pytest.fixture
-def chdir_upload(tmp_path, monkeypatch):
-    """Redirect every relative write in the upload block into `tmp_path`.
-
-    `:475`'s directory is relative, so changing the working directory moves the
-    whole pipeline -- `ensure_directory_exists` at `:476`, the save at `:487`,
-    the re-encode at `:531` and the unlink at `:563` -- into a directory pytest
-    creates per test and removes afterwards. Nothing touches the repository.
-
-    Returns `tmp_path` so a test can inspect what was written.
-    """
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
-
-
 def test_an_uploaded_image_is_saved_and_linked(db_session, chdir_upload, http_mock):
     """The default path end to end: `:461` true, through `:487`'s save and
     `:531`'s re-encode, to a `File` row linked on the post.

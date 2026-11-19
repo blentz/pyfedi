@@ -19,7 +19,7 @@ from app.rsa_keys import RsaKeys
 from app.storefront import clear_domain_cache, default_domain, domain_for_host
 from tests.factories import (a_keypair, make_chat_message, make_feed, make_instance, make_post, make_post_reply,
                              make_post_reply_vote, make_post_vote, make_user)
-from tests.two_domains import FIRST, ONION, onion_request, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, onion_request
 
 SHOP = 'shop.example'
 MIGRATION = Path(__file__).resolve().parent.parent / 'migrations' / 'versions' / 'd3a7e5c1f9b2_site_domain_keys.py'
@@ -33,7 +33,7 @@ def load_migration():
 
 
 @pytest.fixture
-def shop(app, two_domains):  # noqa: F811 -- two_domains is the imported fixture
+def shop(app, two_domains):  # -- two_domains is the imported fixture
     db.session.add(SiteDomain(domain=SHOP, scheme='https', federates=True))
     db.session.commit()
     clear_domain_cache()
@@ -63,7 +63,7 @@ def _signs_with(private_pem: str, public_pem: str) -> bool:
 
 # --- the default domain: today's strings ---
 
-def test_the_default_domains_helpers_are_todays_literals(app, keyed_site, two_domains):  # noqa: F811 -- two_domains is the imported fixture
+def test_the_default_domains_helpers_are_todays_literals(app, keyed_site, two_domains):  # -- two_domains is the imported fixture
     server_url = app.config['SERVER_URL']
     default = default_domain()
     assert instance_actor_url(default) == f'{server_url}/actor'
@@ -83,7 +83,7 @@ def test_a_synthesised_default_signs_with_site_one(app, keyed_site):
 
 # --- whose domain a row is federated from ---
 
-def test_a_shop_rows_owner_is_the_shop(app, shop, two_domains):  # noqa: F811 -- two_domains is the imported fixture
+def test_a_shop_rows_owner_is_the_shop(app, shop, two_domains):  # -- two_domains is the imported fixture
     first = two_domains.domains[0]
     bob, first_bob = two_domains.local_user('bob', shop), two_domains.local_user('firstbob', first)
     art = two_domains.local_community('art', shop)
@@ -100,7 +100,7 @@ def test_a_shop_rows_owner_is_the_shop(app, shop, two_domains):  # noqa: F811 --
     assert owner_domain(make_post_vote(first_bob, post, 1.0)) == first
 
 
-def test_a_remote_authors_rows_have_no_owner_here(app, shop, two_domains):  # noqa: F811 -- two_domains is the imported fixture
+def test_a_remote_authors_rows_have_no_owner_here(app, shop, two_domains):  # -- two_domains is the imported fixture
     peer = make_instance('peer.example')
     remote = make_user(peer, 'remote')
     art = two_domains.local_community('art', shop)
@@ -113,7 +113,7 @@ def test_a_remote_authors_rows_have_no_owner_here(app, shop, two_domains):  # no
             activity_id('like', row)
 
 
-def test_a_feed_is_the_default_domains(app, shop, two_domains):  # noqa: F811 -- two_domains is the imported fixture
+def test_a_feed_is_the_default_domains(app, shop, two_domains):  # -- two_domains is the imported fixture
     local_feed = make_feed(two_domains.instance, 'myfeed', local=True)
     assert owner_domain(local_feed) == default_domain()
     assert owner_domain(make_feed(make_instance('peer.example'), 'theirs')) is None
@@ -124,7 +124,7 @@ def test_an_unknown_owner_is_an_error(app, shop):
         owner_domain(object())
 
 
-def test_the_owner_not_the_request_decides(app, shop, two_domains):  # noqa: F811 -- two_domains is the imported fixture
+def test_the_owner_not_the_request_decides(app, shop, two_domains):  # -- two_domains is the imported fixture
     bob = two_domains.local_user('bob', shop)
     assert owner_domain(bob) == shop                   # no request at all: a Celery task
     with onion_request(app):

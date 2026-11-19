@@ -14,7 +14,6 @@ from app.community.util import search_for_community
 from app.feed.util import search_for_feed
 from app.user.utils import search_for_user
 from tests.test_community_lifecycle import login
-from tests.test_local_only_invisible import world  # noqa: F401 -- world is a fixture
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -47,7 +46,7 @@ def _server(app):
     ('onionite@{server}', None),      # nor does the first domain have the onion's account
     ('nobody@{server}', None),
 ])
-def test_a_user_on_a_hosted_domain_is_found_locally_and_never_fetched(app, world, requests, handle, expected):
+def test_a_user_on_a_hosted_domain_is_found_locally_and_never_fetched(app, local_only_invisible_world, requests, handle, expected):
     found = search_for_user(handle.format(server=_server(app)))
     assert (found.user_name if found else None) == expected
     assert requests == []
@@ -60,28 +59,28 @@ def test_a_user_on_a_hosted_domain_is_found_locally_and_never_fetched(app, world
     ('!clearnet@{server}', 'clearnet'),
     ('!nothing@{server}', None),
 ])
-def test_a_community_on_a_hosted_domain_is_found_locally_and_never_fetched(app, world, requests, handle, expected):
+def test_a_community_on_a_hosted_domain_is_found_locally_and_never_fetched(app, local_only_invisible_world, requests, handle, expected):
     found = search_for_community(handle.format(server=_server(app)))
     assert (found.name if found else None) == expected
     assert requests == []
 
 
-def test_a_feed_on_a_hosted_domain_is_never_fetched(app, world, requests):
+def test_a_feed_on_a_hosted_domain_is_never_fetched(app, local_only_invisible_world, requests):
     assert search_for_feed('~nothing@abc.onion', signed_in=True) is None
     assert requests == []
 
 
 @pytest.mark.parametrize('query', ['@nobody@abc.onion', '@onionite@abc.onion', 'nobody@abc.onion'])
-def test_resolve_object_never_fetches_a_hosted_handle(app, world, requests, query):
+def test_resolve_object_never_fetches_a_hosted_handle(app, local_only_invisible_world, requests, query):
     try:
-        get_resolve_object(None, {'q': query}, user_id=world.alice.id)
+        get_resolve_object(None, {'q': query}, user_id=local_only_invisible_world.alice.id)
     except Exception as refused:
         assert 'fetched' not in str(refused)
     assert requests == []
 
 
-def test_a_member_opening_an_onion_handle_makes_no_request(app, world, requests):
+def test_a_member_opening_an_onion_handle_makes_no_request(app, local_only_invisible_world, requests):
     client = app.test_client()
-    login(client, world.alice)
+    login(client, local_only_invisible_world.alice)
     client.get('/u/nobody@abc.onion', headers={'Accept': 'text/html'})
     assert requests == []

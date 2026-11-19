@@ -8,7 +8,6 @@ from app import db
 from app.models import UserExtraField
 from app.oauth_server import tokens
 from tests.factories import make_instance, make_user
-from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
 RFC3339 = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$')
 TUSKY_REQUIRED = ('id', 'username', 'acct', 'created_at', 'note', 'url', 'avatar', 'header')

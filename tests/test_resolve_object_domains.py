@@ -7,7 +7,7 @@ import pytest
 
 from app.api.alpha.utils.misc import get_resolve_object
 from tests.factories import make_user
-from tests.two_domains import FIRST, ONION, no_http, onion_request, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 

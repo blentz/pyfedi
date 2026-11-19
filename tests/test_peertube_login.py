@@ -15,8 +15,6 @@ from tests import peertube_app_contract as contract
 from tests import test_login_gate as gate_tests
 from tests import test_onion_guard_limits as limit_tests
 
-private = gate_tests.private   # the private-instance fixture
-limited_app = limit_tests.limited_app   # an app whose limiter counts
 
 PASSWORD = 'a-good-password'
 
@@ -182,12 +180,12 @@ def test_an_app_can_log_in_on_a_private_instance(app, private):
     assert _token(client, _local(client), 'ptprivate').status_code == 200
 
 
-def test_password_guesses_are_limited_as_the_api_login_is(limited_app, api_baseline):
-    with limited_app.app_context():
+def test_password_guesses_are_limited_as_the_api_login_is(onion_guard_limits_limited_app, api_baseline):
+    with onion_guard_limits_limited_app.app_context():
         person = make_user(None, 'ptlimited', local=True)
         person.set_password(PASSWORD)
         db.session.commit()
-        client = limited_app.test_client()
+        client = onion_guard_limits_limited_app.test_client()
         local = _local(client)
         limiter.reset()
         limiter.enabled = True
@@ -202,14 +200,14 @@ def test_password_guesses_are_limited_as_the_api_login_is(limited_app, api_basel
 
 
 @pytest.mark.parametrize('how', ['json-body', 'query-string', 'oauth-token-endpoint'])
-def test_no_form_of_the_request_and_no_other_endpoint_escapes_the_limit(limited_app, api_baseline, how):
+def test_no_form_of_the_request_and_no_other_endpoint_escapes_the_limit(onion_guard_limits_limited_app, api_baseline, how):
     """The limit is the password grant's own: Authlib also reads a JSON body or the query, and /oauth/token reaches
     the same grant, so a limit put on one route for one form could be walked round (security review 2026-11-09)."""
-    with limited_app.app_context():
+    with onion_guard_limits_limited_app.app_context():
         person = make_user(None, f'ptlimit{how.replace("-", "")}', local=True)
         person.set_password(PASSWORD)
         db.session.commit()
-        client = limited_app.test_client()
+        client = onion_guard_limits_limited_app.test_client()
         local = _local(client)
         fields = {'client_id': local['client_id'], 'client_secret': local['client_secret'], 'grant_type': 'password',
                   'username': person.user_name, 'password': 'wrong'}
@@ -228,14 +226,14 @@ def test_no_form_of_the_request_and_no_other_endpoint_escapes_the_limit(limited_
     assert 429 in codes[:21] and codes.index(429) == 20, codes
 
 
-def test_both_endpoints_draw_on_one_bucket(limited_app, api_baseline):
+def test_both_endpoints_draw_on_one_bucket(onion_guard_limits_limited_app, api_baseline):
     """Guesses spread over /api/v1/users/token and /oauth/token are counted together: a limit per endpoint would give
     an address twice the guesses."""
-    with limited_app.app_context():
+    with onion_guard_limits_limited_app.app_context():
         person = make_user(None, 'ptlimitshared', local=True)
         person.set_password(PASSWORD)
         db.session.commit()
-        client = limited_app.test_client()
+        client = onion_guard_limits_limited_app.test_client()
         local = _local(client)
         fields = {'client_id': local['client_id'], 'client_secret': local['client_secret'], 'grant_type': 'password',
                   'username': person.user_name, 'password': 'wrong'}

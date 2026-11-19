@@ -22,7 +22,7 @@ from app.clock import utcnow
 from app.error_counts import ErrorCountHandler, error_kind, flush_engine, name_the_worker_unit
 from app.models import ErrorCount
 from tests.conftest import TestConfig
-from tests.test_onion_logging import onion, onion_context   # noqa: F401  (the fixture and the request context)
+from tests.test_onion_logging import onion_context
 
 APP_DIR = os.path.dirname(os.path.abspath(app_pkg.__file__))
 SECRET = 'alice-secret-name'
@@ -338,7 +338,7 @@ def test_error_counts_cli_defaults_to_21_days(cli_app):
     assert result.output.splitlines() == [f'{today - timedelta(days=21)} web ERROR 1 in']
 
 
-def test_an_onion_exception_is_counted_at_its_app_frame_not_in_log_scrub(app, onion, log):
+def test_an_onion_exception_is_counted_at_its_app_frame_not_in_log_scrub(app, onion_guard_limits_onion, log):
     try:
         raise_from_app_file(f'no such user {SECRET}', 'fake_onion_module.py')
     except ValueError:

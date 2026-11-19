@@ -25,9 +25,9 @@ from app.utils import feed_open_to, feed_open_to_clause
 from tests.factories import make_feed_item, make_feed_member, make_post, make_user
 from tests.test_feed_copy_routes import _copy_payload, login
 from tests.test_onion_feeds_hidden import signed_get
-from tests.test_per_domain_feed_creation import api_input, api_site, token  # noqa: F401
+from tests.test_per_domain_feed_creation import api_input, token
 from tests.test_per_domain_html_routes import Visitor
-from tests.three_domains import FIRST, ONION, SHOP, get, peer, request_on, three_domains, two_domains  # noqa: F401
+from tests.three_domains import FIRST, ONION, SHOP, get, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -47,7 +47,7 @@ class World:
 
 
 @pytest.fixture
-def world(app, three_domains):  # noqa: F811
+def world(app, three_domains):
     """A public first-domain feed `mixed` holding a first-domain and an onion community. Each community has one post,
     and an onion account has written one more in the first-domain community (stamped local-only, as it would be)."""
     d = three_domains
@@ -183,10 +183,10 @@ def test_an_edit_off_the_onion_removes_a_community_it_could_see_and_keeps_one_it
 
 @pytest.mark.parametrize('action', ['Add', 'Remove'])
 @pytest.mark.parametrize('group, expected', [('onion_group', 0), ('first_group', 1)])
-def test_an_onion_community_in_a_clearnet_feed_is_never_announced(app, world, peer, monkeypatch, action, group,
-                                                                  expected):  # noqa: F811
-    peer.inbox = f'https://{peer.domain}/inbox'
-    db.session.add(FeedMember(feed_id=world.feed.id, user_id=make_user(peer, 'bob').id))
+def test_an_onion_community_in_a_clearnet_feed_is_never_announced(app, world, three_domains_peer, monkeypatch, action, group,
+                                                                  expected):
+    three_domains_peer.inbox = f'https://{three_domains_peer.domain}/inbox'
+    db.session.add(FeedMember(feed_id=world.feed.id, user_id=make_user(three_domains_peer, 'bob').id))
     db.session.commit()
     sends = []
     monkeypatch.setattr(shared_feed, 'send_post_request', lambda *args, **kwargs: sends.append(args))

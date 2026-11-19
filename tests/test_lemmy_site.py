@@ -17,8 +17,6 @@ from tests import test_onion_guard_limits as limit_tests
 from tests.factories import make_community, make_community_member, make_instance, make_instance_block, make_user, \
     make_user_block
 
-private = gate_tests.private   # the private-instance fixture
-limited_app = limit_tests.limited_app   # an app whose limiter counts
 
 PASSWORD = 'a-good-password'
 
@@ -118,13 +116,13 @@ def test_a_login_missing_its_fields_is_incorrect_login(world, body):
     _refused(world['client'].post('/api/v3/user/login', json=body), 'incorrect_login')
 
 
-def test_logins_are_limited_per_address(limited_app, api_baseline, monkeypatch):
-    monkeypatch.setitem(limited_app.config, 'ENABLE_ALPHA_API', 'true')
-    with limited_app.app_context():
+def test_logins_are_limited_per_address(onion_guard_limits_limited_app, api_baseline, monkeypatch):
+    monkeypatch.setitem(onion_guard_limits_limited_app.config, 'ENABLE_ALPHA_API', 'true')
+    with onion_guard_limits_limited_app.app_context():
         person = make_user(None, 'lemmylimit', local=True)
         person.set_password(PASSWORD)
         db.session.commit()
-        client = limited_app.test_client()
+        client = onion_guard_limits_limited_app.test_client()
         limiter.reset()
         limiter.enabled = True
         try:

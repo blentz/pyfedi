@@ -12,7 +12,6 @@ from tests import lemmy_app_contract as contract
 from tests import test_onion_guard_limits as limit_tests
 from tests.factories import make_community, make_post, make_post_reply, make_user
 
-limited_app = limit_tests.limited_app   # an app whose limiter counts
 
 
 @pytest.fixture
@@ -173,14 +172,14 @@ def test_a_write_without_a_login_is_refused(world):
     assert response.status_code == 400 and response.get_json() == {'error': 'incorrect_login'}
 
 
-def test_making_posts_shares_alphas_limit(limited_app, api_baseline, monkeypatch):
-    monkeypatch.setitem(limited_app.config, 'ENABLE_ALPHA_API', 'true')
-    with limited_app.app_context():
+def test_making_posts_shares_alphas_limit(onion_guard_limits_limited_app, api_baseline, monkeypatch):
+    monkeypatch.setitem(onion_guard_limits_limited_app.config, 'ENABLE_ALPHA_API', 'true')
+    with onion_guard_limits_limited_app.app_context():
         person = make_user(None, 'lemmypostlimit', local=True, with_keys=True)
         person.verified, community = True, make_community('lemmypostlimit')
         db.session.commit()
         headers, away = {'Authorization': f'Bearer {person.encode_jwt_token()}'}, {'REMOTE_ADDR': '203.0.113.5'}
-        client = limited_app.test_client()
+        client = onion_guard_limits_limited_app.test_client()
         limiter.reset()
         limiter.enabled = True
         try:
@@ -194,14 +193,14 @@ def test_making_posts_shares_alphas_limit(limited_app, api_baseline, monkeypatch
     assert codes == [200, 200, 200, 429]
 
 
-def test_making_comments_shares_alphas_limit(limited_app, api_baseline, monkeypatch):
-    monkeypatch.setitem(limited_app.config, 'ENABLE_ALPHA_API', 'true')
-    with limited_app.app_context():
+def test_making_comments_shares_alphas_limit(onion_guard_limits_limited_app, api_baseline, monkeypatch):
+    monkeypatch.setitem(onion_guard_limits_limited_app.config, 'ENABLE_ALPHA_API', 'true')
+    with onion_guard_limits_limited_app.app_context():
         person = make_user(None, 'lemmylimited', local=True, with_keys=True)
         author, person.verified = make_user(None, 'lemmylimitedauthor', local=True), True
         post = make_post(make_community('lemmylimited'), author, ap_id=f'https://test.piefed.local/post/{uuid.uuid4()}')
         headers, away = {'Authorization': f'Bearer {person.encode_jwt_token()}'}, {'REMOTE_ADDR': '203.0.113.7'}
-        client = limited_app.test_client()
+        client = onion_guard_limits_limited_app.test_client()
         limiter.reset()
         limiter.enabled = True
         try:

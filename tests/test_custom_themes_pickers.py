@@ -16,7 +16,7 @@ from app.utils import theme_choices, theme_list
 from tests.factories import grant_permission
 from tests.test_community_lifecycle import able_to_create
 from tests.test_user_settings import csrf, settings_payload
-from tests.two_domains import FIRST, two_domains  # noqa: F401  (a fixture)
+from tests.two_domains import FIRST
 
 pytestmark = pytest.mark.usefixtures('site')
 

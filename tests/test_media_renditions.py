@@ -21,7 +21,6 @@ from app.shared.tasks.media import make_renditions, rendition_sides
 from tests import test_media_probe as probe_tests
 from tests.test_media_probe import files_on_disk, run, stored_post
 
-env, s3 = probe_tests.env, probe_tests.s3   # its fixtures: a private static tree, and a moto bucket
 
 
 def ready(env, fixture='video_720p.mp4', **columns):
@@ -52,18 +51,18 @@ def test_only_sizes_below_the_short_side_are_made(width, height, sides):
     assert rendition_sides({'width': width, 'height': height}) == sides
 
 
-def test_a_ready_video_with_room_for_a_smaller_size_is_queued_for_renditions(env):
-    post = run(stored_post(env, 'video_720p.mp4'))
-    assert ('make_renditions', {'post_id': post.id}) in env.tasks
+def test_a_ready_video_with_room_for_a_smaller_size_is_queued_for_renditions(media_probe_env):
+    post = run(stored_post(media_probe_env, 'video_720p.mp4'))
+    assert ('make_renditions', {'post_id': post.id}) in media_probe_env.tasks
 
 
-def test_a_video_too_small_for_any_rendition_is_not_queued(env):
-    post = run(stored_post(env))   # 64x64
-    assert [key for key, _ in env.tasks] == ['make_post']
+def test_a_video_too_small_for_any_rendition_is_not_queued(media_probe_env):
+    post = run(stored_post(media_probe_env))   # 64x64
+    assert [key for key, _ in media_probe_env.tasks] == ['make_post']
     assert 'renditions' not in media_of(post)
 
 
-def test_make_renditions_is_registered_with_task_selector(env, monkeypatch):
+def test_make_renditions_is_registered_with_task_selector(media_probe_env, monkeypatch):
     seen = []
     monkeypatch.setattr(media_tasks.make_renditions, 'delay', lambda **kw: seen.append(kw))
     task_selector('make_renditions', post_id=5)
@@ -72,8 +71,8 @@ def test_make_renditions_is_registered_with_task_selector(env, monkeypatch):
 
 # the copies
 
-def test_a_720p_upload_gains_480p_and_360p_mp4s_beside_it(env):
-    post = ready(env)
+def test_a_720p_upload_gains_480p_and_360p_mp4s_beside_it(media_probe_env):
+    post = ready(media_probe_env)
     source = media_local_path(post)
     post = render(post)
 
@@ -86,26 +85,26 @@ def test_a_720p_upload_gains_480p_and_360p_mp4s_beside_it(env):
         assert found['video']['height'] == side
     assert rendition_name(source, 480) == source[:-len('.mp4')] + '_480p.mp4'
     assert os.listdir('app/static/tmp') == []
-    assert env.tasks == [('edit_post', {'post_id': post.id})]   # the published Video is updated with its new files
+    assert media_probe_env.tasks == [('edit_post', {'post_id': post.id})]   # the published Video is updated with its new files
 
 
-def test_a_portrait_video_is_scaled_by_its_width_and_needs_no_audio(env):
-    post = render(ready(env, 'video_portrait.mp4', title='Portrait'))
+def test_a_portrait_video_is_scaled_by_its_width_and_needs_no_audio(media_probe_env):
+    post = render(ready(media_probe_env, 'video_portrait.mp4', title='Portrait'))
     assert renditions_of(post) == [{'side': 360, 'width': 360, 'height': 640,
                                     'bytes': renditions_of(post)[0]['bytes']}]
     assert 'audio' not in streams(rendition_name(media_local_path(post), 360))
 
 
-def test_a_second_run_leaves_the_recorded_renditions_alone(env, monkeypatch):
-    post = render(ready(env))
+def test_a_second_run_leaves_the_recorded_renditions_alone(media_probe_env, monkeypatch):
+    post = render(ready(media_probe_env))
     recorded = renditions_of(post)
-    env.tasks.clear()
+    media_probe_env.tasks.clear()
     monkeypatch.setattr(media_tasks, 'transcode', lambda *a, **k: pytest.fail('transcoded again'))
     post = render(post)
-    assert renditions_of(post) == recorded and env.tasks == []
+    assert renditions_of(post) == recorded and media_probe_env.tasks == []
 
 
-def test_a_failed_size_is_dropped_and_the_others_kept(env, monkeypatch, caplog):
+def test_a_failed_size_is_dropped_and_the_others_kept(media_probe_env, monkeypatch, caplog):
     real = media_tasks.transcode
 
     def flaky(path, out_path, side, portrait, timeout_s):
@@ -115,7 +114,7 @@ def test_a_failed_size_is_dropped_and_the_others_kept(env, monkeypatch, caplog):
             raise MediaToolError('ffmpeg failed: boom')
         real(path, out_path, side, portrait, timeout_s)
     monkeypatch.setattr(media_tasks, 'transcode', flaky)
-    post = ready(env)
+    post = ready(media_probe_env)
     source = media_local_path(post)
     post = render(post)
     assert [entry['side'] for entry in renditions_of(post)] == [360]
@@ -123,12 +122,12 @@ def test_a_failed_size_is_dropped_and_the_others_kept(env, monkeypatch, caplog):
     assert 'boom' in caplog.text
 
 
-def test_when_every_size_fails_the_post_records_none_and_is_not_updated(env, monkeypatch):
+def test_when_every_size_fails_the_post_records_none_and_is_not_updated(media_probe_env, monkeypatch):
     def broken(path, out_path, side, portrait, timeout_s):
         raise MediaToolError('ffmpeg failed')
     monkeypatch.setattr(media_tasks, 'transcode', broken)
-    post = render(ready(env))
-    assert media_of(post)['renditions'] == [] and env.tasks == []
+    post = render(ready(media_probe_env))
+    assert media_of(post)['renditions'] == [] and media_probe_env.tasks == []
     assert media_of(post)['status'] == 'ready' and post.status == POST_STATUS_PUBLISHED
 
 
@@ -138,7 +137,7 @@ def test_the_transcode_time_limit_grows_with_the_video_and_is_capped():
     assert ffmpeg.transcode_timeout(10 ** 9) == ffmpeg.TRANSCODE_MAX_S
 
 
-def test_one_run_shares_one_time_budget_whatever_duration_the_file_claims(env, monkeypatch, caplog):
+def test_one_run_shares_one_time_budget_whatever_duration_the_file_claims(media_probe_env, monkeypatch, caplog):
     """The duration is the uploader's container's claim: a run's sizes share TRANSCODE_MAX_S, and a size that would
     start past it is skipped."""
     clock, seen = [1000.0], []
@@ -147,7 +146,7 @@ def test_one_run_shares_one_time_budget_whatever_duration_the_file_claims(env, m
         seen.append((side, timeout_s))
         clock[0] += timeout_s   # used its whole limit, and failed
         raise MediaToolError('ffmpeg timed out')
-    post = ready(env)
+    post = ready(media_probe_env)
     media_tasks.with_media(post, duration_s=10 ** 6)
     db.session.commit()
     monkeypatch.setattr(media_tasks, 'monotonic', lambda: clock[0])
@@ -157,14 +156,14 @@ def test_one_run_shares_one_time_budget_whatever_duration_the_file_claims(env, m
     assert 'no time left' in caplog.text
 
 
-def test_a_size_gets_only_what_is_left_of_the_runs_budget(env, monkeypatch):
+def test_a_size_gets_only_what_is_left_of_the_runs_budget(media_probe_env, monkeypatch):
     clock, seen = [0.0], []
 
     def partly(path, out_path, side, portrait, timeout_s):
         seen.append((side, timeout_s))
         clock[0] += ffmpeg.TRANSCODE_MAX_S - 100
         raise MediaToolError('ffmpeg failed')
-    post = ready(env)
+    post = ready(media_probe_env)
     media_tasks.with_media(post, duration_s=10 ** 6)
     db.session.commit()
     monkeypatch.setattr(media_tasks, 'monotonic', lambda: clock[0])
@@ -178,11 +177,11 @@ def test_a_rendition_never_has_more_than_60_frames_a_second():
 
 
 @pytest.mark.parametrize('case', ['missing', 'not ready', 'audio', 'remote', 'small', 'source gone'])
-def test_a_post_with_nothing_to_render_is_left_alone(env, case):
+def test_a_post_with_nothing_to_render_is_left_alone(media_probe_env, case):
     if case == 'missing':
         make_renditions(False, 987654321)
         return
-    post = ready(env, 'video_h264.mp4' if case == 'small' else 'video_720p.mp4')
+    post = ready(media_probe_env, 'video_h264.mp4' if case == 'small' else 'video_720p.mp4')
     if case == 'not ready':
         media_tasks.with_media(post, status='failed')
     elif case == 'audio':
@@ -194,14 +193,14 @@ def test_a_post_with_nothing_to_render_is_left_alone(env, case):
     db.session.commit()
     before = files_on_disk()
     post = render(post)
-    assert renditions_of(post) == [] and env.tasks == []
+    assert renditions_of(post) == [] and media_probe_env.tasks == []
     if case != 'source gone':
         assert files_on_disk() == before
 
 
-def test_a_post_whose_media_changed_while_transcoding_keeps_nothing(env, monkeypatch):
+def test_a_post_whose_media_changed_while_transcoding_keeps_nothing(media_probe_env, monkeypatch):
     real = media_tasks.transcode
-    post = ready(env)
+    post = ready(media_probe_env)
     source, post_id = media_local_path(post), post.id
 
     def then_fail_it(path, out_path, side, portrait, timeout_s):
@@ -216,9 +215,9 @@ def test_a_post_whose_media_changed_while_transcoding_keeps_nothing(env, monkeyp
 
 # where they appear
 
-def test_peertubes_api_lists_each_rendition_as_a_file(env):
-    post = render(ready(env))
-    with env.app.test_request_context():
+def test_peertubes_api_lists_each_rendition_as_a_file(media_probe_env):
+    post = render(ready(media_probe_env))
+    with media_probe_env.app.test_request_context():
         listed = entities.files(post)
     assert [(entry['resolution']['label'], entry['size']) for entry in listed] == [
         ('720p', media_of(post)['bytes']), ('480p', renditions_of(post)[0]['bytes']),
@@ -227,15 +226,15 @@ def test_peertubes_api_lists_each_rendition_as_a_file(env):
     assert listed[1]['fps'] == media_of(post)['fps']
 
 
-def test_the_federated_video_links_each_rendition(env):
-    post = render(ready(env))
+def test_the_federated_video_links_each_rendition(media_probe_env):
+    post = render(ready(media_probe_env))
     links = [link for link in peertube_video(post)['url'] if link['mediaType'] == 'video/mp4']
     assert [(link['height'], link['width']) for link in links] == [(720, 1280), (480, 854), (360, 640)]
     assert links[2]['href'] == rendition_name(post.url, 360) and links[2]['size'] == renditions_of(post)[1]['bytes']
 
 
-def test_a_rendition_record_a_peer_could_not_write_is_still_checked(env):
-    post = ready(env)
+def test_a_rendition_record_a_peer_could_not_write_is_still_checked(media_probe_env):
+    post = ready(media_probe_env)
     media_tasks.with_media(post, renditions=[{'side': 720, 'width': 1, 'height': 1, 'bytes': 1}, 'x',
                                              {'side': 360, 'width': '640', 'height': 360, 'bytes': 1},
                                              {'side': 360, 'width': 640, 'height': 360, 'bytes': 9}])
@@ -244,8 +243,8 @@ def test_a_rendition_record_a_peer_could_not_write_is_still_checked(env):
 
 # removal
 
-def test_purging_the_post_removes_its_renditions(env):
-    post = render(ready(env))
+def test_purging_the_post_removes_its_renditions(media_probe_env):
+    post = render(ready(media_probe_env))
     source = media_local_path(post)
     post.delete_dependencies()
     db.session.commit()
@@ -255,38 +254,38 @@ def test_purging_the_post_removes_its_renditions(env):
 
 # S3
 
-def test_with_s3_the_renditions_go_to_the_bucket_beside_the_source(env, s3):
-    post = ready(env)
+def test_with_s3_the_renditions_go_to_the_bucket_beside_the_source(media_probe_env, media_probe_s3):
+    post = ready(media_probe_env)
     assert media_local_path(post) is None   # the probe moved the source into the bucket
     post = render(post)
     key = post.url.removeprefix('https://cdn.probeland.test/')
     for entry in renditions_of(post):
-        head = s3.head_object(Bucket='pyfedi-test', Key=rendition_name(key, entry['side']))
+        head = media_probe_s3.head_object(Bucket='pyfedi-test', Key=rendition_name(key, entry['side']))
         assert head['ContentType'] == 'video/mp4' and head['ContentLength'] == entry['bytes']
     assert [entry['side'] for entry in renditions_of(post)] == [480, 360]
     assert files_on_disk() == []   # the downloaded source and the copies are gone from disk
 
 
 @pytest.mark.parametrize('debug', [False, True], ids=['queued', 'inline'])   # debug deletes inline, else via the queue
-def test_with_s3_purging_the_post_deletes_its_renditions_from_the_bucket(env, s3, monkeypatch, debug):
-    post = render(ready(env))
-    monkeypatch.setattr(env.app, 'debug', debug)
+def test_with_s3_purging_the_post_deletes_its_renditions_from_the_bucket(media_probe_env, media_probe_s3, monkeypatch, debug):
+    post = render(ready(media_probe_env))
+    monkeypatch.setattr(media_probe_env.app, 'debug', debug)
     key = post.url.removeprefix('https://cdn.probeland.test/')
     post.delete_dependencies()
     db.session.commit()
     for name in (key, rendition_name(key, 480), rendition_name(key, 360)):
         with pytest.raises(Exception):
-            s3.head_object(Bucket='pyfedi-test', Key=name)
+            media_probe_s3.head_object(Bucket='pyfedi-test', Key=name)
 
 
-def test_with_s3_a_rendition_the_bucket_refuses_is_dropped(env, s3, monkeypatch):
+def test_with_s3_a_rendition_the_bucket_refuses_is_dropped(media_probe_env, media_probe_s3, monkeypatch):
     real = media_tasks.upload_file_to_s3
 
     def refuse_480(local, key, mime):
         if key.endswith('_480p.mp4'):
             raise OSError('refused')
         return real(local, key, mime)
-    post = ready(env)
+    post = ready(media_probe_env)
     monkeypatch.setattr(media_tasks, 'upload_file_to_s3', refuse_480)
     post = render(post)
     assert [entry['side'] for entry in renditions_of(post)] == [360]
@@ -295,19 +294,19 @@ def test_with_s3_a_rendition_the_bucket_refuses_is_dropped(env, s3, monkeypatch)
 
 # what goes wrong
 
-def test_an_error_the_task_does_not_expect_is_rolled_back_and_raised(env, monkeypatch):
+def test_an_error_the_task_does_not_expect_is_rolled_back_and_raised(media_probe_env, monkeypatch):
     def broken(*args):
         raise RuntimeError('unexpected')
     monkeypatch.setattr(media_tasks, 'transcode', broken)
-    post = ready(env)
+    post = ready(media_probe_env)
     with pytest.raises(RuntimeError):
         make_renditions(False, post.id)
     db.session.expire_all()
     assert 'renditions' not in media_of(db.session.get(Post, post.id))
 
 
-def test_a_rendition_ffprobe_finds_no_picture_in_is_dropped(env, monkeypatch):
-    post = ready(env)
+def test_a_rendition_ffprobe_finds_no_picture_in_is_dropped(media_probe_env, monkeypatch):
+    post = ready(media_probe_env)
     monkeypatch.setattr(media_tasks, 'run_ffprobe', lambda path: {'streams': [{'codec_type': 'audio'}, 'x']})
     source = media_local_path(post)
     post = render(post)
@@ -315,18 +314,18 @@ def test_a_rendition_ffprobe_finds_no_picture_in_is_dropped(env, monkeypatch):
     assert not any(os.path.exists(rendition_name(source, side)) for side in (480, 360))
 
 
-def test_with_s3_a_source_the_bucket_will_not_hand_back_makes_nothing(env, s3, monkeypatch):
+def test_with_s3_a_source_the_bucket_will_not_hand_back_makes_nothing(media_probe_env, media_probe_s3, monkeypatch):
     def refuse(key, local_path):
         with open(local_path, 'wb') as half:
             half.write(b'half')
         raise OSError('refused')
-    post = ready(env)
+    post = ready(media_probe_env)
     monkeypatch.setattr(media_tasks, 'download_from_s3', refuse)
     post = render(post)
     assert 'renditions' not in media_of(post) and files_on_disk() == []
 
 
-def test_renditions_of_a_post_gone_meanwhile_are_removed(env):
+def test_renditions_of_a_post_gone_meanwhile_are_removed(media_probe_env):
     made = []
     for side in (480, 360):
         path = f'app/static/media/posts/zz/zz/zzzz{side:011d}_{side}p.mp4'
@@ -338,16 +337,16 @@ def test_renditions_of_a_post_gone_meanwhile_are_removed(env):
     assert not any(os.path.exists(where) for *_, where in made)
 
 
-def test_with_s3_renditions_of_a_post_gone_meanwhile_leave_the_bucket(env, s3):
-    s3.put_object(Bucket='pyfedi-test', Key='posts/zz/zz/gone_480p.mp4', Body=b'copy')
+def test_with_s3_renditions_of_a_post_gone_meanwhile_leave_the_bucket(media_probe_env, media_probe_s3):
+    media_probe_s3.put_object(Bucket='pyfedi-test', Key='posts/zz/zz/gone_480p.mp4', Body=b'copy')
     media_tasks._record_renditions(987654321, [(480, 1, 1, 4, 'posts/zz/zz/gone_480p.mp4')], in_s3=True)
     with pytest.raises(Exception):
-        s3.head_object(Bucket='pyfedi-test', Key='posts/zz/zz/gone_480p.mp4')
+        media_probe_s3.head_object(Bucket='pyfedi-test', Key='posts/zz/zz/gone_480p.mp4')
     media_tasks._record_renditions(987654321, [], in_s3=True)   # nothing made: nothing to delete
 
 
-def test_a_record_another_run_wrote_first_is_kept_with_its_files(env):
-    post = render(ready(env))
+def test_a_record_another_run_wrote_first_is_kept_with_its_files(media_probe_env):
+    post = render(ready(media_probe_env))
     recorded, source = renditions_of(post), media_local_path(post)
     made = [(480, 1, 1, 4, rendition_name(source, 480))]
     media_tasks._record_renditions(post.id, made, in_s3=False)
@@ -356,8 +355,8 @@ def test_a_record_another_run_wrote_first_is_kept_with_its_files(env):
     assert os.path.exists(rendition_name(source, 480))
 
 
-def test_a_rendition_link_of_a_video_with_no_frame_rate_has_none(env):
-    post = render(ready(env))
+def test_a_rendition_link_of_a_video_with_no_frame_rate_has_none(media_probe_env):
+    post = render(ready(media_probe_env))
     media_tasks.with_media(post, fps=None)
     links = [link for link in peertube_video(post)['url'] if link['mediaType'] == 'video/mp4']
     assert all('fps' not in link for link in links[1:])

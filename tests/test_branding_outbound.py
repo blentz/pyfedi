@@ -27,10 +27,10 @@ from app.email import (mail_name, send_password_reset_email, send_registration_a
 from app.models import DomainBranding, Notification, Site, User
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import utcnow
-from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, GOLDEN_PATHS, SHOP, golden_copy, golden_site  # noqa: F401
-from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_first  # noqa: F401  (fixtures)
+from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, GOLDEN_PATHS, SHOP, golden_copy
+from tests.test_per_domain_actor_documents import SHOP_BASE, site_named_first
 from tests.test_per_domain_discovery import alpha_api, alpha_get  # noqa: F401  (a fixture)
-from tests.two_domains import FIRST, two_domains  # noqa: F401  (a fixture)
+from tests.two_domains import FIRST
 
 pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_first')
 

@@ -4,25 +4,25 @@ import pytest
 from app import db
 from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_IMAGE
 from tests.factories import make_community, make_community_member, make_instance, make_post, make_user
-from tests.test_front_page_view_filters import _titles, env  # noqa: F401
+from tests.test_front_page_view_filters import _titles
 
 pytestmark = pytest.mark.usefixtures('site')
 
 
 @pytest.fixture
-def media(env):
+def media(front_page_view_filters_env):
     tube = make_instance('tube.example', software='peertube')
     for name, private, show_all, low_quality in (('tube_open', False, True, False), ('tube_private', True, True, False),
                                                  ('tube_silenced', False, False, False), ('tube_low', False, True, True)):
         community = make_community(name, host='tube.example')
         community.instance_id = tube.id
         community.private, community.show_all, community.low_quality = private, show_all, low_quality
-        make_post(community, env.author, f'https://tube.example/{name}/1', title=f'post in {name}')
-        env.communities[name] = community
+        make_post(community, front_page_view_filters_env.author, f'https://tube.example/{name}/1', title=f'post in {name}')
+        front_page_view_filters_env.communities[name] = community
     db.session.commit()
-    make_community_member(env.reader, env.communities['tube_private'])
+    make_community_member(front_page_view_filters_env.reader, front_page_view_filters_env.communities['tube_private'])
     db.session.commit()
-    return env
+    return front_page_view_filters_env
 
 
 def test_anonymous_readers_get_public_media_posts_only(media):

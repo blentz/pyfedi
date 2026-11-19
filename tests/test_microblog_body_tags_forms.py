@@ -8,7 +8,7 @@ from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_LINK
 from app.models import Post, Tag
 from app.post.util import form_tags_string, tags_to_string
 from tests.factories import make_community, make_community_member
-from tests.test_community_add_post import poster, url  # noqa: F401 (poster is a fixture)
+from tests.test_community_add_post import url
 
 
 def _tagged_post(community, author, body='about #Cats', names=('cats', 'news')):
@@ -22,27 +22,27 @@ def _tagged_post(community, author, body='about #Cats', names=('cats', 'news')):
     return post
 
 
-def test_tags_to_string_leaves_out_excluded_names(app, poster):
-    _, _, community, author, _ = poster
+def test_tags_to_string_leaves_out_excluded_names(app, community_add_post_poster):
+    _, _, community, author, _ = community_add_post_poster
     post = _tagged_post(community, author)
     assert tags_to_string(post, exclude=['cats']) == 'News'
     assert tags_to_string(post, exclude=['cats', 'news']) is None
 
 
-def test_a_microblogs_post_fills_only_its_non_body_tags(app, poster):
-    _, _, _, author, _ = poster
+def test_a_microblogs_post_fills_only_its_non_body_tags(app, community_add_post_poster):
+    _, _, _, author, _ = community_add_post_poster
     post = _tagged_post(make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS), author)
     assert form_tags_string(post) == 'News'
 
 
-def test_another_communitys_post_fills_all_its_tags(app, poster):
-    _, _, community, author, _ = poster
+def test_another_communitys_post_fills_all_its_tags(app, community_add_post_poster):
+    _, _, community, author, _ = community_add_post_poster
     # Post.tags has no order: the tags are compared as a set (the gate saw 'News, Cats' once in 24 000 tests)
     assert sorted(form_tags_string(_tagged_post(community, author)).split(', ')) == ['Cats', 'News']
 
 
-def test_the_edit_form_leaves_out_body_tags(app, poster):
-    client, _, _, author, _ = poster
+def test_the_edit_form_leaves_out_body_tags(app, community_add_post_poster):
+    client, _, _, author, _ = community_add_post_poster
     microblogs = make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)
     make_community_member(author, microblogs)
     post = _tagged_post(microblogs, author)
@@ -54,8 +54,8 @@ def test_the_edit_form_leaves_out_body_tags(app, poster):
     assert render.call_args.kwargs['form'].tags.data == 'News'
 
 
-def test_a_crosspost_from_a_microblogs_post_leaves_out_its_body_tags(app, poster):
-    client, _, community, author, _ = poster
+def test_a_crosspost_from_a_microblogs_post_leaves_out_its_body_tags(app, community_add_post_poster):
+    client, _, community, author, _ = community_add_post_poster
     source = _tagged_post(make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS), author)
 
     with patch('app.community.routes.render_template', return_value='rendered') as render:

@@ -7,42 +7,42 @@ from app.activitypub.serializers import peertube_video
 from app.constants import POST_TYPE_ARTICLE
 from app.shared.tasks.deletes import delete_object
 from tests.factories import make_follow, make_instance, make_user
-from tests.peertube_video_fixtures import _example_hosts_resolve_without_a_resolver, sent, video_post    # noqa: F401
+from tests.peertube_video_fixtures import _example_hosts_resolve_without_a_resolver
 
 
 @pytest.fixture
-def owner(video_post):
-    user = make_user(video_post.author.instance, 'owner', local=True, with_keys=True)
-    video_post.community.user_id = user.id
+def owner(peertube_video_video_post):
+    user = make_user(peertube_video_video_post.author.instance, 'owner', local=True, with_keys=True)
+    peertube_video_video_post.community.user_id = user.id
     db.session.commit()
     return user
 
 
 @pytest.fixture
-def moderator(video_post):
-    return make_user(video_post.author.instance, 'mod', local=True, with_keys=True)
+def moderator(peertube_video_video_post):
+    return make_user(peertube_video_video_post.author.instance, 'mod', local=True, with_keys=True)
 
 
-def test_peertube_gets_the_owners_delete(sent, video_post, owner):
-    delete_object(video_post.author.id, video_post, is_post=True, session=db.session)
-    body, key = sent['https://peertube.example/inbox']
+def test_peertube_gets_the_owners_delete(peertube_video_sent, peertube_video_video_post, owner):
+    delete_object(peertube_video_video_post.author.id, peertube_video_video_post, is_post=True, session=db.session)
+    body, key = peertube_video_sent['https://peertube.example/inbox']
     # an embedded Tombstone (P2): PeerTube reads `activity.object.id` (process-delete.ts:29 at v8.3.1)
     assert (body['type'], body['actor'], body['object']) == \
-        ('Delete', owner.public_url(), {'id': video_post.public_url(), 'type': 'Tombstone'})
+        ('Delete', owner.public_url(), {'id': peertube_video_video_post.public_url(), 'type': 'Tombstone'})
     assert key == owner.public_url() + '#main-key'
-    plain = sent['https://follower.example/inbox'][0]       # the owner's copy must not have changed the author's
-    assert (plain['type'], plain['actor']) == ('Delete', video_post.author.public_url())
+    plain = peertube_video_sent['https://follower.example/inbox'][0]       # the owner's copy must not have changed the author's
+    assert (plain['type'], plain['actor']) == ('Delete', peertube_video_video_post.author.public_url())
 
 
-def test_a_moderators_removal_is_still_signed_by_the_owner(sent, video_post, owner, moderator):
-    delete_object(moderator.id, video_post, is_post=True, reason='spam', session=db.session)
-    assert sent['https://peertube.example/inbox'][0]['actor'] == owner.public_url()
+def test_a_moderators_removal_is_still_signed_by_the_owner(peertube_video_sent, peertube_video_video_post, owner, moderator):
+    delete_object(moderator.id, peertube_video_video_post, is_post=True, reason='spam', session=db.session)
+    assert peertube_video_sent['https://peertube.example/inbox'][0]['actor'] == owner.public_url()
 
 
-def test_other_followers_keep_the_communitys_announce(sent, video_post, owner):
-    delete_object(video_post.author.id, video_post, is_post=True, session=db.session)
-    assert sent['https://lemmy.example/inbox'][0]['type'] == 'Announce'
-    assert sent['https://mastodon.example/inbox'][0]['type'] == 'Announce'
+def test_other_followers_keep_the_communitys_announce(peertube_video_sent, peertube_video_video_post, owner):
+    delete_object(peertube_video_video_post.author.id, peertube_video_video_post, is_post=True, session=db.session)
+    assert peertube_video_sent['https://lemmy.example/inbox'][0]['type'] == 'Announce'
+    assert peertube_video_sent['https://mastodon.example/inbox'][0]['type'] == 'Announce'
 
 
 def _author_follows_peertube(video_post):
@@ -64,39 +64,39 @@ def _assert_no_owner_sends_peertube_only_the_authors_delete(sent, video_post, ca
     assert f'community {video_post.community.id}' in caplog.text and f'video {video_post.id}' in caplog.text
 
 
-def test_without_an_owner_peertube_is_not_marked_sent(sent, video_post, caplog):
-    video_post.community.user_id = None
+def test_without_an_owner_peertube_is_not_marked_sent(peertube_video_sent, peertube_video_video_post, caplog):
+    peertube_video_video_post.community.user_id = None
     db.session.commit()
-    _assert_no_owner_sends_peertube_only_the_authors_delete(sent, video_post, caplog)
+    _assert_no_owner_sends_peertube_only_the_authors_delete(peertube_video_sent, peertube_video_video_post, caplog)
 
 
-def test_a_remote_owner_cannot_sign(sent, video_post, caplog):
-    video_post.community.user_id = make_user(make_instance('far.example'), 'far').id
+def test_a_remote_owner_cannot_sign(peertube_video_sent, peertube_video_video_post, caplog):
+    peertube_video_video_post.community.user_id = make_user(make_instance('far.example'), 'far').id
     db.session.commit()
-    _assert_no_owner_sends_peertube_only_the_authors_delete(sent, video_post, caplog)
+    _assert_no_owner_sends_peertube_only_the_authors_delete(peertube_video_sent, peertube_video_video_post, caplog)
 
 
-def test_a_deleted_owner_cannot_sign(sent, video_post, owner, caplog):
+def test_a_deleted_owner_cannot_sign(peertube_video_sent, peertube_video_video_post, owner, caplog):
     owner.deleted = True
     db.session.commit()
-    _assert_no_owner_sends_peertube_only_the_authors_delete(sent, video_post, caplog)
+    _assert_no_owner_sends_peertube_only_the_authors_delete(peertube_video_sent, peertube_video_video_post, caplog)
 
 
-def test_a_restore_sends_peertube_the_create_again(sent, video_post):
-    delete_object(video_post.author.id, video_post, is_post=True, is_restore=True, session=db.session)
-    body, key = sent['https://peertube.example/inbox']
-    assert (body['type'], body['actor']) == ('Create', video_post.author.public_url())
-    assert body['object'] == peertube_video(video_post)
-    assert key == video_post.author.public_url() + '#main-key'
+def test_a_restore_sends_peertube_the_create_again(peertube_video_sent, peertube_video_video_post):
+    delete_object(peertube_video_video_post.author.id, peertube_video_video_post, is_post=True, is_restore=True, session=db.session)
+    body, key = peertube_video_sent['https://peertube.example/inbox']
+    assert (body['type'], body['actor']) == ('Create', peertube_video_video_post.author.public_url())
+    assert body['object'] == peertube_video(peertube_video_video_post)
+    assert key == peertube_video_video_post.author.public_url() + '#main-key'
 
 
-def test_a_page_post_keeps_the_announce_for_peertube(sent, video_post, owner):
-    video_post.type = POST_TYPE_ARTICLE
-    delete_object(video_post.author.id, video_post, is_post=True, session=db.session)
-    assert sent['https://peertube.example/inbox'][0]['type'] == 'Announce'
+def test_a_page_post_keeps_the_announce_for_peertube(peertube_video_sent, peertube_video_video_post, owner):
+    peertube_video_video_post.type = POST_TYPE_ARTICLE
+    delete_object(peertube_video_video_post.author.id, peertube_video_video_post, is_post=True, session=db.session)
+    assert peertube_video_sent['https://peertube.example/inbox'][0]['type'] == 'Announce'
 
 
-def test_nothing_to_delete_sends_nothing(sent):
+def test_nothing_to_delete_sends_nothing(peertube_video_sent):
     """v1.8.10: delete_object returns at once when the object is already gone (a purge raced the task)."""
     assert delete_object(1, None) is None
-    assert sent.calls == []
+    assert peertube_video_sent.calls == []

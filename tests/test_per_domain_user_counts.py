@@ -13,13 +13,13 @@ from app.api.alpha.views import site_instance_chooser_view, site_view
 from app.models import Site, User, utcnow
 from app.storefront import clear_domain_cache
 from tests.test_per_domain_local_filter import _visit
-from tests.two_domains import request_on, two_domains  # noqa: F401
+from tests.two_domains import request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
 
 @pytest.fixture
-def crowd(app, two_domains):  # noqa: F811
+def crowd(app, two_domains):
     """101 active accounts on the first domain's row and 103 on the onion's, so each domain's home page shows its counts
     (they show above 100 monthly users) and either one's number tells which accounts it counted."""
     first, onion = two_domains.domains

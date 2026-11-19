@@ -14,7 +14,6 @@ from app.oauth_server import tokens
 from tests.factories import make_community, make_file, make_instance, make_post, make_user
 from tests import test_login_gate as gate_tests
 
-private = gate_tests.private   # the private-instance fixture
 
 
 @pytest.fixture

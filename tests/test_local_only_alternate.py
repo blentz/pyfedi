@@ -9,7 +9,6 @@ from app import db
 from app.models import Site
 from tests.conftest import forget_login
 from tests.test_ap_interop_html_discovery import ap_link_headers
-from tests.test_local_only_invisible import world  # noqa: F401 -- world is a fixture
 from tests.test_per_domain_ap_routes import onion_proxy  # noqa: F401 -- the onion guard's proxy, for the onion's pages
 from tests.test_per_domain_html_routes import Visitor
 
@@ -20,10 +19,10 @@ AP_LINK = 'type="application/activity+json"'
 
 
 @pytest.fixture
-def public(app, world):
+def public(app, local_only_invisible_world):
     db.session.get(Site, 1).private_instance = False
     db.session.commit()
-    return world
+    return local_only_invisible_world
 
 
 @pytest.mark.parametrize('path', ['/u/onionite', '/c/hidden'])   # the onion's, on the onion

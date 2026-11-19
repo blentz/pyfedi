@@ -22,7 +22,7 @@ from tests.test_ap_refresh_profiles import PEER, _person_document
 from tests.test_inbox_dispatch_follow import _seed_follow_of_feed, _seed_follow_of_local_community, \
     _seed_follow_of_local_user, record_sends
 from tests.test_inbox_dispatch_preamble import dispatch
-from tests.test_user_files_notifications import a_follow_request, csrf, env  # noqa: F401 (env is a fixture)
+from tests.test_user_files_notifications import a_follow_request, csrf
 
 OWN = 'https://peer.example/users/alice/own-inbox'
 MIGRATION = Path(__file__).resolve().parent.parent / 'migrations' / 'versions' / 'b7e3c9a1f5d2_user_own_inbox.py'
@@ -122,8 +122,8 @@ def test_the_re_sent_accept_of_a_user_follow_goes_to_the_followers_own_inbox(app
 
 
 @pytest.mark.parametrize('answer,activity_type', [('accept', 'Accept'), ('reject', 'Reject')])
-def test_a_follow_request_answered_by_hand_goes_to_the_followers_own_inbox(app, site, env, answer, activity_type):
-    client, owner, _ = env
+def test_a_follow_request_answered_by_hand_goes_to_the_followers_own_inbox(app, site, user_files_notifications_env, answer, activity_type):
+    client, owner, _ = user_files_notifications_env
     remote = _with_own_inbox(make_user(make_instance('peer.example', software='piefed'), 'alice'))
     a_follow_request(owner, remote)
     token = csrf(app, client)
@@ -290,8 +290,8 @@ def test_a_known_own_inbox_is_not_fetched(app, db_session, monkeypatch):
     assert [uri for uri, _, _ in sends] == [OWN]
 
 
-def test_a_follow_request_answered_by_hand_fetches_an_unknown_own_inbox(app, site, env, monkeypatch):
-    client, owner, _ = env
+def test_a_follow_request_answered_by_hand_fetches_an_unknown_own_inbox(app, site, user_files_notifications_env, monkeypatch):
+    client, owner, _ = user_files_notifications_env
     remote = _stored_before_a12(make_user(make_instance('peer.example', software='piefed'), 'alice'))
     a_follow_request(owner, remote)
     _fetch_returns(monkeypatch, _follower_document(remote))

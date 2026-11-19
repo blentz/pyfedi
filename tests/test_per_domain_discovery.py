@@ -19,10 +19,10 @@ from app.models import BannedInstances, Emoji, Instance, Site, SiteDomain
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import get_setting
 from tests.factories import make_post
-from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, SHOP, golden_copy, golden_site  # noqa: F401  (fixture)
+from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, SHOP, golden_copy
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
-from tests.test_per_domain_actor_documents import SHOP_BASE, shop_rows, site_named_first  # noqa: F401  (fixtures)
-from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401  (fixture)
+from tests.test_per_domain_actor_documents import SHOP_BASE, site_named_first
+from tests.two_domains import FIRST, ONION, request_on
 
 pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_first')
 

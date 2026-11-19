@@ -5,7 +5,6 @@ import pytest
 from app.oauth_scopes import SCOPES
 from app.oauth_server import tokens
 from tests.factories import make_user
-from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
 
 @pytest.fixture

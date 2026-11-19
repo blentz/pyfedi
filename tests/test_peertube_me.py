@@ -14,7 +14,6 @@ from tests import peertube_app_contract as contract
 from tests import test_login_gate as gate_tests
 from tests.factories import make_community, make_community_member, make_post, make_user
 
-private = gate_tests.private   # the private-instance fixture
 
 
 @pytest.fixture

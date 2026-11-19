@@ -21,9 +21,9 @@ from app.shared.community import edit_community
 from app.storefront import canonicalise_links, canonicalise_text
 from app.utils import markdown_to_html, piefed_markdown_to_lemmy_markdown, utcnow
 from tests.factories import a_keypair, bearer, make_community, make_community_member, make_post
-from tests.test_admin_site_profile import _post, admin_client  # noqa: F401  (admin_client is a fixture)
+from tests.test_admin_site_profile import _post
 from tests.test_shared_community_lifecycle import _api_input, _seed, _seed_und_language
-from tests.test_storefront_presentation import CANONICAL, ONION, onion  # noqa: F401  (onion is a fixture)
+from tests.test_storefront_presentation import CANONICAL, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -47,7 +47,7 @@ pytestmark = pytest.mark.usefixtures('site')
     ('http://me@abc.onion:8080~/x', f'https://{CANONICAL}~/x'),
     ('a\nhttp://abc.onion/x\r\nb', f'a\nhttps://{CANONICAL}/x\r\nb'),
 ])
-def test_canonicalise_text_rebases_our_other_hosts(app, onion, text, saved):
+def test_canonicalise_text_rebases_our_other_hosts(app, storefront_presentation_onion, text, saved):
     assert canonicalise_text(text) == saved
     assert canonicalise_text(saved) is saved   # idempotent: what was saved is saved again unchanged
 
@@ -61,7 +61,7 @@ def test_canonicalise_text_rebases_our_other_hosts(app, onion, text, saved):
     'https:\\\\abc.onion/x',                             # a backslash URL names no host we can trust
     '',
 ])
-def test_canonicalise_text_leaves_the_rest_alone(app, onion, text):
+def test_canonicalise_text_leaves_the_rest_alone(app, storefront_presentation_onion, text):
     assert canonicalise_text(text) is text
 
 
@@ -70,7 +70,7 @@ def test_canonicalise_text_leaves_the_rest_alone(app, onion, text):
     ('```\ncurl http://abc.onion/x\n```', f'```\ncurl https://{CANONICAL}/x\n```'),
     ('https://ex.com/?u=http://abc.onion/x', f'https://ex.com/?u=https://{CANONICAL}/x'),
 ])
-def test_canonicalise_text_rewrites_our_urls_in_code_and_in_foreign_urls(app, onion, text, saved):
+def test_canonicalise_text_rewrites_our_urls_in_code_and_in_foreign_urls(app, storefront_presentation_onion, text, saved):
     # documented choice: the privacy invariant (nothing stored names the onion) beats fidelity
     assert canonicalise_text(text) == saved
 
@@ -86,7 +86,7 @@ def test_canonicalise_text_rewrites_our_urls_in_code_and_in_foreign_urls(app, on
     ('<a href="http://abc.onion/x?u=http://abc.onion/y">x</a>',
      f'<a href="https://{CANONICAL}/x?u=https://{CANONICAL}/y">x</a>'),
 ])
-def test_canonicalise_links_rewrites_our_urls_inside_a_foreign_url_too(app, onion, html, saved):
+def test_canonicalise_links_rewrites_our_urls_inside_a_foreign_url_too(app, storefront_presentation_onion, html, saved):
     assert canonicalise_links(html) == saved
     assert canonicalise_links(saved) == saved   # idempotent
 
@@ -96,21 +96,21 @@ def test_canonicalise_links_rewrites_our_urls_inside_a_foreign_url_too(app, onio
     '<a href="https://ex.com/?u=notabc.onion">x</a>',
     '<p>http://abc.onion/x as text</p>',
 ])
-def test_canonicalise_links_leaves_encoded_and_non_link_text_alone(app, onion, html):
+def test_canonicalise_links_leaves_encoded_and_non_link_text_alone(app, storefront_presentation_onion, html):
     assert canonicalise_links(html) is html
 
 
-def test_canonicalise_text_passes_none(app, onion):
+def test_canonicalise_text_passes_none(app, storefront_presentation_onion):
     assert canonicalise_text(None) is None
 
 
-def test_canonicalise_text_outside_an_app_passes_the_text_through(app, onion):
+def test_canonicalise_text_outside_an_app_passes_the_text_through(app, storefront_presentation_onion):
     # no app context (a fuzz campaign): no registry to read, so nothing to rebase. An empty context has none pushed
     text = 'see http://abc.onion/post/1'
     assert contextvars.Context().run(canonicalise_text, text) is text
 
 
-def test_canonicalise_links_outside_an_app_passes_the_html_through(app, onion):
+def test_canonicalise_links_outside_an_app_passes_the_html_through(app, storefront_presentation_onion):
     # sanitise_posting_warning reaches allowlist_html with no app in the posting_warning_html fuzz campaign
     html = '<a href="http://abc.onion/post/1">x</a>'
     assert contextvars.Context().run(canonicalise_links, html) is html
@@ -122,7 +122,7 @@ def test_canonicalise_text_with_no_other_host_reads_no_text(app):
     assert canonicalise_text(text) is text
 
 
-def test_rendered_markdown_names_no_other_host_even_in_its_text(app, onion):
+def test_rendered_markdown_names_no_other_host_even_in_its_text(app, storefront_presentation_onion):
     html = markdown_to_html('see http://abc.onion/post/1')
     assert f'>https://{CANONICAL}/post/1</a>' in html
     assert ONION not in html
@@ -133,7 +133,7 @@ def test_rendered_markdown_in_a_test_env_reads_no_domains():
     assert 'abc.onion' in markdown_to_html('see http://abc.onion/post/1', test_env={'fn_string': 'fn-test'})
 
 
-def test_saved_markdown_is_canonical(app, onion):
+def test_saved_markdown_is_canonical(app, storefront_presentation_onion):
     assert piefed_markdown_to_lemmy_markdown('a\r\nsee http://abc.onion/post/1') == \
         f'a  \r\nsee https://{CANONICAL}/post/1'
 
@@ -149,7 +149,7 @@ def auth(user):
 
 
 @pytest.fixture
-def env(app, onion, api_baseline, monkeypatch):
+def env(app, storefront_presentation_onion, api_baseline, monkeypatch):
     g.admin_ids = []
     g.site = db.session.get(Site, 1)
     monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
@@ -227,7 +227,7 @@ def test_private_message_edited_on_the_onion_is_canonical(env):
 # --- the other saves that store Markdown -------------------------------------------------------------------------
 
 @pytest.mark.parametrize('from_scratch', [True, False])   # the API create and the API edit
-def test_community_rules_and_description_saved_through_the_api_are_canonical(app, onion, db_session, monkeypatch,
+def test_community_rules_and_description_saved_through_the_api_are_canonical(app, storefront_presentation_onion, db_session, monkeypatch,
                                                                              from_scratch):
     s = _seed()
     _seed_und_language()
@@ -239,8 +239,8 @@ def test_community_rules_and_description_saved_through_the_api_are_canonical(app
     assert s.community.description == STORED
 
 
-def test_site_legal_information_saved_by_an_admin_is_canonical(app, onion, admin_client):
-    client, token = admin_client
+def test_site_legal_information_saved_by_an_admin_is_canonical(app, storefront_presentation_onion, admin_site_profile_admin_client):
+    client, token = admin_site_profile_admin_client
     response, _ = _post(client, token, legal_information=PASTED)
     assert response.status_code == 200
     db.session.expire_all()

@@ -10,21 +10,6 @@ from tests.test_admin_site_profile import csrf, login
 pytestmark = pytest.mark.usefixtures('site')
 
 
-@pytest.fixture
-def voter(app, db_session):
-    local = make_instance('test.piefed.local', software='piefed')
-    author = make_user(local, 'voteauthor', local=True)
-    user = make_user(local, 'votevoter', local=True, with_keys=True)   # an approved account (approval_required)
-    user.verified = True
-    post = make_post(make_community('votes'), author, ap_id='https://test.piefed.local/post/v1')
-    reply = make_post_reply(post, author)
-    db.session.commit()
-    client = app.test_client()
-    login(client, user)
-    token = csrf(app, client)
-    return Voting(client, token), post, reply
-
-
 class Voting:
     """The signed-in voter's client, every POST carrying the CSRF token login_required checks."""
 

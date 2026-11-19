@@ -45,7 +45,6 @@ from app.activitypub.util import post_to_page, update_post_from_activity
 from app.constants import POST_TYPE_ARTICLE, POST_TYPE_LINK
 from app.models import Post
 from app.utils import url_is_storable
-from tests.podcast_fixtures import env  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures('site')
 PEER = 'peer.test'
@@ -169,51 +168,51 @@ class TestTheRule:
 
 class TestIngestingANewPost:
     @pytest.mark.parametrize('shape', list(SHAPES))
-    def test_no_attachment_shape_stores_an_unsafe_url(self, env, shape):
-        post = _created(env, SHAPES[shape](HOSTILE), slug=shape[:8])
+    def test_no_attachment_shape_stores_an_unsafe_url(self, podcast_env, shape):
+        post = _created(podcast_env, SHAPES[shape](HOSTILE), slug=shape[:8])
 
         assert post.url is None
 
     @pytest.mark.parametrize('shape', list(SHAPES))
-    def test_every_attachment_shape_still_stores_a_real_url(self, env, shape):
+    def test_every_attachment_shape_still_stores_a_real_url(self, podcast_env, shape):
         """The control, per shape. A fix that dropped every url would pass the table
         above and break link posts from all six kinds of peer."""
-        post = _created(env, SHAPES[shape]('https://example.test/article'),
+        post = _created(podcast_env, SHAPES[shape]('https://example.test/article'),
                         slug='ok' + shape[:6])
 
         assert post.url == 'https://example.test/article'
 
-    def test_the_post_still_arrives_as_a_discussion(self, env):
+    def test_the_post_still_arrives_as_a_discussion(self, podcast_env):
         """A dropped url is not a dropped post: refusing the whole thing would hand
         peers a way to make this instance discard content. POST_TYPE_ARTICLE is what a
         post with no url is, so the type follows the data rather than being left at
         POST_TYPE_LINK with nothing to link to."""
-        post = _created(env, SHAPES['Link/href, Lemmy < 0.19.4'](HOSTILE), slug='kept')
+        post = _created(podcast_env, SHAPES['Link/href, Lemmy < 0.19.4'](HOSTILE), slug='kept')
 
         assert post is not None
         assert post.title == 'A link post'
         assert post.url is None
         assert post.type == POST_TYPE_ARTICLE
 
-    def test_a_real_link_post_is_still_typed_as_one(self, env):
-        post = _created(env, SHAPES['Link/href, Lemmy < 0.19.4']('https://example.test/a'),
+    def test_a_real_link_post_is_still_typed_as_one(self, podcast_env):
+        post = _created(podcast_env, SHAPES['Link/href, Lemmy < 0.19.4']('https://example.test/a'),
                         slug='link')
 
         assert post.type == POST_TYPE_LINK
 
-    def test_an_events_link_attachment_uses_the_same_rule(self, env):
+    def test_an_events_link_attachment_uses_the_same_rule(self, podcast_env):
         """`Post.new`'s Event branch has its OWN url write and its own guard, below the
         Page path's -- the comment there records that a Mobilizon event's link once had
         no check at all. The two must not diverge on which schemes they accept."""
         activity = {'id': f'https://{PEER}/activities/ev', 'type': 'Create',
-                    'actor': env.author.ap_profile_id,
+                    'actor': podcast_env.author.ap_profile_id,
                     'object': {'id': f'https://{PEER}/events/ev', 'type': 'Event',
                                'name': 'An event',
-                               'attributedTo': env.author.ap_profile_id,
-                               'audience': env.community.ap_profile_id,
+                               'attributedTo': podcast_env.author.ap_profile_id,
+                               'audience': podcast_env.community.ap_profile_id,
                                'startTime': '2050-01-01T00:00:00Z',
                                'attachment': [{'type': 'Link', 'href': HOSTILE}]}}
-        post = Post.new(env.author, env.community, activity)
+        post = Post.new(podcast_env.author, podcast_env.community, activity)
         db.session.commit()
 
         assert post.url is None
@@ -226,14 +225,14 @@ class TestIngestingANewPost:
 
 class TestUpdatingAPost:
     @pytest.fixture
-    def existing(self, env, redis_lock_only_double):
+    def existing(self, podcast_env, redis_lock_only_double):
         """A post that already holds a good url, so an Update carrying a hostile one has
         something to overwrite. That is the failure worth catching: the probe measured a
         stored `https://ok.example/x` being replaced."""
-        return _created(env, SHAPES['Link/href, Lemmy < 0.19.4']('https://ok.example/x'),
+        return _created(podcast_env, SHAPES['Link/href, Lemmy < 0.19.4']('https://ok.example/x'),
                         slug='upd')
 
-    def test_an_update_with_an_unsafe_url_keeps_the_stored_one(self, env, existing):
+    def test_an_update_with_an_unsafe_url_keeps_the_stored_one(self, podcast_env, existing):
         """R213, fixed (owner ruling): the guard used to set `new_url` to None, so
         the url-change arm ran and a peer could wipe a post's link by sending an
         Update naming a scheme this instance will not store. The hostile url is
@@ -247,7 +246,7 @@ class TestUpdatingAPost:
         assert existing.url == 'https://ok.example/x'
         assert existing.type != POST_TYPE_ARTICLE
 
-    def test_an_update_can_still_change_a_url(self, env, existing):
+    def test_an_update_can_still_change_a_url(self, podcast_env, existing):
         update_post_from_activity(existing, {'object': {
             'id': existing.ap_id, 'type': 'Page', 'name': 'A link post',
             'attachment': [{'type': 'Link', 'href': 'https://ok.example/other'}]}})
@@ -276,7 +275,7 @@ def test_the_templates_still_link_post_url_with_no_guard_of_their_own():
     assert found >= 9
 
 
-def test_a_dropped_url_is_not_federated_back_out(env):
+def test_a_dropped_url_is_not_federated_back_out(podcast_env):
     """`post_to_page` gates its outbound Link attachment on `post.url is not None`, so
     None means this instance does not relay a url it refused to store -- it would
     otherwise hand the hostile href to every peer that follows the community, which is
@@ -287,7 +286,7 @@ def test_a_dropped_url_is_not_federated_back_out(env):
     poll) fill it, so `'attachment' not in ...` would pass or fail for reasons that have
     nothing to do with the url. `''` rather than None would have federated
     `{"href": ""}`, which is why the guards write None."""
-    post = _created(env, SHAPES['Link/href, Lemmy < 0.19.4'](HOSTILE), slug='fed')
+    post = _created(podcast_env, SHAPES['Link/href, Lemmy < 0.19.4'](HOSTILE), slug='fed')
 
     page = post_to_page(post)
 
@@ -295,10 +294,10 @@ def test_a_dropped_url_is_not_federated_back_out(env):
     assert HOSTILE not in repr(page)
 
 
-def test_a_kept_url_still_federates_as_a_link_attachment(env):
+def test_a_kept_url_still_federates_as_a_link_attachment(podcast_env):
     """The control for the row above: the attachment is empty because the url was
     dropped, not because this instance stopped sending link attachments."""
-    post = _created(env, SHAPES['Link/href, Lemmy < 0.19.4']('https://ok.example/x'),
+    post = _created(podcast_env, SHAPES['Link/href, Lemmy < 0.19.4']('https://ok.example/x'),
                     slug='fedok')
 
     assert post_to_page(post)['attachment'] == [{'href': 'https://ok.example/x',

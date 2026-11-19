@@ -14,7 +14,7 @@ from app.storefront import acting_domain
 from app.utils import utcnow
 from tests.conftest import forget_login
 from tests.factories import a_keypair, inbox_activity, make_user
-from tests.three_domains import FIRST, ONION, SHOP, ap_get, peer, request_on, three_domains, two_domains, urls_in  # noqa: F401
+from tests.three_domains import FIRST, ONION, SHOP, ap_get, request_on, urls_in
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -29,7 +29,7 @@ def public_site(site):
 
 
 @pytest.fixture
-def shopnews(three_domains):  # noqa: F811
+def shopnews(three_domains):
     owner = three_domains.account('shopowner', three_domains.shop)
     feed = three_domains.local_feed('shopnews', three_domains.shop, owner)
     feed.private_key, feed.public_key = a_keypair()
@@ -131,11 +131,11 @@ def test_a_shop_feeds_collections_are_on_shop(app, three_domains, shopnews):
         assert ap_get(app, f'/f/shopnews/{path}', host=FIRST).status_code == 404
 
 
-def test_a_follow_of_a_shop_feed_is_accepted_as_shop(app, three_domains, shopnews, peer, monkeypatch):  # noqa: F811
+def test_a_follow_of_a_shop_feed_is_accepted_as_shop(app, three_domains, shopnews, three_domains_peer, monkeypatch):
     sends = []
     monkeypatch.setattr(ap_routes, 'send_post_request',
                         lambda uri, body, private_key, key_id, **kw: sends.append((uri, body, key_id)))
-    follower = make_user(peer, 'alice')
+    follower = make_user(three_domains_peer, 'alice')
     follower.ap_fetched_at = utcnow()
     db.session.commit()
 
@@ -150,15 +150,15 @@ def test_a_follow_of_a_shop_feed_is_accepted_as_shop(app, three_domains, shopnew
 
 
 @pytest.mark.parametrize('shop_owned', [True, False])
-def test_an_announce_of_an_add_is_on_the_feeds_domain(app, three_domains, peer, monkeypatch, shop_owned):  # noqa: F811
+def test_an_announce_of_an_add_is_on_the_feeds_domain(app, three_domains, three_domains_peer, monkeypatch, shop_owned):
     domain = three_domains.shop if shop_owned else three_domains.first
     base = SHOP_BASE if shop_owned else f'https://{FIRST}'
     owner = three_domains.account('feedowner', domain)
     feed = three_domains.local_feed('announcing', domain, owner)
     feed.private_key, feed.public_key = a_keypair()
     community = three_domains.local_community('somewhere', domain)
-    peer.inbox = f'https://{peer.domain}/inbox'
-    member = make_user(peer, 'bob')
+    three_domains_peer.inbox = f'https://{three_domains_peer.domain}/inbox'
+    member = make_user(three_domains_peer, 'bob')
     db.session.add(FeedMember(feed_id=feed.id, user_id=member.id))
     db.session.commit()
     sends = []
@@ -168,7 +168,7 @@ def test_an_announce_of_an_add_is_on_the_feeds_domain(app, three_domains, peer, 
     shared_feed.announce_feed_add_remove_to_subscribers('Add', feed.id, community.id)
 
     [(inbox, activity, _, key_id)] = sends
-    assert inbox == peer.inbox
+    assert inbox == three_domains_peer.inbox
     assert activity['id'].startswith(f'{base}/activities/announce/')
     assert activity['object']['id'].startswith(f'{base}/activities/feedadd/')
     assert activity['actor'] == activity['object']['actor'] == f'{base}/f/announcing'
@@ -238,13 +238,13 @@ def test_webfinger_does_not_answer_a_private_or_banned_shop_feed(app, three_doma
     assert ap_get(app, f'/.well-known/webfinger?resource=acct:~shopnews@{SHOP}', host=SHOP).status_code == 404
 
 
-def test_a_follow_of_a_shop_feed_arriving_on_the_first_domain_is_accepted_as_shop(app, three_domains, shopnews, peer,
-                                                                                   monkeypatch):  # noqa: F811
+def test_a_follow_of_a_shop_feed_arriving_on_the_first_domain_is_accepted_as_shop(app, three_domains, shopnews, three_domains_peer,
+                                                                                   monkeypatch):
     """The Accept is the feed's domain's whichever host the Follow came in on."""
     acting = []
     monkeypatch.setattr(ap_routes, 'send_post_request',
                         lambda uri, body, private_key, key_id, **kw: acting.append((acting_domain().domain, key_id)))
-    follower = make_user(peer, 'alice')
+    follower = make_user(three_domains_peer, 'alice')
     follower.ap_fetched_at = utcnow()
     db.session.commit()
     with request_on(app, three_domains.first):

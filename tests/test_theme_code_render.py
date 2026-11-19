@@ -12,9 +12,8 @@ from app import db
 from app.custom_themes import custom_identifier
 from app.models import Community, CustomTheme, CustomThemeTemplate
 from app.theme_code import last_failure
-from tests.test_branding_pages import branded, onion_branding, page  # noqa: F401  (branded is a fixture)
+from tests.test_branding_pages import onion_branding, page
 from tests.test_custom_themes_render import PIEFED_BODY, make_theme
-from tests.two_domains import two_domains  # noqa: F401  (a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
 

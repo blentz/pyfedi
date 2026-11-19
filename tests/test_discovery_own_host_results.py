@@ -10,7 +10,7 @@ from app.discovery import external_search
 from app.discovery.external_search import search_videos
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_user
-from tests.test_local_only_invisible import _post, world  # noqa: F401
+from tests.test_local_only_invisible import _post
 
 pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 
@@ -41,34 +41,34 @@ def listed(app, answer, hits, viewer=True):
         return [v['title'] for v in search_videos('cats', allow_nsfw=False)]
 
 
-def test_an_own_host_hit_naming_a_post_the_viewer_may_open_is_listed(app, world, answer):
-    post = _post(app, world.clearnet, world.bob)
+def test_an_own_host_hit_naming_a_post_the_viewer_may_open_is_listed(app, local_only_invisible_world, answer):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     server = app.config['SERVER_NAME']
 
     assert listed(app, answer, [hit(server, f'/post/{post.id}'), hit('tube.example', '/videos/watch/2', 2)]) == \
         ['Video 1', 'Video 2']
 
 
-def test_it_is_listed_even_when_its_url_is_the_posts_stored_one(app, world, answer):
-    post = _post(app, world.clearnet, world.bob)   # the helper stores ap_id as {SERVER_URL}/post/{id}
+def test_it_is_listed_even_when_its_url_is_the_posts_stored_one(app, local_only_invisible_world, answer):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)   # the helper stores ap_id as {SERVER_URL}/post/{id}
     assert post.ap_id.endswith(f'/post/{post.id}')
 
     assert listed(app, answer, [hit(app.config['SERVER_NAME'], f'/post/{post.id}')]) == ['Video 1']
 
 
-def test_an_own_host_hit_the_viewer_may_not_open_is_not_listed(app, world, answer):
-    post = _post(app, world.clearnet, world.bob)
+def test_an_own_host_hit_the_viewer_may_not_open_is_not_listed(app, local_only_invisible_world, answer):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     post.visibility = VISIBILITY_FOLLOWERS
     db.session.commit()
 
     assert listed(app, answer, [hit(app.config['SERVER_NAME'], f'/post/{post.id}')]) == []
 
 
-def test_an_own_host_hit_naming_no_post_is_not_listed(app, world, answer):
+def test_an_own_host_hit_naming_no_post_is_not_listed(app, local_only_invisible_world, answer):
     assert listed(app, answer, [hit(app.config['SERVER_NAME'], '/post/99999')]) == []
 
 
-def test_only_the_first_results_are_checked_so_the_service_cannot_make_us_run_a_query_per_hit(app, world, answer,
+def test_only_the_first_results_are_checked_so_the_service_cannot_make_us_run_a_query_per_hit(app, local_only_invisible_world, answer,
                                                                                                monkeypatch):
     checked = []
     real = external_search.hosted_post_for_viewer
@@ -81,8 +81,8 @@ def test_only_the_first_results_are_checked_so_the_service_cannot_make_us_run_a_
     assert len(checked) == external_search.RESULT_LIMIT
 
 
-def test_the_same_post_under_two_urls_is_listed_once(app, world, answer):
-    post = _post(app, world.clearnet, world.bob)
+def test_the_same_post_under_two_urls_is_listed_once(app, local_only_invisible_world, answer):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     server = app.config['SERVER_NAME']
 
     assert listed(app, answer, [hit(server, f'/post/{post.id}', 1),

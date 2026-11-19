@@ -23,7 +23,6 @@ from app.utils import accepted_media_ranges, is_activitypub_request
 from tests.factories import a_keypair, make_community, make_instance, make_site, make_user, signed_get_headers
 from tests.test_actor_profiles import _double_the_renderers, profile_get, seed_actors
 from tests.test_ap_security_entitlement import _requester_for
-from tests.test_main_front_page import env  # noqa: F401 -- the fixture
 
 AP = 'application/activity+json'
 LD_PLAIN = 'application/ld+json'
@@ -154,9 +153,9 @@ def test_the_instance_actor_and_its_outbox_follow_the_accept_header(app, db_sess
             assert client.get(path, headers={'Accept': AP}).content_type == AP
 
 
-def test_the_instance_application_follows_the_accept_header(env):
-    assert env.client.get('/', headers={'Accept': LD_PLAIN}).content_type == AS2_LD_MEDIA_TYPE
-    assert env.client.get('/', headers={'Accept': AP}).content_type == AP
+def test_the_instance_application_follows_the_accept_header(main_front_page_env):
+    assert main_front_page_env.client.get('/', headers={'Accept': LD_PLAIN}).content_type == AS2_LD_MEDIA_TYPE
+    assert main_front_page_env.client.get('/', headers={'Accept': AP}).content_type == AP
 
 
 def test_the_instance_application_is_cached_once_per_content_type(app):
@@ -224,8 +223,8 @@ def test_a_zero_q_activitypub_accept_is_not_refused_as_an_activitypub_request(ap
     assert response.status_code == 404
 
 
-def test_a_zero_q_activitypub_accept_gets_the_front_page(env):
-    response = env.client.get('/', headers={'Accept': f'{AP};q=0, text/html'})
+def test_a_zero_q_activitypub_accept_gets_the_front_page(main_front_page_env):
+    response = main_front_page_env.client.get('/', headers={'Accept': f'{AP};q=0, text/html'})
     assert response.status_code == 200
     assert response.content_type.startswith('text/html')
 

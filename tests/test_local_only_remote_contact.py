@@ -15,7 +15,6 @@ from app.models import ChatMessage, Conversation, UserFollower, utcnow
 from tests.conftest import forget_login
 from tests.factories import make_instance, make_user
 from tests.test_community_lifecycle import csrf, login
-from tests.test_local_only_invisible import world  # noqa: F401 -- world is a fixture
 from tests.test_per_domain_html_routes import Visitor
 from tests.two_domains import ONION
 
@@ -25,12 +24,12 @@ REFUSAL = 'Your account is not visible to other servers, so it cannot follow or 
 
 
 @pytest.fixture
-def scene(app, world):
-    for user in (world.alice, world.onionite):
+def scene(app, local_only_invisible_world):
+    for user in (local_only_invisible_world.alice, local_only_invisible_world.onionite):
         user.created = utcnow() - timedelta(days=365)   # old enough to be trusted and to send messages
-    world.remote = make_user(make_instance('remote.test'), 'faraway')
+    local_only_invisible_world.remote = make_user(make_instance('remote.test'), 'faraway')
     db.session.commit()
-    return world
+    return local_only_invisible_world
 
 
 def _client(app, user):

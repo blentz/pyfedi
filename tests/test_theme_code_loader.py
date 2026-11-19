@@ -8,7 +8,6 @@ from app.models import CustomThemeTemplate
 from app.theme_code import (ThemeCodeError, check_template_name, check_template_source, loader_name,
                             override_names)
 from tests.test_custom_themes import make_theme
-from tests.two_domains import two_domains  # noqa: F401  (a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
 

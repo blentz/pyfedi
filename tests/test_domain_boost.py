@@ -27,7 +27,7 @@ from app.storefront import (BOOST_WINDOW, OWN_DOMAIN_BOOST, SISTER_DOMAIN_BOOST,
 from app.utils import get_deduped_post_ids, post_ids_to_models
 from tests.factories import make_community, make_instance, make_post, make_user
 from tests.test_search_routes import _post, _reply
-from tests.two_domains import ONION, request_on, two_domains  # noqa: F401
+from tests.two_domains import ONION, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -46,7 +46,7 @@ def seed(community, author, title, **fields):
 
 
 @pytest.fixture
-def world(app, two_domains):  # noqa: F811
+def world(app, two_domains):
     """Posts by a first-domain account, an onion account and a remote one, all in the first domain's community, and a viewer on each
     domain. `put` seeds a post with exactly the ranking fields a test names."""
     first, onion = two_domains.domains
@@ -162,7 +162,7 @@ def test_the_api_lists_order_as_the_feeds_do(api, sort, function, extra):
 
 # ------------------------------------------------------------------------ community lists and search
 
-def test_a_community_list_puts_its_own_domains_community_first(app, two_domains):  # noqa: F811
+def test_a_community_list_puts_its_own_domains_community_first(app, two_domains):
     first, onion = two_domains.domains
     user = two_domains.local_user('lister', first)
     stamp = utcnow()
@@ -307,7 +307,7 @@ def test_the_merge_of_tiers_pages_as_the_naive_order_does(crowd, domain, rank, t
 
 # ------------------------------------------------------------------------ the web community list
 
-def test_the_community_list_puts_its_own_domains_community_first(app, two_domains):  # noqa: F811
+def test_the_community_list_puts_its_own_domains_community_first(app, two_domains):
     first, onion = two_domains.domains
     stamp = utcnow()
     for name, domain in (('a_onion', onion), ('b_first', first)):
@@ -363,7 +363,7 @@ def test_a_tie_on_every_key_does_not_cost_a_keyset_page_its_rows(tied, mixed, do
 # ------------------------------------------------------------------------ the route
 
 @pytest.mark.parametrize('domain', ['first', 'onion'])
-def test_the_communities_page_lists_its_own_domains_community_first(app, two_domains, domain):  # noqa: F811
+def test_the_communities_page_lists_its_own_domains_community_first(app, two_domains, domain):
     first, onion = two_domains.domains
     viewer = two_domains.local_user('reader', first if domain == 'first' else onion)
     stamp = utcnow()

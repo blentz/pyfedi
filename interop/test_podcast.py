@@ -15,11 +15,6 @@ NS = {'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd', 'podcast': 'https:
 
 
 @pytest.fixture(scope='module')
-def alice_web():
-    return PieFedWeb('alice', 'interop-alice-pw')
-
-
-@pytest.fixture(scope='module')
 def bob_follows_pod_media(mastodon):
     account = wait_for(lambda: mastodon.resolve_account('pod_media@piefed.test'))
     mastodon.follow(account['id'])

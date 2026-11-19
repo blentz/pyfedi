@@ -12,8 +12,8 @@ from app.models import ActivityPubLog, FeedMember, Relay
 from app.relays import RELAY_ACCEPTED, STYLE_MASTODON, inbound
 from app.utils import utcnow
 from tests.factories import inbox_activity, make_user
-from tests.test_onion_feeds_hidden import ONION_BASE, public_site, world  # noqa: F401 -- fixtures
-from tests.three_domains import FIRST, ONION, ap_get, peer, request_on, three_domains, two_domains  # noqa: F401
+from tests.test_onion_feeds_hidden import ONION_BASE, public_site
+from tests.three_domains import FIRST, ONION, ap_get, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -21,14 +21,14 @@ pytestmark = pytest.mark.usefixtures('site')
 # --- federation ---------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('target', ['onion', 'legacy'])
-def test_a_follow_of_an_onion_feed_gets_no_answer(app, world, peer, monkeypatch, target):  # noqa: F811
+def test_a_follow_of_an_onion_feed_gets_no_answer(app, onion_feeds_hidden_world, three_domains_peer, monkeypatch, target):
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     sends = []
     monkeypatch.setattr(ap_routes, 'send_post_request', lambda *args, **kwargs: sends.append(args))
-    follower = make_user(peer, 'alice')
+    follower = make_user(three_domains_peer, 'alice')
     follower.ap_fetched_at = utcnow()
     db.session.commit()
-    feed = world.onion_feed if target == 'onion' else world.legacy_feed
+    feed = onion_feeds_hidden_world.onion_feed if target == 'onion' else onion_feeds_hidden_world.legacy_feed
 
     process_inbox_request(inbox_activity(follower, activity_type='Follow', object_uri=feed.ap_profile_id), True)
 
@@ -39,11 +39,11 @@ def test_a_follow_of_an_onion_feed_gets_no_answer(app, world, peer, monkeypatch,
 
 
 @pytest.mark.parametrize('target', ['onion', 'legacy'])
-def test_an_onion_feed_is_never_announced(app, world, peer, monkeypatch, target):  # noqa: F811
-    feed = world.onion_feed if target == 'onion' else world.legacy_feed
-    community = world.d.local_community('somewhere', world.d.first)
-    peer.inbox = f'https://{peer.domain}/inbox'
-    db.session.add(FeedMember(feed_id=feed.id, user_id=make_user(peer, 'bob').id))
+def test_an_onion_feed_is_never_announced(app, onion_feeds_hidden_world, three_domains_peer, monkeypatch, target):
+    feed = onion_feeds_hidden_world.onion_feed if target == 'onion' else onion_feeds_hidden_world.legacy_feed
+    community = onion_feeds_hidden_world.d.local_community('somewhere', onion_feeds_hidden_world.d.first)
+    three_domains_peer.inbox = f'https://{three_domains_peer.domain}/inbox'
+    db.session.add(FeedMember(feed_id=feed.id, user_id=make_user(three_domains_peer, 'bob').id))
     db.session.commit()
     sends = []
     monkeypatch.setattr(shared_feed, 'send_post_request', lambda *args, **kwargs: sends.append(args))
@@ -54,7 +54,7 @@ def test_an_onion_feed_is_never_announced(app, world, peer, monkeypatch, target)
     assert sends == []
 
 
-def test_a_legacy_feed_of_an_onion_account_still_does_not_federate(app, world):
+def test_a_legacy_feed_of_an_onion_account_still_does_not_federate(app, onion_feeds_hidden_world):
     for path in ('/f/legacyfeed', '/f/legacyfeed/outbox', '/f/legacyfeed/following', '/f/legacyfeed/followers',
                  '/f/legacyfeed/moderators'):
         assert ap_get(app, path, host=FIRST).status_code == 404, path
@@ -62,20 +62,20 @@ def test_a_legacy_feed_of_an_onion_account_still_does_not_federate(app, world):
     assert listed == [f'https://{FIRST}/f/firstfeed']
 
 
-def test_a_url_of_ours_naming_an_onion_feed_names_nothing_off_the_onion(app, world):
+def test_a_url_of_ours_naming_an_onion_feed_names_nothing_off_the_onion(app, onion_feeds_hidden_world):
     """Task 2 review I1: `local_object_for_url` reads the database, so it is the rule's to answer for a hidden feed."""
-    urls = (f'https://{FIRST}/f/onionfeed@{ONION}', f'{ONION_BASE}/f/onionfeed', world.onion_feed.ap_profile_id,
+    urls = (f'https://{FIRST}/f/onionfeed@{ONION}', f'{ONION_BASE}/f/onionfeed', onion_feeds_hidden_world.onion_feed.ap_profile_id,
             f'https://{FIRST}/f/legacyfeed')
     for url in urls:
         assert local_object_for_url(url) is None, url   # outside a request: the default domain's storefront
-        with request_on(app, world.d.shop):
+        with request_on(app, onion_feeds_hidden_world.d.shop):
             assert local_object_for_url(url) is None, url
-    with request_on(app, world.d.onion):
-        assert local_object_for_url(f'{ONION_BASE}/f/onionfeed') == world.onion_feed
-    assert local_object_for_url(f'https://{FIRST}/f/firstfeed') == world.first_feed
+    with request_on(app, onion_feeds_hidden_world.d.onion):
+        assert local_object_for_url(f'{ONION_BASE}/f/onionfeed') == onion_feeds_hidden_world.onion_feed
+    assert local_object_for_url(f'https://{FIRST}/f/firstfeed') == onion_feeds_hidden_world.first_feed
 
 
-def test_a_relayed_onion_feed_url_is_ignored_as_one_nobody_holds(app, world, redis_double, monkeypatch):
+def test_a_relayed_onion_feed_url_is_ignored_as_one_nobody_holds(app, onion_feeds_hidden_world, redis_double, monkeypatch):
     """The relay caller of `local_object_for_url`, which runs off the onion: the hidden feed and a missing one are
     logged alike."""
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)

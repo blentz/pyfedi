@@ -13,7 +13,7 @@ from app.feed_domains import shown_community_count
 from app.local_only import hides_anything_here, shown_here
 from app.models import Feed, User
 from tests.factories import make_feed_item
-from tests.three_domains import FIRST, ONION, SHOP, request_on, three_domains, two_domains  # noqa: F401
+from tests.three_domains import FIRST, ONION, SHOP, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -71,7 +71,7 @@ def listed_again(feeds):
     return feeds
 
 
-def test_the_shown_community_count_of_a_list_is_one_query(app, three_domains):  # noqa: F811
+def test_the_shown_community_count_of_a_list_is_one_query(app, three_domains):
     feeds = listed(app, three_domains, 5)
     with request_on(app, three_domains.first):
         hides_anything_here()   # warm: the domain rows are cached
@@ -80,7 +80,7 @@ def test_the_shown_community_count_of_a_list_is_one_query(app, three_domains):  
     assert len(statements) <= 1
 
 
-def test_shown_here_over_a_menu_does_not_load_each_owner_alone(app, three_domains):  # noqa: F811
+def test_shown_here_over_a_menu_does_not_load_each_owner_alone(app, three_domains):
     feeds = listed(app, three_domains, 5)
     with request_on(app, three_domains.first):
         shown_here(feeds)   # warm: the domain rows are cached

@@ -49,14 +49,6 @@ def _getaddrinfo_without_the_network(host, *args, **kwargs):
 
 
 @pytest.fixture
-def wire(monkeypatch):
-    """Every outbound HTTP request, answered 202. `wire.calls` is what left the server."""
-    monkeypatch.setattr(socket, 'getaddrinfo', _getaddrinfo_without_the_network)
-    with respx.mock(assert_all_called=False) as router:
-        yield router.route().mock(return_value=httpx.Response(202, html='<html></html>'))
-
-
-@pytest.fixture
 def env(db_session):
     local = make_instance(SERVER, software='piefed')
     if db.session.query(SiteDomain).filter_by(is_default=True).first() is None:
@@ -99,9 +91,9 @@ def test_is_hosted_uri_names_every_domain_we_host_in_any_spelling(env):
 # -- post_request -----------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('inbox', HOSTED_INBOXES)
-def test_an_activity_for_a_hosted_inbox_is_never_posted(env, wire, inbox):
+def test_an_activity_for_a_hosted_inbox_is_never_posted(env, no_http_to_hosted_wire, inbox):
     post_request(inbox, _like(), env.hal.private_key, env.key_id)
-    assert wire.calls.call_count == 0
+    assert no_http_to_hosted_wire.calls.call_count == 0
     logs = _out_logs()
     assert [(log.result, log.exception_message) for log in logs] == [
         ('failure', f'hosted domain, not sent: {inbox}')]
@@ -109,13 +101,13 @@ def test_an_activity_for_a_hosted_inbox_is_never_posted(env, wire, inbox):
     assert db.session.query(SendQueue).count() == 0
 
 
-def test_an_activity_for_a_remote_inbox_is_sent(env, wire):
+def test_an_activity_for_a_remote_inbox_is_sent(env, no_http_to_hosted_wire):
     post_request(PEER_INBOX, _like(), env.hal.private_key, env.key_id)
-    assert [str(call.request.url) for call in wire.calls] == [PEER_INBOX]
+    assert [str(call.request.url) for call in no_http_to_hosted_wire.calls] == [PEER_INBOX]
     assert [log.result for log in _out_logs()] == ['success']
 
 
-def test_a_queued_retry_for_a_hosted_inbox_is_refused(env, wire, app, monkeypatch):
+def test_a_queued_retry_for_a_hosted_inbox_is_refused(env, no_http_to_hosted_wire, app, monkeypatch):
     db.session.add(SendQueue(destination=SHOP_INBOX, destination_domain='shop.example', actor=env.key_id,
                              private_key=env.hal.private_key, payload=json.dumps(_like()), retries=1,
                              retry_reason='', send_after=utcnow() - timedelta(days=1)))
@@ -125,7 +117,7 @@ def test_a_queued_retry_for_a_hosted_inbox_is_refused(env, wire, app, monkeypatc
     cli.register(app)
     result = app.test_cli_runner().invoke(args=['send-queue'])
     assert result.exception is None, result.exception
-    assert wire.calls.call_count == 0
+    assert no_http_to_hosted_wire.calls.call_count == 0
     assert [log.exception_message for log in _out_logs()] == [f'hosted domain, not sent: {SHOP_INBOX}']
     assert db.session.query(SendQueue).count() == 0   # sent once, refused, never queued again
 
@@ -135,52 +127,52 @@ def test_a_queued_retry_for_a_hosted_inbox_is_refused(env, wire, app, monkeypatc
 HOSTED_OBJECT = 'https://Shop.Example/post/1'
 
 
-def test_fetch_object_capped_of_a_hosted_object_is_a_miss_without_http(env, wire, caplog):
+def test_fetch_object_capped_of_a_hosted_object_is_a_miss_without_http(env, no_http_to_hosted_wire, caplog):
     with caplog.at_level(logging.INFO):
         assert fetch_object_capped(HOSTED_OBJECT) == (None, 'hosted domain')
-    assert wire.calls.call_count == 0
+    assert no_http_to_hosted_wire.calls.call_count == 0
     assert f'hosted domain, not fetched: {HOSTED_OBJECT}' in caplog.text
 
 
-def test_signed_get_request_of_a_hosted_object_is_a_miss_without_http(env, wire):
+def test_signed_get_request_of_a_hosted_object_is_a_miss_without_http(env, no_http_to_hosted_wire):
     response = signed_get_request(HOSTED_OBJECT, env.hal.private_key, env.key_id)
     assert response.status_code == HOSTED_FETCH_STATUS != 200
-    assert wire.calls.call_count == 0
+    assert no_http_to_hosted_wire.calls.call_count == 0
 
 
-def test_signed_get_capped_of_a_hosted_object_is_a_miss_without_http(env, wire):
+def test_signed_get_capped_of_a_hosted_object_is_a_miss_without_http(env, no_http_to_hosted_wire):
     assert signed_get_capped(HOSTED_OBJECT, env.hal.private_key, env.key_id, 1000) == (HOSTED_FETCH_STATUS, None)
-    assert wire.calls.call_count == 0
+    assert no_http_to_hosted_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('uri', EGRESS_SPELLINGS)
-def test_an_activitypub_get_of_any_spelling_of_a_hosted_host_is_a_miss_without_http(env, wire, uri):
+def test_an_activitypub_get_of_any_spelling_of_a_hosted_host_is_a_miss_without_http(env, no_http_to_hosted_wire, uri):
     assert get_request(uri, headers={'Accept': AP_FETCH_ACCEPT}).status_code == HOSTED_FETCH_STATUS
     assert fetch_object_capped(uri) == (None, 'hosted domain')
     assert signed_get_request(uri, env.hal.private_key, env.key_id).status_code == HOSTED_FETCH_STATUS
-    assert wire.calls.call_count == 0
+    assert no_http_to_hosted_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('accept', [AP_FETCH_ACCEPT, 'application/activity+json',
                                     'application/ld+json; profile="https://www.w3.org/ns/activitystreams"'])
-def test_an_activitypub_get_request_of_a_hosted_url_is_a_miss_without_http(env, wire, accept):
+def test_an_activitypub_get_request_of_a_hosted_url_is_a_miss_without_http(env, no_http_to_hosted_wire, accept):
     response = get_request(HOSTED_OBJECT, headers={'accept': accept})
     assert response.status_code == HOSTED_FETCH_STATUS
     assert get_request_capped(HOSTED_OBJECT, 1000, headers={'Accept': accept}) == (HOSTED_FETCH_STATUS, None)
-    assert wire.calls.call_count == 0
+    assert no_http_to_hosted_wire.calls.call_count == 0
 
 
-def test_an_html_get_request_of_a_hosted_url_still_goes_out(env, wire):
+def test_an_html_get_request_of_a_hosted_url_still_goes_out(env, no_http_to_hosted_wire):
     """A link preview or an image is an ordinary web fetch, not federation."""
     assert get_request(HOSTED_OBJECT).status_code == 202
     assert get_request(HOSTED_OBJECT, headers={'Accept': 'text/html'}).status_code == 202
     assert get_request_capped(HOSTED_OBJECT, 1000)[0] == 202
-    assert wire.calls.call_count == 3
+    assert no_http_to_hosted_wire.calls.call_count == 3
 
 
-def test_an_activitypub_get_of_a_remote_url_still_goes_out(env, wire):
+def test_an_activitypub_get_of_a_remote_url_still_goes_out(env, no_http_to_hosted_wire):
     assert get_request('https://peer.example/post/1', headers={'Accept': AP_FETCH_ACCEPT}).status_code == 202
-    assert wire.calls.call_count == 1
+    assert no_http_to_hosted_wire.calls.call_count == 1
 
 
 # -- discovery documents, whatever the Accept (review fix round 1, ruling 2) ------------------------------------------
@@ -195,18 +187,18 @@ DISCOVERY_URLS = ['https://shop.example/.well-known/webfinger?resource=acct:alic
 
 @pytest.mark.parametrize('uri', DISCOVERY_URLS)
 @pytest.mark.parametrize('headers', [None, {'Accept': 'application/jrd+json'}, {'Accept': 'application/json'}])
-def test_a_discovery_document_on_a_hosted_host_is_never_fetched(env, wire, uri, headers):
+def test_a_discovery_document_on_a_hosted_host_is_never_fetched(env, no_http_to_hosted_wire, uri, headers):
     assert get_request(uri, headers=dict(headers) if headers else None).status_code == HOSTED_FETCH_STATUS
     assert get_request_capped(uri, 1000, headers=headers) == (HOSTED_FETCH_STATUS, None)
-    assert wire.calls.call_count == 0
+    assert no_http_to_hosted_wire.calls.call_count == 0
 
 
-def test_other_paths_and_remote_discovery_still_go_out(env, wire):
+def test_other_paths_and_remote_discovery_still_go_out(env, no_http_to_hosted_wire):
     assert get_request('https://shop.example/.well-known/security.txt').status_code == 202
     assert get_request('https://shop.example/nodeinfox').status_code == 202
     assert get_request_capped('https://peer.example/.well-known/webfinger?resource=acct:a@peer.example', 1000)[0] \
         == 202
-    assert wire.calls.call_count == 3
+    assert no_http_to_hosted_wire.calls.call_count == 3
 
 
 def test_a_webfinger_self_link_on_a_hosted_host_is_never_fetched(env, monkeypatch):
@@ -217,14 +209,14 @@ def test_a_webfinger_self_link_on_a_hosted_host_is_never_fetched(env, monkeypatc
     assert not webfinger_self_link_allowed('https://shop.example/u/alice', 'alice', 'shop.example')
 
 
-def test_a_uri_urlsplit_refuses_is_still_an_httpx_error(env, wire, app, monkeypatch):
+def test_a_uri_urlsplit_refuses_is_still_an_httpx_error(env, no_http_to_hosted_wire, app, monkeypatch):
     """The guard reads the path before get_request's own validation: a URI httpx cannot parse is left to it."""
     monkeypatch.setitem(app.config, 'DEBUG', False)
     for fetch in (lambda uri: get_request(uri), lambda uri: get_request_capped(uri, 1000)):
         for uri in ('https://[shop.example/.well-known/webfinger', 'https://shop.example:abc/.well-known/webfinger'):
             with pytest.raises(httpx.HTTPError):
                 fetch(uri)
-    assert wire.calls.call_count == 0
+    assert no_http_to_hosted_wire.calls.call_count == 0
 
 
 # -- the piefed_notifs path (review M2) -------------------------------------------------------------------------------

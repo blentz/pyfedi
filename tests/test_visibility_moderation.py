@@ -16,29 +16,6 @@ from tests.factories import (
 from tests.test_visibility_single_object import client_as
 
 
-@pytest.fixture
-def world(app, db_session, monkeypatch):
-    w = make_visibility_world()
-    site = db.session.get(Site, 1)
-    site.private_instance = False
-    g.admin_ids = []
-    g.site = site
-    monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
-    db.session.add(Language(code='und', name='Undetermined'))
-    db.session.add(Language(code='en', name='English'))
-    db.session.commit()
-    site.language_id = Language.query.filter_by(code='en').one().id
-    w.admin = make_user(w.stranger.instance, 'ada', local=True)
-    w.admin.private_key = 'a local account with keys'
-    db.session.commit()
-    role = grant_permission(w.admin, 'moderate all communities')
-    role.built_in = True  # the built-in Admin role (RB16): the web removal routes act only for an admin
-    db.session.commit()
-    w.stranger.private_key = 'a local account with keys'
-    db.session.commit()
-    return w
-
-
 def removed(model, id_):
     db.session.expire_all()
     return db.session.get(model, id_).deleted
@@ -50,16 +27,16 @@ def web(app, user, url, data):
         return send(app, user, 'post', url, data)
 
 
-def test_admin_removes_a_followers_only_post_on_the_web(app, world):
-    w = world
+def test_admin_removes_a_followers_only_post_on_the_web(app, visibility_moderation_world):
+    w = visibility_moderation_world
     assert web(app, w.stranger, f'/post/{w.post.id}/delete', {'reason': 'spam'}).status_code == 404
     assert not removed(Post, w.post.id)
     web(app, w.admin, f'/post/{w.post.id}/delete', {'reason': 'spam'})
     assert removed(Post, w.post.id)
 
 
-def test_admin_removes_a_followers_only_reply_on_the_web(app, world):
-    w = world
+def test_admin_removes_a_followers_only_reply_on_the_web(app, visibility_moderation_world):
+    w = visibility_moderation_world
     url = f'/post/{w.public_post.id}/comment/{w.reply.id}/delete'
     assert web(app, w.stranger, url, {'reason': 'spam'}).status_code == 404
     assert not removed(PostReply, w.reply.id)
@@ -67,8 +44,8 @@ def test_admin_removes_a_followers_only_reply_on_the_web(app, world):
     assert removed(PostReply, w.reply.id)
 
 
-def test_admin_still_cannot_view_the_post(app, world):
-    w = world
+def test_admin_still_cannot_view_the_post(app, visibility_moderation_world):
+    w = visibility_moderation_world
     assert client_as(app, w.admin).get(f'/post/{w.post.id}').status_code == 404
 
 
@@ -76,8 +53,8 @@ def test_admin_still_cannot_view_the_post(app, world):
     ('/api/alpha/post/remove', 'post_id', {'removed': True}, Post, 'post'),
     ('/api/alpha/comment/remove', 'comment_id', {'removed': True}, PostReply, 'reply'),
 ])
-def test_api_removal(app, world, path, key, data, model, attr):
-    w = world
+def test_api_removal(app, visibility_moderation_world, path, key, data, model, attr):
+    w = visibility_moderation_world
     target = getattr(w, attr)
     body = {key: target.id, **data}
     with patch('app.shared.post.task_selector'), patch('app.shared.reply.task_selector'):
@@ -90,8 +67,8 @@ def test_api_removal(app, world, path, key, data, model, attr):
     assert 'secret' not in admin.get_data(as_text=True)
 
 
-def test_purge_list_stubs_a_followers_only_post(app, world):
-    w = world
+def test_purge_list_stubs_a_followers_only_post(app, visibility_moderation_world):
+    w = visibility_moderation_world
     image = File(source_url='https://m.example/i.png', file_path='i.png', hash='0' * 256)
     db.session.add(image)
     db.session.commit()
@@ -109,9 +86,9 @@ def test_purge_list_stubs_a_followers_only_post(app, world):
     assert 'Open Title' in html
 
 
-def test_purge_list_renders_a_post_whose_only_match_is_in_its_gallery(app, world):
+def test_purge_list_renders_a_post_whose_only_match_is_in_its_gallery(app, visibility_moderation_world):
     """A link post can match through a post_file row alone; it has no post.image to show."""
-    w = world
+    w = visibility_moderation_world
     w.public_post.image_id = None
     w.public_post.title = 'Gallery Only'
     db.session.commit()
@@ -122,8 +99,8 @@ def test_purge_list_renders_a_post_whose_only_match_is_in_its_gallery(app, world
     assert f'value="{w.public_post.id}"' in html and 'Gallery Only' in html
 
 
-def test_purge_list_shows_no_image_of_a_followers_only_post(app, world):
-    w = world
+def test_purge_list_shows_no_image_of_a_followers_only_post(app, visibility_moderation_world):
+    w = visibility_moderation_world
     image = File(source_url='https://m.example/secret-album-cover.png', file_path='c.png', hash='0' * 256)
     db.session.add(image)
     db.session.commit()
@@ -137,8 +114,8 @@ def test_purge_list_shows_no_image_of_a_followers_only_post(app, world):
     assert 'Secret Album' not in html and 'alice' not in html
 
 
-def test_remove_ack_for_a_reply_on_a_followers_only_post_leaks_nothing(app, world):
-    w = world
+def test_remove_ack_for_a_reply_on_a_followers_only_post_leaks_nothing(app, visibility_moderation_world):
+    w = visibility_moderation_world
     w.post.title = 'Parent Secret Title'
     w.post.body = 'parent secret body'
     reply = make_post_reply(w.post, w.author, 'reply secret body')
@@ -157,8 +134,8 @@ def test_remove_ack_for_a_reply_on_a_followers_only_post_leaks_nothing(app, worl
     assert response.get_json()['comment_view']['comment']['user_id'] == 0
 
 
-def test_post_remove_ack_has_no_author_identity(app, world):
-    w = world
+def test_post_remove_ack_has_no_author_identity(app, visibility_moderation_world):
+    w = visibility_moderation_world
     with patch('app.shared.post.task_selector'):
         response = app.test_client().post('/api/alpha/post/remove', json={'post_id': w.post.id, 'removed': True},
                                           headers={'Authorization': bearer(w.admin)})
@@ -167,8 +144,8 @@ def test_post_remove_ack_has_no_author_identity(app, world):
     assert str(w.author.id) != '0' and 'alice' not in response.get_data(as_text=True)
 
 
-def test_delete_confirmation_page_does_not_name_the_hidden_post(app, world):
-    w = world
+def test_delete_confirmation_page_does_not_name_the_hidden_post(app, visibility_moderation_world):
+    w = visibility_moderation_world
     w.post.title = 'Hidden Title'
     db.session.commit()
     html = client_as(app, w.admin).get(f'/post/{w.post.id}/delete').get_data(as_text=True)
@@ -176,8 +153,8 @@ def test_delete_confirmation_page_does_not_name_the_hidden_post(app, world):
     assert 'Are you sure you want to delete this post?' in html
 
 
-def test_the_modlog_does_not_name_removed_followers_only_content(app, world):
-    w = world
+def test_the_modlog_does_not_name_removed_followers_only_content(app, visibility_moderation_world):
+    w = visibility_moderation_world
     w.post.title = 'Modlog Secret Title'
     w.reply.body = 'modlog secret reply'
     db.session.commit()

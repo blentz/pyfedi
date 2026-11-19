@@ -22,8 +22,7 @@ from app.nntp.nntpserver import NNTPAuthenticationError
 from app.nntp.server import PieFedNNTPConnectionHandler, PieFedNNTPServer
 from app.utils import log_login_failure
 from tests.test_login_failure_log import CLEARNET, clearnet_login, failures, only_failure
-from tests.test_onion_guard_limits import (LOGIN, PASSWORD, a_session, alice, limited_app, directory, ldap_off, login_form, onion,  # noqa: F401
-                                           onion_get, onion_post, proof_given)
+from tests.test_onion_guard_limits import LOGIN, PASSWORD, a_session, login_form, onion_get, onion_post, proof_given
 
 pytestmark = pytest.mark.usefixtures('oauth_providers_configured')
 
@@ -73,29 +72,29 @@ def test_the_connection_handler_records_its_peer_for_the_login(app):
 
 @pytest.mark.parametrize('typed, password', [('ghost', PASSWORD), ('alice', 'a wrong password'),
                                              ('ali\x00ce', PASSWORD)], ids=['unknown', 'wrong-password', 'nul'])
-def test_a_failed_nntp_credential_check_logs_its_peer(app, alice, peer, caplog, typed, password):
+def test_a_failed_nntp_credential_check_logs_its_peer(app, onion_guard_limits_alice, peer, caplog, typed, password):
     with pytest.raises(NNTPAuthenticationError, match='Invalid username or password'):
         nntp_login(app, typed, password)
     only_failure(caplog, peer)
 
 
-def test_a_failed_nntp_check_with_no_peer_recorded_logs_invalid(app, alice, caplog):
+def test_a_failed_nntp_check_with_no_peer_recorded_logs_invalid(app, onion_guard_limits_alice, caplog):
     with pytest.raises(NNTPAuthenticationError):
         nntp_login(app, 'alice', 'a wrong password')
     only_failure(caplog, 'invalid')
 
 
 @pytest.mark.parametrize('banned, verified', [(True, True), (False, False)], ids=['banned', 'unverified'])
-def test_an_nntp_account_refused_with_the_right_password_logs_nothing(app, alice, peer, caplog, banned, verified):
-    alice.banned = banned
-    alice.verified = verified
+def test_an_nntp_account_refused_with_the_right_password_logs_nothing(app, onion_guard_limits_alice, peer, caplog, banned, verified):
+    onion_guard_limits_alice.banned = banned
+    onion_guard_limits_alice.verified = verified
     db.session.commit()
     with pytest.raises(NNTPAuthenticationError):
         nntp_login(app, 'alice@abc.onion', PASSWORD)
     assert failures(caplog) == []
 
 
-def test_an_accepted_nntp_login_logs_nothing(app, alice, peer, caplog):
+def test_an_accepted_nntp_login_logs_nothing(app, onion_guard_limits_alice, peer, caplog):
     assert nntp_login(app, 'alice@abc.onion', PASSWORD).startswith(b'Bearer ')
     assert failures(caplog) == []
 
@@ -105,12 +104,12 @@ def test_an_accepted_nntp_login_logs_nothing(app, alice, peer, caplog):
 # --------------------------------------------------------------------------
 
 @pytest.fixture
-def oauth_site(app, alice):
+def oauth_site(app, onion_guard_limits_alice):
     site = db.session.get(Site, 1)
     site.registration_mode = 'Open'
     site.application_question = ''
     db.session.commit()
-    return alice
+    return onion_guard_limits_alice
 
 
 def google_callback(app, **user_info):
@@ -160,14 +159,14 @@ def test_an_oauth_refusal_after_the_provider_accepted_logs_nothing(app, oauth_si
 # LDAP: a bind that worked is not a failed check, whatever this instance then says
 # --------------------------------------------------------------------------
 
-def test_a_banned_account_the_directory_accepted_logs_nothing(app, alice, directory, caplog):
-    alice.banned = True
+def test_a_banned_account_the_directory_accepted_logs_nothing(app, onion_guard_limits_alice, directory, caplog):
+    onion_guard_limits_alice.banned = True
     db.session.commit()
     assert clearnet_login(app, 'alice@abc.onion', PASSWORD).headers['Location'].endswith('/auth/login')
     assert failures(caplog) == []
 
 
-def test_a_directory_name_that_cannot_be_local_logs_nothing(app, alice, directory, caplog):
+def test_a_directory_name_that_cannot_be_local_logs_nothing(app, onion_guard_limits_alice, directory, caplog):
     assert clearnet_login(app, 'not/a name', PASSWORD).headers['Location'].endswith('/auth/login')
     assert failures(caplog) == []
 
@@ -190,7 +189,7 @@ def test_a_register_get_logs_nothing(app, db_session, caplog):
     assert not event_lines(caplog, 'auth: register attempt')
 
 
-def test_a_register_post_by_a_signed_in_user_still_logs(app, alice, ldap_off, caplog):
+def test_a_register_post_by_a_signed_in_user_still_logs(app, onion_guard_limits_alice, ldap_off, caplog):
     client = app.test_client()
     client.post('/auth/login', data={'user_name': 'alice@abc.onion', 'password': PASSWORD, **LOGIN},
                 environ_base=CLEARNET)
@@ -199,7 +198,7 @@ def test_a_register_post_by_a_signed_in_user_still_logs(app, alice, ldap_off, ca
     assert event_lines(caplog, 'auth: register attempt') == ['auth: register attempt ip=203.0.113.9']
 
 
-def test_onion_requests_write_no_fail2ban_line(app, onion, caplog):
+def test_onion_requests_write_no_fail2ban_line(app, onion_guard_limits_onion, caplog):
     client = app.test_client()
     a_session(client)   # session first, or the guard answers before the route runs
     onion_post(client, '/auth/register', data={})
@@ -215,8 +214,8 @@ def test_a_register_post_logs_only_when_not_page_initiated(app, db_session, capl
     assert bool(event_lines(caplog, 'auth: register attempt')) is logged
 
 
-def test_a_register_post_refused_429_by_the_limiter_is_still_logged(limited_app, db_session, caplog):
-    client = limited_app.test_client()
+def test_a_register_post_refused_429_by_the_limiter_is_still_logged(onion_guard_limits_limited_app, db_session, caplog):
+    client = onion_guard_limits_limited_app.test_client()
     limiter.reset()
     limiter.enabled = True
     try:

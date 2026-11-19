@@ -9,7 +9,6 @@ import app.activitypub.actor as actor_module
 import app.activitypub.util as ap_util
 from app import db
 from app.activitypub.util import find_actor_or_create
-from tests.test_local_only_invisible import world  # noqa: F401 -- world is a fixture
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -29,10 +28,10 @@ def requests(monkeypatch):
 
 
 @pytest.fixture
-def stored(app, world):
-    world.alice.ap_profile_id = f"https://{app.config['SERVER_NAME']}/u/alice"   # as finalize_user_setup stores it
+def stored(app, local_only_invisible_world):
+    local_only_invisible_world.alice.ap_profile_id = f"https://{app.config['SERVER_NAME']}/u/alice"   # as finalize_user_setup stores it
     db.session.commit()
-    return world
+    return local_only_invisible_world
 
 
 @pytest.mark.parametrize('actor, expected, kwargs', [

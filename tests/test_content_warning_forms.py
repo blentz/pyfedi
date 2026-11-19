@@ -5,7 +5,7 @@ import re
 import pytest
 
 from app import db
-from tests.test_post_replies import a_reply, env  # noqa: F401  (env is a fixture)
+from tests.test_post_replies import a_reply
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -32,8 +32,8 @@ def warned(post, comment):
     db.session.commit()
 
 
-def test_the_reply_form_collapses_a_warned_post_and_comment(app, env):
-    client, community, post, mod, author, outsider = env
+def test_the_reply_form_collapses_a_warned_post_and_comment(app, post_replies_env):
+    client, community, post, mod, author, outsider = post_replies_env
     reply = a_reply(post, author)
     warned(post, reply)
 
@@ -43,8 +43,8 @@ def test_the_reply_form_collapses_a_warned_post_and_comment(app, env):
     assert re.search(r'<summary>\s*comment warning\s*</summary>', collapsed(html, 'the comment body'))
 
 
-def test_the_reply_form_does_not_collapse_without_a_warning(app, env):
-    client, community, post, mod, author, outsider = env
+def test_the_reply_form_does_not_collapse_without_a_warning(app, post_replies_env):
+    client, community, post, mod, author, outsider = post_replies_env
     reply = a_reply(post, author)
     warned(post, reply)
     post.content_warning = reply.content_warning = None
@@ -56,8 +56,8 @@ def test_the_reply_form_does_not_collapse_without_a_warning(app, env):
     assert 'content_warning' not in html
 
 
-def test_the_comment_edit_form_collapses_a_warned_post_and_parent(app, env):
-    client, community, post, mod, author, outsider = env
+def test_the_comment_edit_form_collapses_a_warned_post_and_parent(app, post_replies_env):
+    client, community, post, mod, author, outsider = post_replies_env
     parent = a_reply(post, author)
     child = a_reply(post, author, body='the edited one', parent_id=parent.id)
     warned(post, parent)

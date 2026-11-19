@@ -17,7 +17,7 @@ from app import db
 from app.local_names import stored_name_id, target_href, target_link
 from app.models import Community, User
 from tests.factories import make_instance, make_user
-from tests.two_domains import default_request, onion_request, two_domains  # noqa: F401  (the fixture)
+from tests.two_domains import default_request, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 

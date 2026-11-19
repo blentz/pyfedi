@@ -13,7 +13,7 @@ from app import cache, db
 from app.branding import Branding, branding_for, current_branding, own_branding
 from app.models import DomainBranding, SiteDomain
 from app.storefront import clear_domain_cache
-from tests.two_domains import default_request, onion_request, two_domains  # noqa: F401  (a fixture)
+from tests.two_domains import default_request, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 

@@ -140,15 +140,6 @@ def media_is_clean():
         os.unlink(path)
 
 
-@pytest.fixture
-def admin_client(app, db_session):
-    instance, ordinary = _seed()
-    admin = _settings_admin(instance)
-    client = app.test_client()
-    login(client, admin)
-    return client, csrf(app, client)
-
-
 def _existing_logo():
     """A site that already has a logo: five files on disk, five columns and two
     settings pointing at them. This is the state P1 destroyed."""
@@ -191,7 +182,7 @@ def test_the_site_profile_needs_the_settings_permission(app, db_session):
 # --------------------------------------------------------------------------
 
 
-def test_an_undecodable_upload_leaves_the_existing_logo_alone(admin_client,
+def test_an_undecodable_upload_leaves_the_existing_logo_alone(admin_site_profile_admin_client,
                                                               media_is_clean):
     """P1's pin, inverted -- the round's durable artefact.
 
@@ -209,7 +200,7 @@ def test_an_undecodable_upload_leaves_the_existing_logo_alone(admin_client,
     Both halves are asserted: the files and the row. Either alone would pass
     against a fix that kept the files but cleared the columns.
     """
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
     site = _existing_logo()
     previous = {column: getattr(site, column)
                 for column in ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16')}
@@ -230,10 +221,10 @@ def test_an_undecodable_upload_leaves_the_existing_logo_alone(admin_client,
 
 
 def test_an_undecodable_upload_does_not_leave_its_bytes_in_the_media_root(
-        admin_client, media_is_clean):
+        admin_site_profile_admin_client, media_is_clean):
     """`app/static/media` is SERVED. An upload the route refuses must not stay
     there -- nothing else ever removes it, so every attempt would accumulate."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     response, _ = _post(client, token,
                         icon=(io.BytesIO(b'not an image'), 'evil.png'))
@@ -242,14 +233,14 @@ def test_an_undecodable_upload_does_not_leave_its_bytes_in_the_media_root(
     assert glob.glob(f'{MEDIA}/logo_*') == []
 
 
-def test_a_good_upload_does_remove_the_superseded_files(admin_client,
+def test_a_good_upload_does_remove_the_superseded_files(admin_site_profile_admin_client,
                                                         media_is_clean):
     """The other half of P1, and the one that keeps the fix honest: deferring
     the deletion must not turn into never deleting. A row asserting only that
     the old files survive a FAILED upload is satisfied by deleting nothing at
     all, which would leak a set of files on every logo change.
     """
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
     _existing_logo()
 
     response, _ = _post(client, token, icon=(io.BytesIO(_png(200, 200)), 'new.png'))
@@ -265,7 +256,7 @@ def test_a_good_upload_does_remove_the_superseded_files(admin_client,
 # --------------------------------------------------------------------------
 
 
-def test_an_uppercase_svg_is_stored_as_an_svg(admin_client, media_is_clean):
+def test_an_uppercase_svg_is_stored_as_an_svg(admin_site_profile_admin_client, media_is_clean):
     """P2's pin, inverted.
 
     `allowed_extensions` is checked with `.lower()` and the form's FileAllowed
@@ -279,7 +270,7 @@ def test_an_uppercase_svg_is_stored_as_an_svg(admin_client, media_is_clean):
     Asserted the same way as the lowercase control below, so the two cases are
     demonstrably one behaviour rather than two similar ones.
     """
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
     _existing_logo()
 
     response, _ = _post(client, token, icon=(io.BytesIO(SVG), 'LOGO.SVG'))
@@ -295,9 +286,9 @@ def test_an_uppercase_svg_is_stored_as_an_svg(admin_client, media_is_clean):
     assert (site.logo_180, site.logo_152, site.logo_32, site.logo_16) == ('', '', '', '')
 
 
-def test_a_lowercase_svg_is_stored_the_same_way(admin_client, media_is_clean):
+def test_a_lowercase_svg_is_stored_the_same_way(admin_site_profile_admin_client, media_is_clean):
     """The control for the row above."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
     _existing_logo()
 
     response, _ = _post(client, token, icon=(io.BytesIO(SVG), 'logo.svg'))
@@ -310,13 +301,13 @@ def test_a_lowercase_svg_is_stored_the_same_way(admin_client, media_is_clean):
     assert (site.logo_180, site.logo_152, site.logo_32, site.logo_16) == ('', '', '', '')
 
 
-def test_an_svg_upload_clears_the_pwa_logo_settings(admin_client, media_is_clean):
+def test_an_svg_upload_clears_the_pwa_logo_settings(admin_site_profile_admin_client, media_is_clean):
     """The SVG branch sets logo_512 and logo_192 to '' rather than leaving the
     previous PNG paths, which would have the manifest pointing at files the
     same request deleted."""
     from app.utils import get_setting
 
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
     _existing_logo()
 
     _post(client, token, icon=(io.BytesIO(SVG), 'logo.svg'))
@@ -325,12 +316,12 @@ def test_an_svg_upload_clears_the_pwa_logo_settings(admin_client, media_is_clean
     assert get_setting('logo_192', 'unset') == ''
 
 
-def test_an_svg_that_cannot_be_sanitized_is_refused(admin_client, media_is_clean):
+def test_an_svg_that_cannot_be_sanitized_is_refused(admin_site_profile_admin_client, media_is_clean):
     """sanitize_svg() destroys the file before returning False, and the route
     turns that into a 400. The SVG branch stores the file AS UPLOADED -- no
     Pillow re-encode -- and serves it from this origin on every page, so the
     refusal is the only thing between a hostile document and every visitor."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     response, _ = _post(client, token, icon=(io.BytesIO(HOSTILE_SVG), 'hostile.svg'))
 
@@ -347,7 +338,7 @@ def test_an_svg_that_cannot_be_sanitized_is_refused(admin_client, media_is_clean
 
 @pytest.mark.parametrize('filename', ['hostile.svg', 'HOSTILE.SVG'])
 def test_an_svg_that_cannot_be_sanitized_is_refused_in_either_case(
-        admin_client, media_is_clean, filename):
+        admin_site_profile_admin_client, media_is_clean, filename):
     """The sanitize guard is case-INSENSITIVE and must stay that way.
 
     Slice B made the branch predicate case-insensitive so that `.SVG` is stored
@@ -357,7 +348,7 @@ def test_an_svg_that_cannot_be_sanitized_is_refused_in_either_case(
     served from this origin on every page. The mutation pass found exactly that
     -- the case-sensitive sanitize guard survived every row until this one.
     """
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     response, _ = _post(client, token,
                         icon=(io.BytesIO(HOSTILE_SVG), filename))
@@ -368,13 +359,13 @@ def test_an_svg_that_cannot_be_sanitized_is_refused_in_either_case(
     assert db.session.get(Site, 1).logo in (None, '')
 
 
-def test_a_large_png_is_thumbnailed_to_every_size(admin_client, media_is_clean):
+def test_a_large_png_is_thumbnailed_to_every_size(admin_site_profile_admin_client, media_is_clean):
     """`if img.width > 100` -- the large arm. Six derivatives are written and
     the original is deleted; each size is asserted, because a single
     `site.logo` assertion passes while five thumbnails are missing."""
     from app.utils import get_setting
 
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     response, _ = _post(client, token, icon=(io.BytesIO(_png(400, 400)), 'big.png'))
 
@@ -401,7 +392,7 @@ def test_a_large_png_is_thumbnailed_to_every_size(admin_client, media_is_clean):
     assert glob.glob(f'{MEDIA}/big.png') == []
 
 
-def test_a_small_png_is_stored_without_being_scaled_up(admin_client, media_is_clean):
+def test_a_small_png_is_stored_without_being_scaled_up(admin_site_profile_admin_client, media_is_clean):
     """`else:` -- the small arm, and P3's pin.
 
     A source at or under 100px is saved as-is under `<base>.png` rather than
@@ -416,7 +407,7 @@ def test_a_small_png_is_stored_without_being_scaled_up(admin_client, media_is_cl
     The existence assertion is the point; the size assertion only says the
     image was not scaled up.
     """
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     response, _ = _post(client, token, icon=(io.BytesIO(_png(64, 64)), 'small.png'))
 
@@ -433,14 +424,14 @@ def test_a_small_png_is_stored_without_being_scaled_up(admin_client, media_is_cl
 
 
 def test_a_small_upload_in_another_format_still_removes_the_original(
-        admin_client, media_is_clean):
+        admin_site_profile_admin_client, media_is_clean):
     """The other half of P3: `delete_original` must not become "never delete".
 
     A small WEBP is converted to `<base>.png`, so `<base>.webp` is a different
     file and is still removed -- otherwise every non-PNG logo upload would
     leave its source in the served media root forever.
     """
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
     buffer = io.BytesIO()
     Image.new('RGB', (64, 64), (1, 2, 3)).save(buffer, format='WEBP')
 
@@ -454,11 +445,11 @@ def test_a_small_upload_in_another_format_still_removes_the_original(
     assert glob.glob(f'{MEDIA}/logo_*.webp') == []
 
 
-def test_a_png_of_exactly_100_pixels_takes_the_small_arm(admin_client,
+def test_a_png_of_exactly_100_pixels_takes_the_small_arm(admin_site_profile_admin_client,
                                                          media_is_clean):
     """`> 100`, not `>= 100`. The boundary, because the two arms write
     different filenames and nothing else would tell the operators apart."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     _post(client, token, icon=(io.BytesIO(_png(100, 100)), 'edge.png'))
 
@@ -466,13 +457,13 @@ def test_a_png_of_exactly_100_pixels_takes_the_small_arm(admin_client,
     assert not db.session.get(Site, 1).logo.endswith('_100.png')
 
 
-def test_a_disallowed_extension_is_refused_by_the_form(admin_client,
+def test_a_disallowed_extension_is_refused_by_the_form(admin_site_profile_admin_client,
                                                        media_is_clean):
     """The FIRST of the two layers. `SiteProfileForm.icon` carries
     `FileAllowed(['jpg', 'jpeg', 'png', 'webp', 'svg'])`, so a disallowed
     extension never reaches the route at all -- the form refuses it and the
     page comes back with a field error, not a 400."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     response, render = _post(client, token,
                              icon=(io.BytesIO(_png(50, 50)), 'payload.php'))
@@ -528,12 +519,12 @@ def test_the_routes_own_extension_check_still_refuses_what_the_form_would_let_by
     assert glob.glob(f'{MEDIA}/logo_*') == []
 
 
-def test_an_empty_icon_field_leaves_the_logo_untouched(admin_client,
+def test_an_empty_icon_field_leaves_the_logo_untouched(admin_site_profile_admin_client,
                                                        media_is_clean):
     """`if uploaded_icon and uploaded_icon.filename != ''` -- saving the page
     without choosing a file is the common case, and it must not touch the
     logo."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
     _existing_logo()
 
     response, _ = _post(client, token)
@@ -549,12 +540,12 @@ def test_an_empty_icon_field_leaves_the_logo_untouched(admin_client,
 # --------------------------------------------------------------------------
 
 
-def test_the_profile_text_is_saved_and_rendered_to_html(admin_client):
+def test_the_profile_text_is_saved_and_rendered_to_html(admin_site_profile_admin_client):
     """about, sidebar and legal_information are each stored twice: raw for the
     edit form and rendered for the page. Both are asserted for all three --
     storing only the raw leaves the page blank, and only the HTML makes the
     field uneditable."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     response, _ = _post(client, token, name='PieFed Test',
                         description='the tagline', about='# About us',
@@ -583,11 +574,11 @@ def test_the_profile_text_is_saved_and_rendered_to_html(admin_client):
     ('sidebar', 'sidebar_html'),
     ('legal_information', 'legal_information_html'),
 ])
-def test_clearing_a_text_field_clears_its_html(admin_client, field, html_field):
+def test_clearing_a_text_field_clears_its_html(admin_site_profile_admin_client, field, html_field):
     """The false arm of each `if form.<field>.data:`. Clearing the source must
     clear the rendered copy: leaving stale HTML behind would keep publishing
     text the admin deleted."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     _post(client, token, **{field: 'something'})
     db.session.expire_all()
@@ -598,12 +589,12 @@ def test_clearing_a_text_field_clears_its_html(admin_client, field, html_field):
     assert getattr(db.session.get(Site, 1), html_field) == ''
 
 
-def test_the_announcement_is_stored_raw_and_rendered(admin_client):
+def test_the_announcement_is_stored_raw_and_rendered(admin_site_profile_admin_client):
     """The announcement is a setting rather than a column, and it is written
     unconditionally -- unlike the three fields above, which are columns."""
     from app.utils import get_setting
 
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     _post(client, token, announcement='# Heads up')
 
@@ -611,13 +602,13 @@ def test_the_announcement_is_stored_raw_and_rendered(admin_client):
     assert '<h1>Heads up</h1>' in get_setting('announcement_html', '')
 
 
-def test_saving_the_profile_invalidates_the_cached_site(admin_client):
+def test_saving_the_profile_invalidates_the_cached_site(admin_site_profile_admin_client):
     """`cache.delete_memoized(get_site_as_dict)`. Every request reads the site
     through that memoized helper, so without the invalidation the new name
     would not appear until the cache expired."""
     from app.utils import get_site_as_dict
 
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     with patch('app.admin.routes.cache.delete_memoized') as delete_memoized:
         _post(client, token, name='Renamed')
@@ -627,11 +618,11 @@ def test_saving_the_profile_invalidates_the_cached_site(admin_client):
     assert (get_site_as_dict,) in [call.args for call in delete_memoized.call_args_list]
 
 
-def test_an_invalid_submission_is_redisplayed_with_its_errors(admin_client):
+def test_an_invalid_submission_is_redisplayed_with_its_errors(admin_site_profile_admin_client):
     """contact_email carries DataRequired(). A refused submission must come
     back showing what was typed, not the stored settings -- the same shape as
     slice A's D907."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
 
     _response, render = _post(client, token, name='typed but not saved',
                               contact_email='')
@@ -643,13 +634,13 @@ def test_an_invalid_submission_is_redisplayed_with_its_errors(admin_client):
     assert db.session.get(Site, 1).name != 'typed but not saved'
 
 
-def test_the_form_is_prefilled_from_the_stored_settings(admin_client):
+def test_the_form_is_prefilled_from_the_stored_settings(admin_site_profile_admin_client):
     """`elif request.method == 'GET':` -- the pre-fill arm, including the three
     `is not None` defaults that keep a never-set column out of the textarea as
     the string 'None'."""
     from app.utils import set_setting
 
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
     site = db.session.get(Site, 1)
     site.name = 'Stored Name'
     site.description = 'stored tagline'
@@ -673,9 +664,9 @@ def test_the_form_is_prefilled_from_the_stored_settings(admin_client):
     assert (form.about.data, form.sidebar.data, form.legal_information.data) == ('', '', '')
 
 
-def test_a_set_text_column_is_prefilled_as_itself(admin_client):
+def test_a_set_text_column_is_prefilled_as_itself(admin_site_profile_admin_client):
     """The true arm of the three `is not None` defaults above."""
-    client, token = admin_client
+    client, token = admin_site_profile_admin_client
     site = db.session.get(Site, 1)
     site.about = 'the about text'
     site.sidebar = 'the sidebar text'

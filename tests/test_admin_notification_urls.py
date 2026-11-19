@@ -17,11 +17,9 @@ from app.models import Notification, PostReply
 from app.utils import utcnow
 from tests.conftest import forget_login
 from tests.factories import make_post
-from tests.test_models_post_new_branches import env as post_env  # noqa: F401  (the fixture)
 from tests.test_models_post_new_branches import new
 from tests.test_models_post_reply_new import a_reply
-from tests.test_models_post_reply_new import env as reply_env  # noqa: F401  (the fixture)
-from tests.two_domains import default_request, onion_request, two_domains  # noqa: F401  (the fixture)
+from tests.two_domains import default_request, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -32,35 +30,35 @@ def verdict():
     return MagicMock(status_code=200, json=lambda: {'confidence': 0.9, 'detection_result': 'ai'})
 
 
-def test_an_em_dash_report_stores_the_accounts_id(reply_env):
-    reply_env.replier.created = utcnow()
+def test_an_em_dash_report_stores_the_accounts_id(models_post_reply_new_env):
+    models_post_reply_new_env.replier.created = utcnow()
     db.session.commit()
     with patch('app.utils.notify_admin') as notify:
-        a_reply(reply_env, body='a reply — with an em dash')
-    assert notify.call_args.args[1] == f'/user/{reply_env.replier.id}'
+        a_reply(models_post_reply_new_env, body='a reply — with an em dash')
+    assert notify.call_args.args[1] == f'/user/{models_post_reply_new_env.replier.id}'
 
 
-def test_the_ban_after_ai_replies_stores_the_accounts_id(reply_env, monkeypatch):
+def test_the_ban_after_ai_replies_stores_the_accounts_id(models_post_reply_new_env, monkeypatch):
     monkeypatch.setitem(current_app.config, 'DETECT_AI_ENDPOINT', 'https://ai.example/check')
-    reply_env.replier.created = utcnow()
+    models_post_reply_new_env.replier.created = utcnow()
     db.session.commit()
     with patch('app.models.get_request', return_value=verdict(), create=True), \
             patch('app.utils.get_request', return_value=verdict()), \
             patch('app.models.recent_ai_detections', return_value=THREE_AI), \
             patch('app.utils.notify_admin') as notify:
-        a_reply(reply_env, body='x' * 300)
-    assert notify.call_args.args[1] == f'/user/{reply_env.replier.id}'
+        a_reply(models_post_reply_new_env, body='x' * 300)
+    assert notify.call_args.args[1] == f'/user/{models_post_reply_new_env.replier.id}'
 
 
-def test_the_ban_after_ai_posts_stores_the_accounts_id(post_env, monkeypatch):
+def test_the_ban_after_ai_posts_stores_the_accounts_id(models_post_new_branches_env, monkeypatch):
     monkeypatch.setitem(current_app.config, 'DETECT_AI_ENDPOINT', 'https://ai.example/check')
-    post_env.author.created = utcnow()
+    models_post_new_branches_env.author.created = utcnow()
     db.session.commit()
     with patch('app.utils.get_request', return_value=verdict()), \
             patch('app.models.recent_ai_detections', return_value=THREE_AI), \
             patch('app.utils.notify_admin') as notify:
-        new(post_env, content='x' * 300)
-    assert notify.call_args.args[1] == f'/user/{post_env.author.id}'
+        new(models_post_new_branches_env, content='x' * 300)
+    assert notify.call_args.args[1] == f'/user/{models_post_new_branches_env.author.id}'
 
 
 @pytest.fixture

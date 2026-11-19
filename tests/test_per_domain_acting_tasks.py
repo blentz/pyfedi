@@ -37,7 +37,7 @@ from app.utils import download_defeds_worker
 from tests.factories import inbox_activity, make_community, make_instance, make_user
 from tests.test_per_domain_signing import ACTOR_URL, FIRST_KEY_ID, REMOTE, SHOP, SHOP_KEY_ID, _key_id, \
     _signing_site, first_ua, shop_ua
-from tests.two_domains import FIRST, request_on, two_domains  # noqa: F401 -- two_domains is a fixture
+from tests.two_domains import FIRST, request_on
 
 
 class Domains:
@@ -55,7 +55,7 @@ class Domains:
 
 
 @pytest.fixture
-def domains(app, two_domains):  # noqa: F811 -- two_domains is the imported fixture
+def domains(app, two_domains):  # -- two_domains is the imported fixture
     _signing_site()
     yield Domains(two_domains)
     clear_domain_cache()

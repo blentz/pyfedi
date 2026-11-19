@@ -15,8 +15,7 @@ from app.constants import POST_TYPE_LINK
 from app.models import Community, Site
 from app.storefront import clear_domain_cache
 from tests.factories import make_community_member, make_post
-from tests.test_branding_pages import FIRST, branded, page  # noqa: F401  (fixtures)
-from tests.two_domains import two_domains  # noqa: F401  (a fixture)
+from tests.test_branding_pages import FIRST, page
 
 pytestmark = pytest.mark.usefixtures('site')
 

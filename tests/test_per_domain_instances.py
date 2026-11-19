@@ -30,12 +30,12 @@ from app.storefront import (clear_domain_cache, current_instance_id, default_dom
 from tests.factories import bearer, make_community, make_instance, make_post, make_post_reply, make_user
 from tests.test_admin_user_administration import _add_payload, _roles
 from tests.test_community_lifecycle import able_to_create
-from tests.test_per_domain_creation import _create, _form as _register_form, creators, domains   # noqa: F401
+from tests.test_per_domain_creation import _create, _form as _register_form
 from tests.test_shared_community_lifecycle import _api_input, _seed_und_language
 from tests.test_shared_post_edit import _api_input as _api_input_post
 from tests.test_admin_domains import _admin, _form
 from tests.test_admin_site_profile import csrf, login
-from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, default_request, onion_request
 
 MIGRATION = Path(__file__).resolve().parent.parent / 'migrations' / 'versions' / 'c8f4d2a6b9e1_per_domain_instance.py'
 
@@ -515,16 +515,16 @@ def _admin_add_user(app, client, token, name, domain):
     return User.query.filter_by(user_name=name).one()
 
 
-def test_an_admin_added_user_takes_its_domains_instance(app, db_session, site, domains):
-    default, onion = domains
+def test_an_admin_added_user_takes_its_domains_instance(app, db_session, site, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     client, token = _admin_adding(app)
     assert _admin_add_user(app, client, token, 'torfan', onion).instance_id == onion.instance_id
     assert _admin_add_user(app, client, token, 'clearfan', default).instance_id == 1
     assert onion.instance_id != 1
 
 
-def test_registering_on_the_onion_storefront_takes_its_instance(app, db_session, site, domains):
-    default, onion = domains
+def test_registering_on_the_onion_storefront_takes_its_instance(app, db_session, site, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     with app.test_request_context(base_url='http://abc.onion'):
         app.preprocess_request()
         on_onion = create_new_user(_register_form('wakko'), '127.0.0.1', 'GB', 'token')
@@ -534,8 +534,8 @@ def test_registering_on_the_onion_storefront_takes_its_instance(app, db_session,
     assert (on_onion.instance_id, on_default.instance_id) == (onion.instance_id, 1)
 
 
-def test_ldap_and_oauth_users_are_on_the_default_instance(app, db_session, site, domains):
-    default, onion = domains
+def test_ldap_and_oauth_users_are_on_the_default_instance(app, db_session, site, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     with app.test_request_context(base_url='http://abc.onion'):
         app.preprocess_request()
         ldap_user = create_new_user_from_ldap('ldapper', 'ldapper@example.com', 'password123', '127.0.0.1')
@@ -545,8 +545,8 @@ def test_ldap_and_oauth_users_are_on_the_default_instance(app, db_session, site,
     assert (ldap_user.instance_id, oauth_user.instance_id) == (1, 1)
 
 
-def test_an_onion_users_community_post_and_reply_carry_the_onion_instance(app, db_session, site, domains):
-    default, onion = domains
+def test_an_onion_users_community_post_and_reply_carry_the_onion_instance(app, db_session, site, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     client, token = _admin_adding(app)
     torfan = _admin_add_user(app, client, token, 'torfan', onion)
     able_to_create(torfan)
@@ -565,10 +565,10 @@ def test_an_onion_users_community_post_and_reply_carry_the_onion_instance(app, d
     assert reply.instance_id == onion.instance_id
 
 
-def test_a_clearnet_users_post_and_reply_keep_the_default_instance(app, db_session, site, domains):
+def test_a_clearnet_users_post_and_reply_keep_the_default_instance(app, db_session, site, per_domain_creation_domains):
     """The first domain unchanged (plan C2 final wave): a clearnet account's post and reply are on row 1, in its own
     community and in the onion's alike, since a post's row is its author's."""
-    default, onion = domains
+    default, onion = per_domain_creation_domains
     client, token = _admin_adding(app)
     torfan = _admin_add_user(app, client, token, 'torfan', onion)
     clearfan = _admin_add_user(app, client, token, 'clearfan', default)
@@ -593,14 +593,14 @@ def test_a_clearnet_users_post_and_reply_keep_the_default_instance(app, db_sessi
     assert onion_post.instance_id == onion.instance_id
 
 
-def test_a_clearnet_community_belongs_to_the_default_instance(app, db_session, site, creators, domains):
-    default, onion = domains
+def test_a_clearnet_community_belongs_to_the_default_instance(app, db_session, site, creators, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     founder, other = creators
     assert _create(app, founder, 'abc.onion', url='clearnet').instance_id == 1
 
 
-def test_the_api_makes_an_onion_creators_community_on_the_onion_instance(app, db_session, site, domains):
-    default, onion = domains
+def test_the_api_makes_an_onion_creators_community_on_the_onion_instance(app, db_session, site, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
     make_user(db.session.get(Instance, 1), 'founder', local=True)
     _seed_und_language()
     user = make_user(db.session.get(Instance, 1), 'onionite', local=True, with_keys=True)
@@ -610,6 +610,6 @@ def test_the_api_makes_an_onion_creators_community_on_the_onion_instance(app, db
     assert Community.query.filter_by(name='hidden').one().instance_id == onion.instance_id
 
 
-def test_the_microblogs_community_stays_on_the_default_instance(app, db_session, site, domains):
+def test_the_microblogs_community_stays_on_the_default_instance(app, db_session, site, per_domain_creation_domains):
     make_user(db.session.get(Instance, 1), 'founder', local=True)
     assert find_microblogging_community().instance_id == 1

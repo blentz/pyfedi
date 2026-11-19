@@ -16,13 +16,11 @@ from app.models import ChatMessage, CommunityFlair, CommunityMember, Conversatio
 from tests.conftest import forget_login
 from tests.factories import grant_permission, make_feed_item, make_local_feed, make_post, make_post_reply
 from tests.test_api_routes_gate_sweep import documented_routes, minimal_payload
-from tests.test_hidden_routes import talking  # noqa: F401 -- a fixture
-from tests.test_instance_visible_here import HOSTS, scene  # noqa: F401 -- scene is a fixture
-from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB, world  # noqa: F401 -- world is a fixture
-from tests.test_onion_hidden_api_ids import NOBODY, alpha, onion_in_reply, reports  # noqa: F401 -- fixtures
-from tests.test_onion_hidden_on_clearnet import onion  # noqa: F401 -- a fixture
-from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+from tests.test_instance_visible_here import HOSTS
+from tests.test_local_only_actors_hidden import ONION_ART, ONION_BOB
+from tests.test_onion_hidden_api_ids import NOBODY, onion_in_reply
+from tests.test_per_domain_ap_routes import onion_proxy
+from tests.two_domains import FIRST, ONION
 
 ONION_FEED = f'onionfeed@{ONION}'
 
@@ -406,7 +404,7 @@ def snapshot(world):
 
 
 @pytest.fixture
-def walk(reports, two_domains, monkeypatch):  # noqa: F811
+def walk(reports, two_domains, monkeypatch):
     """The onion world. Its hosted domains do not change while it is walked, so their rows are read once, as
     production's cache has them, not on every request as under the suite's null cache."""
     rows = storefront.domain_rows()

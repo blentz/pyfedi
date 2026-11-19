@@ -8,7 +8,7 @@ from app.post.util import post_replies, get_comment_branch
 from app.visibility import RestrictedReply
 from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, bearer, make_community_member, make_post_reply, make_user, \
     make_visibility_world
-from tests.test_visibility_single_object import client_as, world  # noqa: F401  (world is a fixture)
+from tests.test_visibility_single_object import client_as
 
 
 def test_stranger_sees_placeholder_with_public_child(app, db_session):
@@ -41,31 +41,25 @@ def test_comment_branch_marks_hidden_root(app, db_session):
     assert branch[0]['replies'][0]['comment'].body == 'public child'
 
 
-@pytest.fixture
-def csrf_on(app, monkeypatch):
-    # the post page renders form.csrf_token(), which does not exist while CSRF is off
-    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
-
-
-def test_post_page_html_never_contains_the_body(app, world, csrf_on):
-    w = world
+def test_post_page_html_never_contains_the_body(app, visibility_single_object_world, visibility_reply_tree_csrf_on):
+    w = visibility_single_object_world
     html = client_as(app, w.stranger).get(f'/post/{w.public_post.id}').get_data(as_text=True)
     assert 'secret reply' not in html
     assert 'Visible to followers only' in html
     assert 'public child' in html
 
 
-def test_permalink_to_public_child_of_hidden_parent(app, world, csrf_on):
+def test_permalink_to_public_child_of_hidden_parent(app, visibility_single_object_world, visibility_reply_tree_csrf_on):
     """Review focus 5."""
-    w = world
+    w = visibility_single_object_world
     response = client_as(app, w.stranger).get(f'/post/{w.public_post.id}/comment/{w.public_child.id}')
     assert response.status_code == 200
     assert 'public child' in response.get_data(as_text=True)
     assert 'secret reply' not in response.get_data(as_text=True)
 
 
-def test_permalink_to_hidden_comment_is_a_placeholder_with_children(app, world, csrf_on):
-    w = world
+def test_permalink_to_hidden_comment_is_a_placeholder_with_children(app, visibility_single_object_world, visibility_reply_tree_csrf_on):
+    w = visibility_single_object_world
     response = client_as(app, w.stranger).get(f'/post/{w.public_post.id}/comment/{w.reply.id}')
     html = response.get_data(as_text=True)
     assert response.status_code == 200
@@ -74,8 +68,8 @@ def test_permalink_to_hidden_comment_is_a_placeholder_with_children(app, world, 
     assert 'public child' in html
 
 
-def test_ap_replies_collection_omits_hidden_reply(app, world):
-    w = world
+def test_ap_replies_collection_omits_hidden_reply(app, visibility_single_object_world):
+    w = visibility_single_object_world
     response = app.test_client().get(f'/post/{w.public_post.id}/replies', headers={'Accept': 'application/activity+json'})
     assert response.status_code == 200
     body = response.get_data(as_text=True)
@@ -85,8 +79,8 @@ def test_ap_replies_collection_omits_hidden_reply(app, world):
     assert 'public child' in body
 
 
-def test_ap_context_collection_omits_hidden_reply(app, world):
-    w = world
+def test_ap_context_collection_omits_hidden_reply(app, visibility_single_object_world):
+    w = visibility_single_object_world
     response = app.test_client().get(f'/post/{w.public_post.id}/context', headers={'Accept': 'application/activity+json'})
     assert response.status_code == 200
     body = response.get_data(as_text=True)
@@ -106,8 +100,8 @@ def _find(comments, reply_id):
     return None
 
 
-def test_api_post_replies_returns_stub_for_stranger(app, world):
-    w = world
+def test_api_post_replies_returns_stub_for_stranger(app, visibility_single_object_world):
+    w = visibility_single_object_world
     response = app.test_client().get('/api/alpha/post/replies', query_string={'post_id': w.public_post.id},
                                      headers={'Authorization': bearer(w.stranger)})
     assert response.status_code == 200
@@ -120,15 +114,15 @@ def test_api_post_replies_returns_stub_for_stranger(app, world):
     assert child['comment']['body'] == 'public child'
 
 
-def test_api_post_replies_shows_follower_the_reply(app, world):
-    w = world
+def test_api_post_replies_shows_follower_the_reply(app, visibility_single_object_world):
+    w = visibility_single_object_world
     response = app.test_client().get('/api/alpha/post/replies', query_string={'post_id': w.public_post.id},
                                      headers={'Authorization': bearer(w.follower)})
     assert _find(response.json['comments'], w.reply.id)['comment']['body'] == 'secret reply'
 
 
-def test_api_comment_list_returns_stub_for_stranger(app, world):
-    w = world
+def test_api_comment_list_returns_stub_for_stranger(app, visibility_single_object_world):
+    w = visibility_single_object_world
     response = app.test_client().get('/api/alpha/comment/list', query_string={'post_id': w.public_post.id},
                                      headers={'Authorization': bearer(w.stranger)})
     assert response.status_code == 200
@@ -137,8 +131,8 @@ def test_api_comment_list_returns_stub_for_stranger(app, world):
     assert 'secret reply' not in response.get_data(as_text=True)
 
 
-def test_api_comment_list_tree_modes_return_stub(app, world):
-    w = world
+def test_api_comment_list_tree_modes_return_stub(app, visibility_single_object_world):
+    w = visibility_single_object_world
     for extra in ({'post_id': w.public_post.id, 'max_depth': 5},):
         response = app.test_client().get('/api/alpha/comment/list', query_string=extra,
                                          headers={'Authorization': bearer(w.stranger)})
@@ -155,9 +149,9 @@ def test_restricted_reply_carries_its_path(app, db_session):
 
 
 @pytest.mark.parametrize('path', ['/api/alpha/post/replies', '/api/alpha/comment/list'])
-def test_api_builds_the_neutral_post_and_community_once_per_thread(app, world, path):
+def test_api_builds_the_neutral_post_and_community_once_per_thread(app, visibility_single_object_world, path):
     """D7 (residuals WP-D): every stub in one post's thread shares one neutral community and post."""
-    w = world
+    w = visibility_single_object_world
     for n in range(3):
         hidden = make_post_reply(w.public_post, w.author, f'secret {n}')
         hidden.visibility = 'followers'
@@ -198,9 +192,9 @@ def test_every_sort_order_marks_the_hidden_reply(app, db_session, sort_by):
 
 
 @pytest.fixture
-def pathed(world):  # noqa: F811
+def pathed(visibility_single_object_world):
     """The factory leaves path and root_id empty; the depth-first query walks them, as a real reply has them."""
-    w = world
+    w = visibility_single_object_world
     w.reply.path = [0, w.reply.id]
     w.reply.root_id = w.reply.id
     w.public_child.path = [0, w.reply.id, w.public_child.id]

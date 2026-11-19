@@ -13,7 +13,7 @@ from app.constants import POST_STATUS_DRAFT, VISIBILITY_FOLLOWERS
 from app.models import CommunityMember, Feed, Post, Role, Site, User, UserFollower, role_grant
 from app.storefront import domain_for_host
 from tests.factories import make_community, make_instance, make_local_feed, make_post, make_post_reply, make_user
-from tests.test_local_only_invisible import _post, world  # noqa: F401
+from tests.test_local_only_invisible import _post
 from tests.two_domains import request_on
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -86,21 +86,21 @@ HIDDEN = [_followers_only, _draft, _deleted, _banned_community, _private_communi
 
 # ---- a post from another server, by its stored ap_id --------------------------------------------------------------
 
-def test_a_visible_peer_post_resolves_by_its_ap_id(world):
-    post = peer_post(world)
+def test_a_visible_peer_post_resolves_by_its_ap_id(local_only_invisible_world):
+    post = peer_post(local_only_invisible_world)
     assert resolve(caller(), post.ap_id)['post']['post']['id'] == post.id
 
 
 @pytest.mark.parametrize('hide', HIDDEN)
-def test_a_peer_post_the_caller_may_not_open_is_not_found(world, hide):
-    post = peer_post(world)
-    hide(post, world)
+def test_a_peer_post_the_caller_may_not_open_is_not_found(local_only_invisible_world, hide):
+    post = peer_post(local_only_invisible_world)
+    hide(post, local_only_invisible_world)
     db.session.commit()
     assert refused(caller(), post.ap_id) == 'No object found.'
 
 
-def test_a_peer_post_in_a_private_community_resolves_for_a_member(world):
-    post = peer_post(world)
+def test_a_peer_post_in_a_private_community_resolves_for_a_member(local_only_invisible_world):
+    post = peer_post(local_only_invisible_world)
     post.community.private = True
     user = caller()
     db.session.add(CommunityMember(user_id=user.id, community_id=post.community_id))
@@ -114,25 +114,25 @@ def _urls(app, post):
     return [post.ap_id, f"https://{app.config['SERVER_NAME']}/post/{post.id}"]
 
 
-def test_a_post_deleted_by_a_moderator_is_gone_on_both_branches_for_a_reader(app, world):
-    post = peer_post(world)
+def test_a_post_deleted_by_a_moderator_is_gone_on_both_branches_for_a_reader(app, local_only_invisible_world):
+    post = peer_post(local_only_invisible_world)
     post.deleted = True
-    post.deleted_by = world.alice.id
+    post.deleted_by = local_only_invisible_world.alice.id
     db.session.commit()
     user = caller()
     assert [refused(user, url) for url in _urls(app, post)] == ['No object found.'] * 2
 
 
-def test_a_post_deleted_by_a_moderator_is_still_shown_to_a_moderator_on_both_branches(app, world):
-    post = peer_post(world)
+def test_a_post_deleted_by_a_moderator_is_still_shown_to_a_moderator_on_both_branches(app, local_only_invisible_world):
+    post = peer_post(local_only_invisible_world)
     post.deleted = True
-    post.deleted_by = world.alice.id
+    post.deleted_by = local_only_invisible_world.alice.id
     db.session.commit()
-    assert [resolve(world.alice, url)['post']['post']['id'] for url in _urls(app, post)] == [post.id] * 2
+    assert [resolve(local_only_invisible_world.alice, url)['post']['post']['id'] for url in _urls(app, post)] == [post.id] * 2
 
 
-def test_a_post_its_author_deleted_is_shown_on_both_branches_as_the_post_page_shows_it(app, world):
-    post = peer_post(world)
+def test_a_post_its_author_deleted_is_shown_on_both_branches_as_the_post_page_shows_it(app, local_only_invisible_world):
+    post = peer_post(local_only_invisible_world)
     post.deleted = True
     post.deleted_by = post.user_id
     db.session.commit()
@@ -143,45 +143,45 @@ def test_a_post_its_author_deleted_is_shown_on_both_branches_as_the_post_page_sh
 # ---- recursive=True ------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('hide', HIDDEN)
-def test_a_recursive_call_is_gated_too(world, hide):
-    post = peer_post(world)
-    hide(post, world)
+def test_a_recursive_call_is_gated_too(local_only_invisible_world, hide):
+    post = peer_post(local_only_invisible_world)
+    hide(post, local_only_invisible_world)
     db.session.commit()
     assert refused(caller(), post.ap_id, recursive=True) == 'No object found.'
 
 
-def test_a_recursive_call_returns_the_object_for_a_visible_post(world):
-    post = peer_post(world)
+def test_a_recursive_call_returns_the_object_for_a_visible_post(local_only_invisible_world):
+    post = peer_post(local_only_invisible_world)
     assert resolve(caller(), post.ap_id, recursive=True) == post
     assert isinstance(post, Post)
 
 
-def test_a_recursive_call_for_a_private_community_is_refused_to_a_non_member(world):
-    world.clearnet.private = True
+def test_a_recursive_call_for_a_private_community_is_refused_to_a_non_member(local_only_invisible_world):
+    local_only_invisible_world.clearnet.private = True
     db.session.commit()
-    assert refused(caller(), world.clearnet.ap_profile_id, recursive=True) == 'No object found.'
+    assert refused(caller(), local_only_invisible_world.clearnet.ap_profile_id, recursive=True) == 'No object found.'
 
 
 # ---- replies --------------------------------------------------------------------------------------------------------
 
-def test_a_visible_peer_reply_resolves(world):
-    reply = peer_reply(peer_post(world))
+def test_a_visible_peer_reply_resolves(local_only_invisible_world):
+    reply = peer_reply(peer_post(local_only_invisible_world))
     assert resolve(caller(), reply.ap_id)['comment']['comment']['id'] == reply.id
 
 
 @pytest.mark.parametrize('hide', [_draft, _banned_community, _private_community, _deleted])
-def test_a_reply_under_a_post_the_caller_may_not_open_is_not_found(app, world, hide):
-    post = peer_post(world)
+def test_a_reply_under_a_post_the_caller_may_not_open_is_not_found(app, local_only_invisible_world, hide):
+    post = peer_post(local_only_invisible_world)
     reply = peer_reply(post)
-    hide(post, world)
+    hide(post, local_only_invisible_world)
     db.session.commit()
     user = caller()
     local = f"https://{app.config['SERVER_NAME']}/comment/{reply.id}"
     assert [refused(user, url) for url in (reply.ap_id, local)] == ['No object found.'] * 2
 
 
-def test_a_deleted_reply_is_not_found_on_both_branches(app, world):
-    reply = peer_reply(peer_post(world))
+def test_a_deleted_reply_is_not_found_on_both_branches(app, local_only_invisible_world):
+    reply = peer_reply(peer_post(local_only_invisible_world))
     reply.deleted = True
     db.session.commit()
     user = caller()
@@ -191,62 +191,62 @@ def test_a_deleted_reply_is_not_found_on_both_branches(app, world):
 
 # ---- communities ----------------------------------------------------------------------------------------------------
 
-def test_a_visible_community_resolves_by_every_route(app, world):
+def test_a_visible_community_resolves_by_every_route(app, local_only_invisible_world):
     user = caller()
-    for url in (world.clearnet.ap_profile_id, f"!clearnet@{app.config['SERVER_NAME']}"):
-        assert resolve(user, url)['community']['community']['id'] == world.clearnet.id
+    for url in (local_only_invisible_world.clearnet.ap_profile_id, f"!clearnet@{app.config['SERVER_NAME']}"):
+        assert resolve(user, url)['community']['community']['id'] == local_only_invisible_world.clearnet.id
 
 
-def test_a_private_community_resolves_for_a_member(world):
-    world.clearnet.private = True
+def test_a_private_community_resolves_for_a_member(local_only_invisible_world):
+    local_only_invisible_world.clearnet.private = True
     user = caller()
-    db.session.add(CommunityMember(user_id=user.id, community_id=world.clearnet.id))
+    db.session.add(CommunityMember(user_id=user.id, community_id=local_only_invisible_world.clearnet.id))
     db.session.commit()
-    assert resolve(user, world.clearnet.ap_profile_id)['community']['community']['id'] == world.clearnet.id
+    assert resolve(user, local_only_invisible_world.clearnet.ap_profile_id)['community']['community']['id'] == local_only_invisible_world.clearnet.id
 
 
 @pytest.mark.parametrize('state', ['banned', 'private'])
-def test_a_community_the_page_would_refuse_is_not_found_by_every_route(app, world, state):
-    setattr(world.clearnet, state, True)
+def test_a_community_the_page_would_refuse_is_not_found_by_every_route(app, local_only_invisible_world, state):
+    setattr(local_only_invisible_world.clearnet, state, True)
     db.session.commit()
     user = caller()
-    urls = [world.clearnet.ap_profile_id, f"!clearnet@{app.config['SERVER_NAME']}",
+    urls = [local_only_invisible_world.clearnet.ap_profile_id, f"!clearnet@{app.config['SERVER_NAME']}",
             f"https://{app.config['SERVER_NAME']}/c/clearnet/"]
     assert [refused(user, url) for url in urls] == ['No object found.'] * 3
 
 
-def test_a_local_only_community_is_open_to_a_logged_in_reader_and_not_to_a_logged_out_one(app, world):
+def test_a_local_only_community_is_open_to_a_logged_in_reader_and_not_to_a_logged_out_one(app, local_only_invisible_world):
     """On the onion; off it, to nobody (follow-up F6)."""
     with request_on(app, domain_for_host('abc.onion')):
-        assert misc._community_open_to(world.hidden, 1) and not misc._community_open_to(world.hidden, None)
-    assert not misc._community_open_to(world.hidden, 1)
-    assert misc._community_open_to(world.clearnet, None)
+        assert misc._community_open_to(local_only_invisible_world.hidden, 1) and not misc._community_open_to(local_only_invisible_world.hidden, None)
+    assert not misc._community_open_to(local_only_invisible_world.hidden, 1)
+    assert misc._community_open_to(local_only_invisible_world.clearnet, None)
 
 
 # ---- users ----------------------------------------------------------------------------------------------------------
 
-def test_a_visible_user_resolves_by_every_route(app, world):
+def test_a_visible_user_resolves_by_every_route(app, local_only_invisible_world):
     user = caller()
-    for url in (world.bob.ap_profile_id or f"https://{app.config['SERVER_NAME']}/u/bob",
+    for url in (local_only_invisible_world.bob.ap_profile_id or f"https://{app.config['SERVER_NAME']}/u/bob",
                 f"@bob@{app.config['SERVER_NAME']}", f"https://{app.config['SERVER_NAME']}/u/bob"):
-        assert resolve(user, url)['person']['person']['id'] == world.bob.id
+        assert resolve(user, url)['person']['person']['id'] == local_only_invisible_world.bob.id
 
 
 @pytest.mark.parametrize('state', ['banned', 'deleted'])
-def test_a_deleted_or_banned_user_is_not_found_by_every_route(app, world, state):
-    setattr(world.bob, state, True)
+def test_a_deleted_or_banned_user_is_not_found_by_every_route(app, local_only_invisible_world, state):
+    setattr(local_only_invisible_world.bob, state, True)
     db.session.commit()
     user = caller()
     urls = [f"@bob@{app.config['SERVER_NAME']}", f"https://{app.config['SERVER_NAME']}/u/bob"]
     assert [refused(user, url) for url in urls] == ['No object found.'] * 2
 
 
-def test_a_local_only_account_is_open_to_a_logged_in_reader_and_not_to_a_logged_out_one(app, world):
+def test_a_local_only_account_is_open_to_a_logged_in_reader_and_not_to_a_logged_out_one(app, local_only_invisible_world):
     """On the onion; off it, to nobody (follow-up F6)."""
     with request_on(app, domain_for_host('abc.onion')):
-        assert misc._user_open_to(world.onionite, 1) and not misc._user_open_to(world.onionite, None)
-    assert not misc._user_open_to(world.onionite, 1)
-    assert misc._user_open_to(world.bob, None)
+        assert misc._user_open_to(local_only_invisible_world.onionite, 1) and not misc._user_open_to(local_only_invisible_world.onionite, None)
+    assert not misc._user_open_to(local_only_invisible_world.onionite, 1)
+    assert misc._user_open_to(local_only_invisible_world.bob, None)
 
 
 # ---- feeds ----------------------------------------------------------------------------------------------------------
@@ -255,22 +255,22 @@ def feed_url(feed):
     return feed.ap_profile_id
 
 
-def test_a_public_feed_resolves(world):
+def test_a_public_feed_resolves(local_only_invisible_world):
     feed = make_local_feed('open', public=True)
     assert resolve(caller(), feed_url(feed))['feed']['id'] == feed.id
 
 
-def test_a_private_feed_is_not_found_to_anyone_but_its_owner_and_an_admin(world):
+def test_a_private_feed_is_not_found_to_anyone_but_its_owner_and_an_admin(local_only_invisible_world):
     feed = make_local_feed('closed', public=False)
     owner = caller('olive')
     feed.user_id = owner.id
     db.session.commit()
     assert refused(caller(), feed_url(feed)) == 'No object found.'
     assert resolve(owner, feed_url(feed))['feed']['id'] == feed.id
-    assert resolve(world.alice, feed_url(feed))['feed']['id'] == feed.id
+    assert resolve(local_only_invisible_world.alice, feed_url(feed))['feed']['id'] == feed.id
 
 
-def test_a_banned_feed_is_not_found(world):
+def test_a_banned_feed_is_not_found(local_only_invisible_world):
     feed = make_local_feed('gone', public=True)
     feed.banned = True
     db.session.commit()
@@ -335,9 +335,9 @@ def _answer(response):
                                       ('reply', 'onion'), ('user', 'banned'), ('user', 'onion'),
                                       ('community', 'private'), ('community', 'onion'),
                                       ('feed', 'private'), ('feed', 'onion')])
-def test_a_refused_object_is_answered_byte_for_byte_as_a_missing_one(app, world, monkeypatch, kind, why):
+def test_a_refused_object_is_answered_byte_for_byte_as_a_missing_one(app, local_only_invisible_world, monkeypatch, kind, why):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    url = _refused_cases(app, world)[(kind, why)]
+    url = _refused_cases(app, local_only_invisible_world)[(kind, why)]
     user = caller()
     hidden = _get(app, user, url)
     missing = _get(app, user, f"{app.config['SERVER_URL']}{MISSING_BY_KIND[kind]}")
@@ -346,10 +346,10 @@ def test_a_refused_object_is_answered_byte_for_byte_as_a_missing_one(app, world,
 
 
 @pytest.mark.parametrize('hide', HIDDEN)
-def test_a_hidden_post_is_answered_byte_for_byte_as_a_missing_one(app, world, monkeypatch, hide):
+def test_a_hidden_post_is_answered_byte_for_byte_as_a_missing_one(app, local_only_invisible_world, monkeypatch, hide):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    post = peer_post(world)
-    hide(post, world)
+    post = peer_post(local_only_invisible_world)
+    hide(post, local_only_invisible_world)
     db.session.commit()
     user = caller()
     assert _answer(_get(app, user, post.ap_id)) == _answer(_get(app, user, f"{app.config['SERVER_URL']}/post/424242"))
@@ -358,18 +358,18 @@ def test_a_hidden_post_is_answered_byte_for_byte_as_a_missing_one(app, world, mo
 # ---- the protocol handler ------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('hide', HIDDEN)
-def test_the_protocol_handler_does_not_open_a_peer_post_the_viewer_may_not_open(app, world, hide):
+def test_the_protocol_handler_does_not_open_a_peer_post_the_viewer_may_not_open(app, local_only_invisible_world, hide):
     from tests.test_hosted_post_resolve import handler
-    post = peer_post(world)
-    hide(post, world)
+    post = peer_post(local_only_invisible_world)
+    hide(post, local_only_invisible_world)
     db.session.commit()
     response = handler(app, caller(), post.ap_id.replace('https://', 'web+ap://'))
     assert response.status_code == 302 and not response.headers['Location'].endswith(f'/post/{post.id}')
 
 
-def test_the_protocol_handler_opens_a_visible_peer_post(app, world):
+def test_the_protocol_handler_opens_a_visible_peer_post(app, local_only_invisible_world):
     from tests.test_hosted_post_resolve import handler
-    post = peer_post(world)
+    post = peer_post(local_only_invisible_world)
     response = handler(app, caller(), post.ap_id.replace('https://', 'web+ap://'))
     assert response.status_code == 302 and response.headers['Location'].endswith(f'/post/{post.id}')
 
@@ -383,8 +383,8 @@ def no_fetch(monkeypatch):
     monkeypatch.setattr(misc, 'find_actor_or_create', refuse)
 
 
-def test_a_reply_under_a_followers_only_post_still_resolves_and_its_post_is_a_stub(app, world, no_fetch):
-    post = peer_post(world)
+def test_a_reply_under_a_followers_only_post_still_resolves_and_its_post_is_a_stub(app, local_only_invisible_world, no_fetch):
+    post = peer_post(local_only_invisible_world)
     reply = peer_reply(post)
     post.visibility = VISIBILITY_FOLLOWERS
     db.session.commit()
@@ -393,8 +393,8 @@ def test_a_reply_under_a_followers_only_post_still_resolves_and_its_post_is_a_st
     assert answer['comment']['post']['title'] == '' and post.title != ''
 
 
-def test_a_follower_of_the_author_resolves_the_reply_and_sees_its_followers_only_post(app, world, no_fetch):
-    post = peer_post(world)
+def test_a_follower_of_the_author_resolves_the_reply_and_sees_its_followers_only_post(app, local_only_invisible_world, no_fetch):
+    post = peer_post(local_only_invisible_world)
     reply = peer_reply(post)
     post.visibility = VISIBILITY_FOLLOWERS
     follower = caller()
@@ -453,9 +453,9 @@ class FakePeer:
 
 
 @pytest.fixture
-def peer(world, monkeypatch):
+def peer(local_only_invisible_world, monkeypatch):
     def install(hide=_followers_only, community_known=False):
-        fake = FakePeer(world, hide, community_known)
+        fake = FakePeer(local_only_invisible_world, hide, community_known)
         for name in ('remote_object_to_json', 'find_actor_or_create', 'find_community', 'create_resolved_object'):
             monkeypatch.setattr(misc, name, getattr(fake, name))
         return fake
@@ -477,7 +477,7 @@ def test_a_reply_whose_fetched_parent_the_caller_may_not_open_is_not_found(peer,
     assert refused(caller(), CHILD) == 'No object found.'
 
 
-def test_a_banned_account_the_reply_mentions_does_not_stop_it_resolving(world, peer):
+def test_a_banned_account_the_reply_mentions_does_not_stop_it_resolving(local_only_invisible_world, peer):
     fake = peer(_followers_only, community_known=False)
     mia = make_user(fake.instance, 'mia')
     mia.ap_profile_id = MENTIONED
@@ -537,17 +537,17 @@ def _onion_user(world):
 
 
 @pytest.mark.parametrize('pick', [_banned_user, _deleted_user, _onion_user])
-def test_a_recursive_call_is_gated_for_a_user(app, world, pick):
-    user = pick(world)
+def test_a_recursive_call_is_gated_for_a_user(app, local_only_invisible_world, pick):
+    user = pick(local_only_invisible_world)
     user.ap_profile_id = user.ap_profile_id or f"{app.config['SERVER_URL']}/u/{user.user_name}"
     db.session.commit()
     assert refused(caller(), user.ap_profile_id, recursive=True) == 'No object found.'
 
 
-def test_a_recursive_call_returns_the_user_object_for_a_visible_one(app, world):
-    world.bob.ap_profile_id = f"{app.config['SERVER_URL']}/u/bob"
+def test_a_recursive_call_returns_the_user_object_for_a_visible_one(app, local_only_invisible_world):
+    local_only_invisible_world.bob.ap_profile_id = f"{app.config['SERVER_URL']}/u/bob"
     db.session.commit()
-    assert resolve(caller(), world.bob.ap_profile_id, recursive=True) == world.bob
+    assert resolve(caller(), local_only_invisible_world.bob.ap_profile_id, recursive=True) == local_only_invisible_world.bob
 
 
 def _banned_feed(feed, owner):
@@ -563,15 +563,15 @@ def _onion_feed(feed, owner):
 
 
 @pytest.mark.parametrize('hide', [_banned_feed, _private_feed, _onion_feed])
-def test_a_recursive_call_is_gated_for_a_feed(world, hide):
-    feed = make_local_feed('inner', public=True, user=world.bob)
-    hide(feed, world.bob)
+def test_a_recursive_call_is_gated_for_a_feed(local_only_invisible_world, hide):
+    feed = make_local_feed('inner', public=True, user=local_only_invisible_world.bob)
+    hide(feed, local_only_invisible_world.bob)
     db.session.commit()
     assert refused(caller(), feed.ap_profile_id, recursive=True) == 'No object found.'
 
 
-def test_a_recursive_call_returns_the_feed_object_for_a_visible_one(world):
-    feed = make_local_feed('inner', public=True, user=world.bob)
+def test_a_recursive_call_returns_the_feed_object_for_a_visible_one(local_only_invisible_world):
+    feed = make_local_feed('inner', public=True, user=local_only_invisible_world.bob)
     assert resolve(caller(), feed.ap_profile_id, recursive=True) == feed
     assert isinstance(feed, Feed)
 
@@ -596,30 +596,30 @@ def an_admin():
     return user
 
 
-def test_a_moderator_resolves_what_a_private_community_keeps_from_others(world):
-    post = peer_post(world)
+def test_a_moderator_resolves_what_a_private_community_keeps_from_others(local_only_invisible_world):
+    post = peer_post(local_only_invisible_world)
     post.community.private = True
     mona = moderator_of(post.community)
     db.session.commit()
     assert resolve(mona, post.ap_id)['post']['post']['id'] == post.id
-    assert resolve(mona, world.clearnet.ap_profile_id)['community']['community']['id'] == world.clearnet.id
-    assert refused(caller(), post.ap_id) == refused(caller('nobody'), world.clearnet.ap_profile_id) == 'No object found.'
+    assert resolve(mona, local_only_invisible_world.clearnet.ap_profile_id)['community']['community']['id'] == local_only_invisible_world.clearnet.id
+    assert refused(caller(), post.ap_id) == refused(caller('nobody'), local_only_invisible_world.clearnet.ap_profile_id) == 'No object found.'
 
 
-def test_a_moderator_resolves_a_post_a_moderator_removed_and_a_reader_does_not(app, world):
-    post = peer_post(world)
+def test_a_moderator_resolves_a_post_a_moderator_removed_and_a_reader_does_not(app, local_only_invisible_world):
+    post = peer_post(local_only_invisible_world)
     post.deleted = True
-    post.deleted_by = world.alice.id
+    post.deleted_by = local_only_invisible_world.alice.id
     mona = moderator_of(post.community)
     assert [resolve(mona, url)['post']['post']['id'] for url in _urls(app, post)] == [post.id] * 2
     assert [refused(caller(), url) for url in _urls(app, post)] == ['No object found.'] * 2
 
 
-def test_an_admin_resolves_a_removed_post_and_a_private_feed_and_a_reader_does_not(app, world):
-    post = peer_post(world)
+def test_an_admin_resolves_a_removed_post_and_a_private_feed_and_a_reader_does_not(app, local_only_invisible_world):
+    post = peer_post(local_only_invisible_world)
     post.deleted = True
-    post.deleted_by = world.alice.id
-    feed = make_local_feed('closed', public=False, user=world.bob)
+    post.deleted_by = local_only_invisible_world.alice.id
+    feed = make_local_feed('closed', public=False, user=local_only_invisible_world.bob)
     db.session.commit()
     admin = an_admin()
     assert [resolve(admin, url)['post']['post']['id'] for url in _urls(app, post)] == [post.id] * 2
@@ -628,10 +628,10 @@ def test_an_admin_resolves_a_removed_post_and_a_private_feed_and_a_reader_does_n
 
 
 @pytest.mark.parametrize('state', ['private', 'banned'])
-def test_an_admin_is_refused_a_community_the_page_refuses_to_an_admin(world, state):
-    setattr(world.clearnet, state, True)
+def test_an_admin_is_refused_a_community_the_page_refuses_to_an_admin(local_only_invisible_world, state):
+    setattr(local_only_invisible_world.clearnet, state, True)
     db.session.commit()
-    assert refused(an_admin(), world.clearnet.ap_profile_id) == 'No object found.'
+    assert refused(an_admin(), local_only_invisible_world.clearnet.ap_profile_id) == 'No object found.'
 
 
 # ---- what the inner fetch leaves alone ---------------------------------------------------------------------------------
@@ -676,9 +676,9 @@ def _targets(app, world):
 
 @pytest.mark.parametrize('name', ['onion user', 'banned user', 'private community', 'private feed', 'onion feed',
                                   'visible user', 'visible community'])
-def test_a_reply_to_an_account_community_or_feed_is_answered_as_a_reply_to_nothing(app, world, monkeypatch, name):
+def test_a_reply_to_an_account_community_or_feed_is_answered_as_a_reply_to_nothing(app, local_only_invisible_world, monkeypatch, name):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    targets = _targets(app, world)
+    targets = _targets(app, local_only_invisible_world)
     in_reply_to = {}
 
     def document(url, **kwargs):
@@ -696,9 +696,9 @@ def test_a_reply_to_an_account_community_or_feed_is_answered_as_a_reply_to_nothi
     assert answers[name] == answers['missing']
 
 
-def test_a_followers_only_reply_is_refused_to_a_non_follower_as_a_missing_one(app, world, no_fetch, monkeypatch):
+def test_a_followers_only_reply_is_refused_to_a_non_follower_as_a_missing_one(app, local_only_invisible_world, no_fetch, monkeypatch):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    post = peer_post(world)
+    post = peer_post(local_only_invisible_world)
     reply = peer_reply(post)
     post.visibility = reply.visibility = VISIBILITY_FOLLOWERS
     db.session.commit()

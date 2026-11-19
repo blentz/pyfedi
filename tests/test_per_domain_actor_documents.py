@@ -19,9 +19,9 @@ from app.shared.tasks.groups import edit_community
 from app.storefront import default_domain, domain_for_host
 from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, a_keypair, grant_permission, make_user
 from tests.test_dev_tools import csrf
-from tests.test_c3_golden_documents import AP, CREATED, SHOP, UPDATED, golden_site, pem  # noqa: F401  (fixture)
+from tests.test_c3_golden_documents import AP, CREATED, SHOP, UPDATED, pem
 from tests.test_onion_guard_limits import PROXY, a_session, onion_get
-from tests.two_domains import FIRST, two_domains  # noqa: F401  (fixture)
+from tests.two_domains import FIRST
 
 pytestmark = pytest.mark.usefixtures('golden_site')
 
@@ -31,38 +31,6 @@ SHOP_BASE = f'https://{SHOP}'
 @pytest.fixture(autouse=True)
 def onion_proxy(app, monkeypatch):
     monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)
-
-
-@pytest.fixture
-def shop_rows(app):
-    """goldie and goldart again, on shop.example: the same names as the first domain's, so a lookup or URL that ignores the
-    domain shows."""
-    shop = domain_for_host(SHOP)
-    avatar, cover = File(file_path='app/static/media/users/sh/op/avatar.webp'), \
-        File(thumbnail_path='app/static/media/users/sh/op/cover.webp')
-    icon, banner = File(file_path='app/static/media/communities/sh/op/icon.webp'), \
-        File(file_path='app/static/media/communities/sh/op/banner.webp')
-    db.session.add_all([avatar, cover, icon, banner])
-    db.session.flush()
-    user = User(user_name='goldie', title='Shop goldie', email='goldie@shop.example', instance_id=shop.instance_id,
-                site_domain_id=shop.id, verified=True, banned=False, public_key=pem('SHOPUSER'), created=CREATED,
-                ap_profile_id=f'{SHOP_BASE}/u/goldie', ap_public_url=f'{SHOP_BASE}/u/goldie',
-                ap_inbox_url=f'{SHOP_BASE}/u/goldie/inbox', avatar_id=avatar.id, cover_id=cover.id)
-    db.session.add(user)
-    db.session.flush()
-    db.session.add(UserExtraField(user_id=user.id, label='Site', text='https://goldie.example'))
-    community = Community(name='goldart', title='Shop art', instance_id=shop.instance_id, site_domain_id=shop.id,
-                          user_id=user.id, public_key=pem('SHOPCOMMUNITY'), created_at=CREATED, last_active=UPDATED,
-                          ap_profile_id=f'{SHOP_BASE}/c/goldart', ap_public_url=f'{SHOP_BASE}/c/goldart',
-                          ap_followers_url=f'{SHOP_BASE}/c/goldart/followers',
-                          ap_moderators_url=f'{SHOP_BASE}/c/goldart/moderators', ap_domain=SHOP,
-                          subscriptions_count=1, local_only=False, nsfw=False, icon_id=icon.id, image_id=banner.id)
-    db.session.add(community)
-    db.session.flush()
-    db.session.add(CommunityMember(user_id=user.id, community_id=community.id, is_moderator=True, is_owner=True))
-    db.session.commit()
-    cache.clear()
-    return shop, user, community
 
 
 @pytest.fixture

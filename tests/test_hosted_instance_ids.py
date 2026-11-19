@@ -32,9 +32,9 @@ from app.utils import fediverse_domains
 from app.visibility import follower_instances, followers_only_reply_instances
 from tests.factories import (a_keypair, make_conversation, make_instance, make_post, make_post_reply,
                              make_post_reply_vote, make_post_vote, make_site, make_user)
-from tests.test_per_domain_ap_routes import SHOP, get as ap_get, onion_proxy, twins  # noqa: F401
+from tests.test_per_domain_ap_routes import SHOP, get as ap_get, onion_proxy
 from tests.test_per_domain_html_routes import Visitor
-from tests.two_domains import FIRST, ONION, no_http, request_on, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, request_on
 
 PEER = 'peer.example'
 

@@ -5,14 +5,14 @@ from bs4 import BeautifulSoup
 
 from app import db
 from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_ARTICLE, POST_TYPE_IMAGE
-from tests.test_community_show import a_post, env, show, titles, url  # noqa: F401 (env)
+from tests.test_community_show import a_post, show, titles, url
 
 pytestmark = pytest.mark.usefixtures('site')
 
 
 @pytest.fixture
-def microblogs(env):
-    client, community, author = env
+def microblogs(community_show_env):
+    client, community, author = community_show_env
     community.kind = COMMUNITY_KIND_MICROBLOGS
     db.session.commit()
     return client, community, author
@@ -46,8 +46,8 @@ def test_microblogs_offers_galleries_in_both_navs(app, microblogs):
     assert option is not None and option.has_attr('selected')   # the phone's filter form, which needs no JavaScript
 
 
-def test_another_community_does_not(app, env):
-    client, community, _author = env
+def test_another_community_does_not(app, community_show_env):
+    client, community, _author = community_show_env
 
     html = page(app, client, community)
 

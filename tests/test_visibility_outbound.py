@@ -23,10 +23,7 @@ from tests.factories import (
     make_user,
     make_visibility_world,
 )
-from tests.test_visibility_moderation import (  # noqa: F401  (world is a fixture)
-    web,
-    world,
-)
+from tests.test_visibility_moderation import web
 
 # (name, task, kind of object it acts on)
 TASKS = [
@@ -132,8 +129,8 @@ def test_the_author_deleting_their_own_post_or_reply(db_session, remote, visibil
 
 
 @pytest.mark.parametrize('remote, visibility, federated', WHO_HEARS, ids=WHO_HEARS_IDS)
-def test_a_web_reply_restore(app, world, remote, visibility, federated):  # noqa: F811
-    w = world
+def test_a_web_reply_restore(app, visibility_moderation_world, remote, visibility, federated):
+    w = visibility_moderation_world
     w.community.local_only = False
     if remote:
         make_remote(w)

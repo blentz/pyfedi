@@ -20,9 +20,7 @@ from app.models import SiteDomain, User
 from app.shared.auth import api_log_user_in
 from app.utils import log_login_failure
 from app.api.alpha.utils.user import post_user_verify_credentials
-from tests.test_onion_guard_limits import (FROM_CADDY, LOGIN, PASSWORD, a_session, account_failures,  # noqa: F401
-                                           alice, clock, directory, ldap_off, login_form, onion, onion_context,
-                                           onion_post, proof_given, typed_failures, web_login)
+from tests.test_onion_guard_limits import FROM_CADDY, LOGIN, PASSWORD, a_session, account_failures, login_form, onion_context, onion_post, proof_given, typed_failures, web_login
 
 CLEARNET = {'REMOTE_ADDR': '203.0.113.9'}
 LINE = 'auth: login failed ip='
@@ -55,67 +53,67 @@ def clearnet_login(app, user_name, password):
                                   environ_base=CLEARNET)
 
 
-def test_failed_login_logs_ip_not_username(app, alice, ldap_off, caplog):
+def test_failed_login_logs_ip_not_username(app, onion_guard_limits_alice, ldap_off, caplog):
     clearnet_login(app, 'alice@abc.onion', 'a wrong password')
     only_failure(caplog, '203.0.113.9')
 
 
-def test_an_unknown_user_logs(app, alice, ldap_off, caplog):
+def test_an_unknown_user_logs(app, onion_guard_limits_alice, ldap_off, caplog):
     clearnet_login(app, 'ghost', PASSWORD)
     only_failure(caplog, '203.0.113.9')
 
 
-def test_an_email_typed_with_a_wrong_password_logs(app, alice, ldap_off, caplog):
+def test_an_email_typed_with_a_wrong_password_logs(app, onion_guard_limits_alice, ldap_off, caplog):
     clearnet_login(app, 'alice@example.com', 'a wrong password')
     only_failure(caplog, '203.0.113.9')
 
 
-def test_a_correct_password_logs_nothing(app, alice, ldap_off, caplog):
+def test_a_correct_password_logs_nothing(app, onion_guard_limits_alice, ldap_off, caplog):
     response = clearnet_login(app, 'alice@abc.onion', PASSWORD)
     assert response.status_code == 302 and not response.headers['Location'].endswith('/auth/login')
     assert failures(caplog) == []
 
 
-def test_a_correct_password_for_a_banned_account_logs_nothing(app, alice, ldap_off, caplog):
-    alice.banned = True
+def test_a_correct_password_for_a_banned_account_logs_nothing(app, onion_guard_limits_alice, ldap_off, caplog):
+    onion_guard_limits_alice.banned = True
     db.session.commit()
     clearnet_login(app, 'alice@abc.onion', PASSWORD)
     assert failures(caplog) == []
 
 
-def test_a_deleted_account_logs(app, alice, ldap_off, caplog):
-    alice.deleted = True
+def test_a_deleted_account_logs(app, onion_guard_limits_alice, ldap_off, caplog):
+    onion_guard_limits_alice.deleted = True
     with app.test_request_context('/', environ_base=CLEARNET):
-        assert validate_user_login(alice, PASSWORD, '203.0.113.9') is False
+        assert validate_user_login(onion_guard_limits_alice, PASSWORD, '203.0.113.9') is False
     only_failure(caplog, '203.0.113.9')
 
 
-def test_a_failed_bind_and_a_wrong_local_password_log_once(app, alice, directory, caplog):
-    alice.site_domain_id = SiteDomain.query.filter_by(domain='test.piefed.local').first().id   # the directory's domain
+def test_a_failed_bind_and_a_wrong_local_password_log_once(app, onion_guard_limits_alice, directory, caplog):
+    onion_guard_limits_alice.site_domain_id = SiteDomain.query.filter_by(domain='test.piefed.local').first().id   # the directory's domain
     db.session.commit()
     clearnet_login(app, 'alice', 'a wrong password')
     assert directory.call_count == 1
     only_failure(caplog, '203.0.113.9')
 
 
-def test_a_failed_bind_for_an_unknown_name_logs_once(app, alice, directory, caplog):
+def test_a_failed_bind_for_an_unknown_name_logs_once(app, onion_guard_limits_alice, directory, caplog):
     clearnet_login(app, 'ghost', 'a wrong password')
     only_failure(caplog, '203.0.113.9')
 
 
-def test_a_good_bind_logs_nothing(app, alice, directory, caplog):
+def test_a_good_bind_logs_nothing(app, onion_guard_limits_alice, directory, caplog):
     clearnet_login(app, 'alice@abc.onion', PASSWORD)
     assert failures(caplog) == []
 
 
-def test_an_onion_failure_writes_no_line(app, alice, ldap_off, caplog):
+def test_an_onion_failure_writes_no_line(app, onion_guard_limits_alice, ldap_off, caplog):
     client = app.test_client()
     a_session(client)
     web_login(client, 'alice', 'a wrong password')
     assert failures(caplog) == []
 
 
-def test_an_onion_unknown_user_writes_no_line(app, alice, ldap_off, caplog):
+def test_an_onion_unknown_user_writes_no_line(app, onion_guard_limits_alice, ldap_off, caplog):
     client = app.test_client()
     a_session(client)
     web_login(client, 'ghost', 'a wrong password')
@@ -124,24 +122,24 @@ def test_an_onion_unknown_user_writes_no_line(app, alice, ldap_off, caplog):
 
 @pytest.mark.parametrize('typed, password', [('alice', 'a wrong password'), ('alice', PASSWORD)],
                          ids=['wrong', 'hidden-refusal-of-the-right-one'])
-def test_the_hidden_refusal_logs_as_a_wrong_password_does(app, alice, ldap_off, redis_double, clock, caplog,
+def test_the_hidden_refusal_logs_as_a_wrong_password_does(app, onion_guard_limits_alice, ldap_off, redis_double, onion_guard_limits_clock, caplog,
                                                           typed, password):
-    account_failures(alice.id, 6)
+    account_failures(onion_guard_limits_alice.id, 6)
     client = app.test_client()
     a_session(client)
     web_login(client, typed, password)
     assert failures(caplog) == []
 
 
-def test_the_hidden_refusal_with_a_directory_logs_once(app, alice, directory, redis_double, clock, caplog):
-    account_failures(alice.id, 6)
+def test_the_hidden_refusal_with_a_directory_logs_once(app, onion_guard_limits_alice, directory, redis_double, onion_guard_limits_clock, caplog):
+    account_failures(onion_guard_limits_alice.id, 6)
     client = app.test_client()
     a_session(client)
     web_login(client, 'alice', PASSWORD)
     assert failures(caplog) == []
 
 
-def test_a_visible_wait_refusal_logs_nothing(app, alice, ldap_off, redis_double, clock, caplog):
+def test_a_visible_wait_refusal_logs_nothing(app, onion_guard_limits_alice, ldap_off, redis_double, onion_guard_limits_clock, caplog):
     typed_failures('alice', 6)
     client = app.test_client()
     a_session(client)
@@ -155,7 +153,7 @@ def _flashes(client):
         return stored.get('_flashes', [])
 
 
-def test_a_refused_proof_logs_nothing(app, alice, ldap_off, caplog, monkeypatch):
+def test_a_refused_proof_logs_nothing(app, onion_guard_limits_alice, ldap_off, caplog, monkeypatch):
     monkeypatch.setattr('app.auth.routes.onion_proof_refused', lambda form: True)
     client = app.test_client()
     a_session(client)
@@ -163,29 +161,29 @@ def test_a_refused_proof_logs_nothing(app, alice, ldap_off, caplog, monkeypatch)
     assert failures(caplog) == []
 
 
-def test_the_session_first_redirect_logs_nothing(app, alice, ldap_off, caplog):
+def test_the_session_first_redirect_logs_nothing(app, onion_guard_limits_alice, ldap_off, caplog):
     response = app.test_client().get('/auth/login', base_url='http://abc.onion',
                                      headers={'X-PieFed-Via': 'onion'}, environ_base=FROM_CADDY)
     assert response.status_code == 303
     assert failures(caplog) == []
 
 
-def test_api_login_logs_a_wrong_password(app, alice, ldap_off, caplog):
+def test_api_login_logs_a_wrong_password(app, onion_guard_limits_alice, ldap_off, caplog):
     with app.test_request_context('/', environ_base=CLEARNET):
         with pytest.raises(Exception, match='incorrect_login'):
             api_log_user_in({'username': 'alice', 'password': 'a wrong password'})
     only_failure(caplog, '203.0.113.9')
 
 
-def test_api_login_logs_an_unknown_user(app, alice, ldap_off, caplog):
+def test_api_login_logs_an_unknown_user(app, onion_guard_limits_alice, ldap_off, caplog):
     with app.test_request_context('/', environ_base=CLEARNET):
         with pytest.raises(Exception, match='incorrect_login'):
             api_log_user_in({'username': 'ghost', 'password': PASSWORD})
     only_failure(caplog, '203.0.113.9')
 
 
-def test_api_login_logs_nothing_for_a_banned_account_with_the_right_password(app, alice, ldap_off, caplog):
-    alice.banned = True
+def test_api_login_logs_nothing_for_a_banned_account_with_the_right_password(app, onion_guard_limits_alice, ldap_off, caplog):
+    onion_guard_limits_alice.banned = True
     db.session.commit()
     with app.test_request_context('/', environ_base=CLEARNET):
         with pytest.raises(Exception, match='incorrect_login'):
@@ -193,48 +191,48 @@ def test_api_login_logs_nothing_for_a_banned_account_with_the_right_password(app
     assert failures(caplog) == []
 
 
-def test_api_login_hidden_refusal_writes_no_line(app, alice, ldap_off, redis_double, clock, caplog):
-    account_failures(alice.id, 6)
+def test_api_login_hidden_refusal_writes_no_line(app, onion_guard_limits_alice, ldap_off, redis_double, onion_guard_limits_clock, caplog):
+    account_failures(onion_guard_limits_alice.id, 6)
     with onion_context(app):
         with pytest.raises(Exception, match='incorrect_login'):
             api_log_user_in({'username': 'alice', 'password': PASSWORD})
     assert failures(caplog) == []
 
 
-def test_verify_credentials_logs_a_wrong_password(app, alice, caplog):
+def test_verify_credentials_logs_a_wrong_password(app, onion_guard_limits_alice, caplog):
     with app.test_request_context('/', environ_base=CLEARNET):
         with pytest.raises(BlockingIOError):
             post_user_verify_credentials({'username': 'alice', 'password': 'a wrong password'})
     only_failure(caplog, '203.0.113.9')
 
 
-def test_verify_credentials_logs_an_unknown_user(app, alice, caplog):
+def test_verify_credentials_logs_an_unknown_user(app, onion_guard_limits_alice, caplog):
     with app.test_request_context('/', environ_base=CLEARNET):
         with pytest.raises(BlockingIOError):
             post_user_verify_credentials({'username': 'ghost', 'password': PASSWORD})
     only_failure(caplog, '203.0.113.9')
 
 
-def test_verify_credentials_writes_no_line_for_a_hidden_refusal(app, alice, redis_double, clock, caplog):
-    account_failures(alice.id, 6)
+def test_verify_credentials_writes_no_line_for_a_hidden_refusal(app, onion_guard_limits_alice, redis_double, onion_guard_limits_clock, caplog):
+    account_failures(onion_guard_limits_alice.id, 6)
     with onion_context(app):
         with pytest.raises(BlockingIOError):
             post_user_verify_credentials({'username': 'alice', 'password': PASSWORD})
     assert failures(caplog) == []
 
 
-def test_verify_credentials_logs_nothing_for_success_or_ban(app, alice, caplog):
+def test_verify_credentials_logs_nothing_for_success_or_ban(app, onion_guard_limits_alice, caplog):
     with app.test_request_context('/', environ_base=CLEARNET):
         # alice is the onion's account: on the clearnet her full handle names her, as for web login
         assert post_user_verify_credentials({'username': 'alice@abc.onion', 'password': PASSWORD}) == {}
-        alice.banned = True
+        onion_guard_limits_alice.banned = True
         db.session.commit()
         with pytest.raises(BlockingIOError):
             post_user_verify_credentials({'username': 'alice@abc.onion', 'password': PASSWORD})
     assert failures(caplog) == []
 
 
-def test_verify_credentials_wait_refusal_logs_nothing(app, alice, redis_double, clock, caplog):
+def test_verify_credentials_wait_refusal_logs_nothing(app, onion_guard_limits_alice, redis_double, onion_guard_limits_clock, caplog):
     typed_failures('alice', 6)
     with onion_context(app):
         with pytest.raises(HTTPException):

@@ -13,7 +13,7 @@ from app.models import FeedItem
 from tests.test_feed_lifecycle_routes import _capture_form
 from tests.test_feed_local_only_contents import public_site  # noqa: F401
 from tests.test_per_domain_html_routes import Visitor
-from tests.three_domains import FIRST, ONION, SHOP, three_domains, two_domains  # noqa: F401
+from tests.three_domains import FIRST, ONION, SHOP
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -27,7 +27,7 @@ def _holds(feed):
     (ONION, 'onion', 'onion'),   # an onion feed holding an onion community
     (FIRST, 'first', 'shop'),    # a first-domain feed holding a shop community
 ])
-def test_saving_the_edit_form_unchanged_changes_nothing(app, three_domains, monkeypatch, host, owner_on, community_on):  # noqa: F811
+def test_saving_the_edit_form_unchanged_changes_nothing(app, three_domains, monkeypatch, host, owner_on, community_on):
     d = three_domains
     domains = {'first': d.first, 'shop': d.shop, 'onion': d.onion}
     owner = d.account('editor', domains[owner_on])

@@ -20,7 +20,7 @@ from app.models import Site
 from app.project_links import (UPSTREAM_BUG_REPORT, UPSTREAM_GET_INVOLVED, UPSTREAM_SOURCE, ProjectLinks,
                                footer_invitation, is_web_url, project_links)
 from tests.conftest import forget_login
-from tests.test_admin_site_profile import _payload, admin_client  # noqa: F401  (a fixture)
+from tests.test_admin_site_profile import _payload
 from tests.test_branding import load_migration
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -165,8 +165,8 @@ def site_row() -> Site:
     return db.session.get(Site, 1)
 
 
-def test_the_site_profile_saves_the_links(admin_client):
-    client, token = admin_client
+def test_the_site_profile_saves_the_links(admin_site_profile_admin_client):
+    client, token = admin_site_profile_admin_client
     response = post_profile(client, token, source_url=f'  {FORK} ', bug_report_url=BUGS, get_involved_url=INVOLVED)
     assert response.status_code == 200
     assert (site_row().source_url, site_row().bug_report_url, site_row().get_involved_url) == (FORK, BUGS, INVOLVED)
@@ -177,13 +177,13 @@ def test_the_site_profile_saves_the_links(admin_client):
 @pytest.mark.parametrize('field', ['source_url', 'bug_report_url', 'get_involved_url'])
 @pytest.mark.parametrize('value', ['javascript:alert(1)', 'example.org/fork', 'https://x.org/' + 'a' * 300],
                          ids=['javascript', 'no-scheme', 'too-long'])
-def test_the_site_profile_refuses_a_link_that_is_not_a_web_url(admin_client, field, value):
-    client, token = admin_client
+def test_the_site_profile_refuses_a_link_that_is_not_a_web_url(admin_site_profile_admin_client, field, value):
+    client, token = admin_site_profile_admin_client
     post_profile(client, token, **{field: value})
     assert not getattr(site_row(), field)
 
 
-def test_the_site_profile_shows_the_links_and_upstreams_as_placeholders(admin_client):
+def test_the_site_profile_shows_the_links_and_upstreams_as_placeholders(admin_site_profile_admin_client):
     """admin/site.html renders form.csrf_token, which tests (WTF_CSRF_ENABLED False) don't have: read the form."""
     from app.admin.forms import SiteProfileForm
     text = (REPO / 'app' / 'templates' / 'admin' / 'site.html').read_text()

@@ -13,7 +13,6 @@ from app.shared.media import with_media
 from tests import test_login_gate as gate_tests
 from tests.factories import make_community, make_community_member, make_post, make_user
 
-private = gate_tests.private   # the private-instance fixture
 
 
 def _video(server, community, author):

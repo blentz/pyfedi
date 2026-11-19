@@ -4,7 +4,7 @@ import pytest
 
 from app import db
 from app.models import Site
-from tests.test_onion_guard_limits import a_session, onion, onion_get  # noqa: F401
+from tests.test_onion_guard_limits import a_session, onion_get
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -13,7 +13,7 @@ HINT = 'We recommend registering with ProtonMail or another privacy-preserving e
 
 
 @pytest.fixture
-def open_registration(app, site, onion, monkeypatch):  # noqa: F811
+def open_registration(app, site, onion_guard_limits_onion, monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the open form renders a csrf_token field
     monkeypatch.setattr('app.auth.routes.handle_abandoned_open_instance', lambda: None)   # no admin has logged in here
     db.session.get(Site, 1).registration_mode = 'Open'

@@ -1,0 +1,38 @@
+"""Fixtures from tests/test_api_routes_post.py that other test modules request (registered in tests/conftest.py)."""
+import pytest
+from flask import current_app, g
+
+from app import db
+from app.models import Language, Site
+from tests.factories import a_keypair, make_community, make_community_member, make_post
+
+
+@pytest.fixture
+def api_routes_post_env(app, api_baseline, monkeypatch):
+    from types import SimpleNamespace
+
+    g.admin_ids = []
+    g.site = db.session.get(Site, 1)
+    monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
+    for code, name in [('en', 'English'), ('und', 'Undetermined')]:
+        db.session.add(Language(code=code, name=name))
+    db.session.commit()
+    db.session.get(Site, 1).language_id = Language.query.filter_by(
+        code='en').one().id
+    community = make_community('probeland')
+    author = api_baseline.user2
+    moderator = api_baseline.user4
+    reader = api_baseline.user3
+    for who in (author, moderator, reader):
+        who.private_key, who.public_key = a_keypair()
+    db.session.commit()
+    make_community_member(author, community)
+    make_community_member(moderator, community, is_moderator=True)
+    post = make_post(community, author, ap_id='https://test.piefed.local/v/1')
+    post.body = 'a body'
+    post.body_html = '<p>a body</p>'
+    db.session.commit()
+    return SimpleNamespace(client=app.test_client(), community=community,
+                           author=author, moderator=moderator, reader=reader,
+                           post=post, admin=api_baseline.user1,
+                           baseline=api_baseline)

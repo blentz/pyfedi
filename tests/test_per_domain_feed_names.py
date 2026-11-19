@@ -21,10 +21,9 @@ from app.utils import user_name_is_taken
 from tests.conftest import forget_login
 from tests.factories import make_feed, make_user
 import tests.test_per_domain_feed_creation as creation
-from tests.test_per_domain_feed_creation import api_input, api_site, make_admin, token  # noqa: F401
+from tests.test_per_domain_feed_creation import api_input, make_admin, token
 from tests.test_per_domain_name_creation import _community_form, _feed_form
-from tests.three_domains import FIRST, ONION, PEER, SHOP, no_http, peer, request_on, three_domains, \
-    two_domains  # noqa: F401
+from tests.three_domains import FIRST, ONION, PEER, SHOP, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -231,11 +230,11 @@ def test_a_feed_keeps_its_own_name_when_edited(app, three_domains):
 # --- get_feed -------------------------------------------------------------------------------------------------------
 
 @pytest.fixture
-def news(app, three_domains, peer):  # noqa: F811
+def news(app, three_domains, three_domains_peer):
     d = three_domains
     rows = {'first': d.local_feed('news', d.first, d.account('firstowner', d.first)),
             'shop': d.local_feed('news', d.shop, d.account('shopowner', d.shop)),
-            'remote': remote_feed(peer)}
+            'remote': remote_feed(three_domains_peer)}
     onioner = d.account('onioner', d.onion)
     rows['onion'] = d.local_feed('onionfeed', d.onion, onioner)
     rows['private'] = d.local_feed('privatefeed', d.shop, d.account('keeper', d.shop), public=False)
@@ -298,12 +297,12 @@ def listed(response):
     return sorted((feed['name'], feed['ap_domain']) for feed in response.json['feeds'])
 
 
-def test_the_feed_list_api_follows_the_storefront_and_token_user(app, alpha, three_domains, peer):  # noqa: F811
+def test_the_feed_list_api_follows_the_storefront_and_token_user(app, alpha, three_domains, three_domains_peer):
     d = three_domains
     d.local_feed('firstnews', d.first, d.account('firstowner', d.first))
     d.local_feed('shopnews', d.shop, d.account('shopowner', d.shop))
     d.local_feed('onionfeed', d.onion, d.account('onioner', d.onion))
-    remote_feed(peer)
+    remote_feed(three_domains_peer)
     remote = ('peerfeed', PEER)
     assert listed(api(app, '/feed/list', SHOP)) == sorted([('shopnews', SHOP), remote])
     assert listed(api(app, '/feed/list', FIRST)) == sorted([('firstnews', FIRST), remote])
@@ -331,7 +330,7 @@ def test_mine_only_lists_the_token_users_own_feeds(app, alpha, three_domains):
     (f'http://{ONION}:80/f/onionfeed', f'http://{ONION}:80/f/nosuchfeed'),
     (f'~onionfeed@{ONION}', f'~nosuchfeed@{ONION}'),
 ])
-def test_resolve_object_never_returns_an_onion_feed_off_the_onion(app, alpha, news, three_domains, no_http,  # noqa: F811
+def test_resolve_object_never_returns_an_onion_feed_off_the_onion(app, alpha, news, three_domains, no_http,
                                                                   host, query, missing):
     """Review Focus 4: by `ap_profile_id`, by URL and by handle, an onion feed answers off the onion exactly as a
     feed nobody holds, to every reader, an admin too."""

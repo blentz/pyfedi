@@ -8,7 +8,7 @@ import psycopg2
 import pytest
 
 from interop.clients import PieFed, wait_for
-from interop.test_media_pipeline import _upload, alice_web  # noqa: F401  (the module-scoped fixture)
+from interop.test_media_pipeline import _upload
 
 pytestmark = pytest.mark.interop
 

@@ -17,7 +17,7 @@ from app.utils import feed_tree_public, menu_instance_feeds
 from tests.conftest import forget_login
 from tests.factories import make_feed
 from tests.test_onion_guard_limits import a_session, onion_get
-from tests.three_domains import FIRST, ONION, SHOP, get, peer, request_on, three_domains, two_domains  # noqa: F401
+from tests.three_domains import FIRST, ONION, SHOP, get, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -39,7 +39,7 @@ def fresh_caches(app, monkeypatch):
 
 
 @pytest.fixture
-def world(app, three_domains, peer):  # noqa: F811
+def world(app, three_domains, three_domains_peer):
     """One public instance-menu feed on each domain and a remote one, and an account on each domain."""
     d = three_domains
     people = {'first': d.account('firstowner', d.first), 'shop': d.account('shopowner', d.shop),
@@ -50,7 +50,7 @@ def world(app, three_domains, peer):  # noqa: F811
         feed.title = f'{key.title()} headlines'
         feed.is_instance_feed = True
         feeds[key] = feed
-    remote = make_feed(peer, 'faraway', public=True)
+    remote = make_feed(three_domains_peer, 'faraway', public=True)
     remote.title = 'Faraway headlines'
     remote.user_id = people['first'].id   # whom the page names as its creator
     remote.is_instance_feed = True

@@ -3,7 +3,6 @@
 raised TypeError, a 500. The partial is the reactions it has, none here, and keeps its id for htmx to swap into."""
 import pytest
 
-from tests.test_vote_direction_route import voter  # noqa: F401  (a fixture: a signed-in voter, a post and a reply)
 
 pytestmark = pytest.mark.usefixtures('site')
 

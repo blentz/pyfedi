@@ -11,7 +11,7 @@ from app.storefront import domain_for_host
 from app.utils import menu_instance_feeds
 from tests.conftest import forget_login
 from tests.factories import make_feed, make_feed_item
-from tests.three_domains import FIRST, ONION, SHOP, ap_get, get, no_http, peer, request_on, sent, three_domains, two_domains  # noqa: F401
+from tests.three_domains import FIRST, ONION, SHOP, ap_get, get, request_on
 
 
 
@@ -26,7 +26,7 @@ SHOP_URL = f'https://{SHOP}'
 
 
 @pytest.fixture
-def news(three_domains):  # noqa: F811
+def news(three_domains):
     """A public feed called `news` on the first domain and one on shop, with titles that tell them apart."""
     first = three_domains.local_feed('news', three_domains.first, three_domains.account('firstowner', three_domains.first))
     first.title = 'First news'
@@ -53,28 +53,28 @@ def csrf(app, client, host=FIRST):
     return token
 
 
-def test_a_bare_name_opens_this_storefronts_feed(app, three_domains, news):  # noqa: F811
+def test_a_bare_name_opens_this_storefronts_feed(app, three_domains, news):
     assert b'First news' in get(app, '/f/news', host=FIRST).data
     assert b'Shop news' in get(app, '/f/news', host=SHOP).data
 
 
 @pytest.mark.parametrize('path', ['/f/news@shop.example', '/f/NEWS@SHOP.EXAMPLE'])
-def test_name_at_domain_opens_the_other_domains_feed(app, three_domains, news, path):  # noqa: F811
+def test_name_at_domain_opens_the_other_domains_feed(app, three_domains, news, path):
     page = get(app, path, host=FIRST)
     assert page.status_code == 200 and b'Shop news' in page.data
 
 
-def test_a_first_domain_feed_named_at_its_own_host_opens_on_shop(app, three_domains, news):  # noqa: F811
+def test_a_first_domain_feed_named_at_its_own_host_opens_on_shop(app, three_domains, news):
     page = get(app, f'/f/news@{FIRST}', host=SHOP)
     assert page.status_code == 200 and b'First news' in page.data
 
 
-def test_a_hosted_handle_with_no_feed_is_404_without_a_fetch(app, three_domains, no_http):  # noqa: F811
+def test_a_hosted_handle_with_no_feed_is_404_without_a_fetch(app, three_domains, no_http):
     assert get(app, '/f/nothing@shop.example', host=FIRST).status_code == 404
     assert no_http == []
 
 
-def test_a_banned_feed_is_not_found(app, three_domains, news):  # noqa: F811
+def test_a_banned_feed_is_not_found(app, three_domains, news):
     news[1].banned = True
     db.session.commit()
     assert get(app, '/f/news@shop.example', host=FIRST).status_code == 404
@@ -83,18 +83,18 @@ def test_a_banned_feed_is_not_found(app, three_domains, news):  # noqa: F811
 @pytest.mark.parametrize('path', ['/f/a@b@c', '/f/%00', '/f/@', '/f/@shop.example', '/f/news@', '/f/' + 'x' * 400,
                                   '/f/' + 'x' * 400 + '@shop.example', '/f/a@b@c.rss', '/f/%00.rss', '/f/@.rss',
                                   '/f/' + 'x' * 400 + '.rss'])
-def test_junk_names_are_refused_never_a_500(app, three_domains, news, path):  # noqa: F811
+def test_junk_names_are_refused_never_a_500(app, three_domains, news, path):
     for host in (FIRST, SHOP):
         assert get(app, path, host=host).status_code in (400, 404)
     assert ap_get(app, path).status_code in (400, 404)
 
 
-def test_an_activitypub_request_for_an_actor_with_an_at_sign_is_400(app, three_domains, news):  # noqa: F811
+def test_an_activitypub_request_for_an_actor_with_an_at_sign_is_400(app, three_domains, news):
     assert ap_get(app, '/f/news@shop.example', host=FIRST).status_code == 400
     assert ap_get(app, '/f/news@shop.example/outbox', host=FIRST).status_code == 400
 
 
-def test_the_collections_find_this_storefronts_feed(app, three_domains):  # noqa: F811
+def test_the_collections_find_this_storefronts_feed(app, three_domains):
     shop = three_domains.local_feed('news', three_domains.shop)
     first = three_domains.local_feed('news', three_domains.first)
     for feed in (shop, first):
@@ -109,13 +109,13 @@ def test_the_collections_find_this_storefronts_feed(app, three_domains):  # noqa
     assert ap_get(app, '/f/news/followers', host=FIRST).status_code == 200
 
 
-def test_a_collection_of_a_feed_that_is_not_here_is_404(app, three_domains):  # noqa: F811
+def test_a_collection_of_a_feed_that_is_not_here_is_404(app, three_domains):
     three_domains.local_feed('onlyshop', three_domains.shop)
     for collection in ('outbox', 'following', 'moderators', 'followers'):
         assert ap_get(app, f'/f/onlyshop/{collection}', host=FIRST).status_code == 404
 
 
-def test_a_private_feed_on_another_domain_opens_by_its_suffixed_path(app, three_domains):  # noqa: F811
+def test_a_private_feed_on_another_domain_opens_by_its_suffixed_path(app, three_domains):
     owner = three_domains.account('owner', three_domains.shop)
     other = three_domains.account('other', three_domains.shop)
     feed = three_domains.local_feed('slug/owner', three_domains.shop, owner=owner, public=False)
@@ -139,7 +139,7 @@ def test_a_private_feed_on_another_domain_opens_by_its_suffixed_path(app, three_
     assert anonymous.status_code == 404 and anonymous.data == gone.data
 
 
-def test_rss_names_the_feed_of_the_storefront_or_the_named_domain(app, three_domains, news):  # noqa: F811
+def test_rss_names_the_feed_of_the_storefront_or_the_named_domain(app, three_domains, news):
     assert b'Shop news' in get(app, '/f/news.rss', host=SHOP).data
     assert b'First news' in get(app, '/f/news.rss', host=FIRST).data
     other = get(app, '/f/news@shop.example.rss', host=FIRST)
@@ -147,7 +147,7 @@ def test_rss_names_the_feed_of_the_storefront_or_the_named_domain(app, three_dom
     assert b'/f/news@shop.example' in other.data
 
 
-def test_rss_of_a_child_feed_finds_it_under_its_parent(app, three_domains):  # noqa: F811
+def test_rss_of_a_child_feed_finds_it_under_its_parent(app, three_domains):
     parent = three_domains.local_feed('parent', three_domains.shop)
     child = three_domains.local_feed('kid', three_domains.shop)
     child.parent_feed_id = parent.id
@@ -158,7 +158,7 @@ def test_rss_of_a_child_feed_finds_it_under_its_parent(app, three_domains):  # n
     assert get(app, '/f/parent/kid.rss', host=SHOP).status_code == 200
 
 
-def test_submit_lists_the_named_domains_feed_communities(app, three_domains, news):  # noqa: F811
+def test_submit_lists_the_named_domains_feed_communities(app, three_domains, news):
     _, shop_feed = news
     make_feed_item(shop_feed, three_domains.local_community('shopcommunity', three_domains.shop))
     user = three_domains.account('poster', three_domains.first)
@@ -170,7 +170,7 @@ def test_submit_lists_the_named_domains_feed_communities(app, three_domains, new
     assert missing.status_code == 404
 
 
-def test_subscribe_joins_the_named_domains_feed_without_a_request_out(app, three_domains, news, no_http, sent):  # noqa: F811
+def test_subscribe_joins_the_named_domains_feed_without_a_request_out(app, three_domains, news, no_http, three_domains_sent):
     first_id, shop_id = news[0].id, news[1].id
     user = three_domains.account('joiner', three_domains.first)
     with app.test_client() as client:
@@ -179,10 +179,10 @@ def test_subscribe_joins_the_named_domains_feed_without_a_request_out(app, three
         client.post('/feed/news@shop.example/subscribe', data={'csrf_token': token}, base_url=f'https://{FIRST}')
     assert FeedMember.query.filter_by(user_id=user.id, feed_id=shop_id).count() == 1
     assert FeedMember.query.filter_by(user_id=user.id, feed_id=first_id).count() == 0
-    assert no_http == [] and sent == []
+    assert no_http == [] and three_domains_sent == []
 
 
-def test_subscribe_by_a_bare_name_joins_this_storefronts_feed(app, three_domains, news):  # noqa: F811
+def test_subscribe_by_a_bare_name_joins_this_storefronts_feed(app, three_domains, news):
     first_id, shop_id = news[0].id, news[1].id
     user = three_domains.account('joiner', three_domains.shop)
     with app.test_client() as client:
@@ -193,7 +193,7 @@ def test_subscribe_by_a_bare_name_joins_this_storefronts_feed(app, three_domains
     assert FeedMember.query.filter_by(user_id=user.id, feed_id=first_id).count() == 0
 
 
-def test_unsubscribe_of_a_handle_on_a_domain_not_hosted_here_is_404(app, three_domains, news, no_http):  # noqa: F811
+def test_unsubscribe_of_a_handle_on_a_domain_not_hosted_here_is_404(app, three_domains, news, no_http):
     user = three_domains.account('joiner', three_domains.shop)
     with app.test_client() as client:
         login(client, user, SHOP)
@@ -202,7 +202,7 @@ def test_unsubscribe_of_a_handle_on_a_domain_not_hosted_here_is_404(app, three_d
     assert missing.status_code == 404 and no_http == []
 
 
-def test_unsubscribe_leaves_the_named_domains_feed(app, three_domains, news, no_http, sent):  # noqa: F811
+def test_unsubscribe_leaves_the_named_domains_feed(app, three_domains, news, no_http, three_domains_sent):
     shop_id = news[1].id
     user = three_domains.account('joiner', three_domains.first)
     db.session.add(FeedMember(user_id=user.id, feed_id=shop_id))
@@ -212,10 +212,10 @@ def test_unsubscribe_leaves_the_named_domains_feed(app, three_domains, news, no_
         token = csrf(app, client)
         client.post('/feed/news@shop.example/unsubscribe', data={'csrf_token': token}, base_url=f'https://{FIRST}')
     assert FeedMember.query.filter_by(user_id=user.id, feed_id=shop_id).count() == 0
-    assert no_http == [] and sent == []
+    assert no_http == [] and three_domains_sent == []
 
 
-def test_lookup_redirects_a_hosted_feed_to_its_path_name(app, three_domains, news):  # noqa: F811
+def test_lookup_redirects_a_hosted_feed_to_its_path_name(app, three_domains, news):
     answer = get(app, '/feed/lookup/news/shop.example', host=FIRST)
     assert answer.status_code == 302 and answer.headers['Location'].endswith('/f/news@shop.example')
     answer = get(app, '/feed/lookup/news/shop.example', host=SHOP)
@@ -224,7 +224,7 @@ def test_lookup_redirects_a_hosted_feed_to_its_path_name(app, three_domains, new
     assert answer.status_code == 302 and answer.headers['Location'].endswith(f'/f/news@{FIRST}')
 
 
-def test_search_for_feed_finds_each_hosted_domains_own_row(app, three_domains, news, no_http):  # noqa: F811
+def test_search_for_feed_finds_each_hosted_domains_own_row(app, three_domains, news, no_http):
     first_feed, shop_feed = news
     assert search_for_feed('~news@shop.example', signed_in=True).id == shop_feed.id
     assert search_for_feed(f'~news@{FIRST}', signed_in=True).id == first_feed.id
@@ -232,7 +232,7 @@ def test_search_for_feed_finds_each_hosted_domains_own_row(app, three_domains, n
     assert no_http == []
 
 
-def test_a_shop_feeds_page_on_the_first_domain_links_it_as_name_at_shop(app, three_domains, news):  # noqa: F811
+def test_a_shop_feeds_page_on_the_first_domain_links_it_as_name_at_shop(app, three_domains, news):
     user = three_domains.account('viewer', three_domains.first)
     child = three_domains.local_feed('kid', three_domains.shop)
     child.parent_feed_id = news[1].id
@@ -245,7 +245,7 @@ def test_a_shop_feeds_page_on_the_first_domain_links_it_as_name_at_shop(app, thr
     assert '/f/kid@shop.example' in html
 
 
-def test_a_shop_feeds_menu_entries_name_it_at_shop_on_the_first_domain(app, three_domains, news):  # noqa: F811
+def test_a_shop_feeds_menu_entries_name_it_at_shop_on_the_first_domain(app, three_domains, news):
     news[0].is_instance_feed = news[1].is_instance_feed = True
     db.session.commit()
     cache.delete_memoized(menu_instance_feeds)
@@ -258,12 +258,12 @@ def test_a_shop_feeds_menu_entries_name_it_at_shop_on_the_first_domain(app, thre
     assert 'href="/f/news"' in get(app, '/explore', host=FIRST).data.decode()
 
 
-def test_every_link_a_feed_renders_resolves_back_to_it(app, three_domains, news, peer):  # noqa: F811
+def test_every_link_a_feed_renders_resolves_back_to_it(app, three_domains, news, three_domains_peer):
     """A feed's `link()` is bare on its own storefront and `name@host` on another; each, on each storefront, names the
     same row through actor_to_feed (the first domain's feed on shop was `news@<first host>`, read as a remote one). The
     onion's feed is found only where it is shown, on the onion (task 7): elsewhere its link names nothing."""
     onion = three_domains.local_feed('onionfeed', three_domains.onion)
-    remote = make_feed(peer, 'faraway')
+    remote = make_feed(three_domains_peer, 'faraway')
     seen = set()
     for host in (FIRST, SHOP, ONION):
         with request_on(app, domain_for_host(host)):
@@ -276,7 +276,7 @@ def test_every_link_a_feed_renders_resolves_back_to_it(app, three_domains, news,
     assert {'news', 'news@shop.example', f'news@{FIRST}', f'onionfeed@{ONION}'} <= seen
 
 
-def test_the_resolver_is_the_one_place_a_name_becomes_a_feed(app, three_domains, news):  # noqa: F811
+def test_the_resolver_is_the_one_place_a_name_becomes_a_feed(app, three_domains, news):
     first, shop = news
     with request_on(app, three_domains.shop):
         assert actor_to_feed(' News ') == shop
@@ -287,7 +287,7 @@ def test_the_resolver_is_the_one_place_a_name_becomes_a_feed(app, three_domains,
         assert actor_to_feed('nothing@shop.example') is None
 
 
-def test_feed_path_names_the_last_segment_for_its_domain(app, three_domains):  # noqa: F811
+def test_feed_path_names_the_last_segment_for_its_domain(app, three_domains):
     parent = three_domains.local_feed('parent', three_domains.shop)
     child = three_domains.local_feed('kid', three_domains.shop)
     child.parent_feed_id = parent.id
@@ -298,8 +298,8 @@ def test_feed_path_names_the_last_segment_for_its_domain(app, three_domains):  #
         assert child.path() == 'parent/kid@shop.example'
 
 
-def test_a_remote_feeds_path_names_it_as_remote_never_as_a_local_namesake(app, three_domains, peer):  # noqa: F811
-    remote = make_feed(peer, 'news', public=True)
+def test_a_remote_feeds_path_names_it_as_remote_never_as_a_local_namesake(app, three_domains, three_domains_peer):
+    remote = make_feed(three_domains_peer, 'news', public=True)
     remote.machine_name = 'news'
     three_domains.local_feed('news', three_domains.first, three_domains.account('firstowner', three_domains.first))
     for domain in (three_domains.first, three_domains.shop):
@@ -307,7 +307,7 @@ def test_a_remote_feeds_path_names_it_as_remote_never_as_a_local_namesake(app, t
             assert remote.path() == remote.ap_id.lower() == 'news@peer.example'
 
 
-def test_rss_of_a_public_child_is_not_hidden_by_a_private_feed_of_the_same_path(app, three_domains):  # noqa: F811
+def test_rss_of_a_public_child_is_not_hidden_by_a_private_feed_of_the_same_path(app, three_domains):
     """A private feed is named `parent/kid` (parent, owned by user kid); a public child `kid` under `parent` has the
     same path. A reader who may not read the private row gets the public child. Its owner gets the private feed: the
     path spells that feed's name exactly, and it is the first candidate the owner may read."""
@@ -326,7 +326,7 @@ def test_rss_of_a_public_child_is_not_hidden_by_a_private_feed_of_the_same_path(
     assert owner.status_code == 200 and b'Private kid' in owner.data
 
 
-def test_the_edit_link_comes_back_to_the_feed_as_this_storefront_names_it(app, three_domains, news):  # noqa: F811
+def test_the_edit_link_comes_back_to_the_feed_as_this_storefront_names_it(app, three_domains, news):
     owner = three_domains.account('shopowner2', three_domains.shop)
     news[1].user_id = owner.id
     db.session.add(FeedMember(feed_id=news[1].id, user_id=owner.id, is_owner=True))

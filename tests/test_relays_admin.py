@@ -12,7 +12,7 @@ from app.models import Relay, Site, utcnow
 from app.relays import RELAY_ACCEPTED, RELAY_PENDING, STYLE_MASTODON
 from app.relays.subscribe import RelayError
 from app.utils import get_setting
-from tests.discovery_fixtures import admin, fresh_cache  # noqa: F401
+from tests.discovery_fixtures import fresh_cache
 from tests.factories import make_community, make_instance, make_post, make_user
 from tests.test_admin_federation import csrf, login
 
@@ -58,8 +58,8 @@ def test_a_non_admin_is_refused(app, db_session):
     assert response.status_code == 302 and 'permission' in response.headers['Location']
 
 
-def test_get_lists_relays_with_the_24_hour_post_count(admin):
-    client, _ = admin
+def test_get_lists_relays_with_the_24_hour_post_count(discovery_admin):
+    client, _ = discovery_admin
     relay = make_relay()
     community = make_community('microblogs')
     author = make_user(make_instance('remote.example'), 'author')
@@ -76,8 +76,8 @@ def test_get_lists_relays_with_the_24_hour_post_count(admin):
     assert 'confirm_first' in page
 
 
-def test_get_shows_the_allowlist_note_only_in_strong_mode(admin):
-    client, _ = admin
+def test_get_shows_the_allowlist_note_only_in_strong_mode(discovery_admin):
+    client, _ = discovery_admin
     assert 'allowlisted servers' not in client.get(PAGE).get_data(as_text=True)
 
     db.session.get(Site, 1).allowlist_mode = ALLOWLIST_STRONG
@@ -88,8 +88,8 @@ def test_get_shows_the_allowlist_note_only_in_strong_mode(admin):
     assert 'LitePub' in page and 'author' in page
 
 
-def test_add_calls_add_relay_and_redirects(admin, calls):
-    client, token = admin
+def test_add_calls_add_relay_and_redirects(discovery_admin, calls):
+    client, token = discovery_admin
 
     response = client.post(PAGE, data={'relay_url': 'https://relay.example/inbox', 'relay_add': 'go',
                                        'csrf_token': token})
@@ -98,8 +98,8 @@ def test_add_calls_add_relay_and_redirects(admin, calls):
     assert 'Subscribed to' in client.get(PAGE).get_data(as_text=True)
 
 
-def test_add_with_an_invalid_url_does_not_call_add_relay(admin, calls):
-    client, token = admin
+def test_add_with_an_invalid_url_does_not_call_add_relay(discovery_admin, calls):
+    client, token = discovery_admin
 
     client.post(PAGE, data={'relay_url': 'nope', 'relay_add': 'go', 'csrf_token': token})
 
@@ -109,8 +109,8 @@ def test_add_with_an_invalid_url_does_not_call_add_relay(admin, calls):
 @pytest.mark.parametrize('name, data', [('add_relay', {'relay_url': 'https://relay.example/inbox',
                                                        'relay_add': 'go'}),
                                         ('retry_relay', {'relay_retry': 'go'})])
-def test_a_relay_error_is_flashed(admin, monkeypatch, name, data):
-    client, token = admin
+def test_a_relay_error_is_flashed(discovery_admin, monkeypatch, name, data):
+    client, token = discovery_admin
     relay = make_relay()
 
     def boom(*args):
@@ -123,8 +123,8 @@ def test_a_relay_error_is_flashed(admin, monkeypatch, name, data):
     assert 'cannot reach that relay' in client.get(PAGE).get_data(as_text=True)
 
 
-def test_retry_and_remove_act_on_the_row(admin, calls):
-    client, token = admin
+def test_retry_and_remove_act_on_the_row(discovery_admin, calls):
+    client, token = discovery_admin
     relay = make_relay()
 
     client.post(PAGE, data={'relay_id': str(relay.id), 'relay_retry': 'go', 'csrf_token': token})
@@ -135,8 +135,8 @@ def test_retry_and_remove_act_on_the_row(admin, calls):
 
 @pytest.mark.parametrize('after, message', [(RELAY_PENDING, 'Subscription request sent again.'),
                                             (RELAY_ACCEPTED, 'already lists this server as a follower')])
-def test_retry_says_whether_it_followed_again_or_found_the_subscription(admin, monkeypatch, after, message):
-    client, token = admin
+def test_retry_says_whether_it_followed_again_or_found_the_subscription(discovery_admin, monkeypatch, after, message):
+    client, token = discovery_admin
     relay = make_relay(state=RELAY_PENDING)
 
     def retry(row):
@@ -149,40 +149,40 @@ def test_retry_says_whether_it_followed_again_or_found_the_subscription(admin, m
     assert message in client.get(PAGE).get_data(as_text=True)
 
 
-def test_an_unknown_id_is_a_404(admin, calls):
-    client, token = admin
+def test_an_unknown_id_is_a_404(discovery_admin, calls):
+    client, token = discovery_admin
 
     response = client.post(PAGE, data={'relay_id': '999', 'relay_remove': 'go', 'csrf_token': token})
 
     assert response.status_code == 404 and calls == []
 
 
-def test_a_non_numeric_id_is_a_404(admin, calls):
-    client, token = admin
+def test_a_non_numeric_id_is_a_404(discovery_admin, calls):
+    client, token = discovery_admin
 
     response = client.post(PAGE, data={'relay_id': 'abc', 'relay_remove': 'go', 'csrf_token': token})
 
     assert response.status_code == 404 and calls == []
 
 
-def test_an_invalid_url_flashes_its_error(admin, calls):
-    client, token = admin
+def test_an_invalid_url_flashes_its_error(discovery_admin, calls):
+    client, token = discovery_admin
 
     client.post(PAGE, data={'relay_url': 'nope', 'relay_add': 'go', 'csrf_token': token})
 
     assert 'Invalid URL' in client.get(PAGE).get_data(as_text=True)
 
 
-def test_an_out_of_range_retention_flashes_its_error(admin):
-    client, token = admin
+def test_an_out_of_range_retention_flashes_its_error(discovery_admin):
+    client, token = discovery_admin
 
     client.post(PAGE, data={'relay_retention': '400', 'relay_settings_save': 'go', 'csrf_token': token})
 
     assert 'Number must be between 0 and 365' in client.get(PAGE).get_data(as_text=True)
 
 
-def test_a_post_without_a_csrf_token_is_refused(admin, calls):
-    client, _ = admin
+def test_a_post_without_a_csrf_token_is_refused(discovery_admin, calls):
+    client, _ = discovery_admin
     relay = make_relay()
 
     for data in ({'relay_url': 'https://relay.example/inbox', 'relay_add': 'go'},
@@ -193,8 +193,8 @@ def test_a_post_without_a_csrf_token_is_refused(admin, calls):
     assert calls == []
 
 
-def test_saving_the_retention_setting_stores_it(admin):
-    client, token = admin
+def test_saving_the_retention_setting_stores_it(discovery_admin):
+    client, token = discovery_admin
 
     client.post(PAGE, data={'relay_retention': '14', 'relay_settings_save': 'go', 'csrf_token': token})
 
@@ -202,29 +202,29 @@ def test_saving_the_retention_setting_stores_it(admin):
     assert 'value="14"' in client.get(PAGE).get_data(as_text=True)
 
 
-def test_an_invalid_retention_is_not_stored(admin):
-    client, token = admin
+def test_an_invalid_retention_is_not_stored(discovery_admin):
+    client, token = discovery_admin
 
     client.post(PAGE, data={'relay_retention': '9999', 'relay_settings_save': 'go', 'csrf_token': token})
 
     assert get_setting('relay_retention_days') != 9999
 
 
-def test_a_post_with_no_known_button_just_redirects(admin, calls):
-    client, token = admin
+def test_a_post_with_no_known_button_just_redirects(discovery_admin, calls):
+    client, token = discovery_admin
 
     assert client.post(PAGE, data={'csrf_token': token}).status_code == 302 and calls == []
 
 
-def test_the_nav_and_federation_page_link_here(admin):
-    client, _ = admin
+def test_the_nav_and_federation_page_link_here(discovery_admin):
+    client, _ = discovery_admin
 
     assert f'href="{PAGE}"' in client.get('/admin/instances').get_data(as_text=True)
     assert f'href="{PAGE}"' in client.get('/admin/federation').get_data(as_text=True)
 
 
-def test_the_federation_page_links_here_outside_the_bulk_import_sections(admin):
-    client, _ = admin
+def test_the_federation_page_links_here_outside_the_bulk_import_sections(discovery_admin):
+    client, _ = discovery_admin
 
     html = client.get('/admin/federation').get_data(as_text=True)
 

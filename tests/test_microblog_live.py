@@ -33,38 +33,6 @@ def local_instance():
     return existing if existing is not None else make_instance('test.piefed.local', software='piefed')
 
 
-@pytest.fixture
-def live(app, db_session):
-    site = db.session.get(Site, 1)
-    site.private_instance = False
-    db.session.commit()
-    local = local_instance()
-    make_user(local, 'founder', local=True)
-    viewer = make_user(local, 'viewer', local=True)
-    remote = make_instance('mastodon.example')
-    author = make_user(remote, 'tooter')
-    microblogs = make_community('microblogs', kind=COMMUNITY_KIND_MICROBLOGS)
-    microblogs.show_popular = False
-    microblogs.show_all = False
-    db.session.add(Language(code='und', name='Undetermined'))
-    db.session.commit()
-    counter = iter(range(1, 10_000))
-
-    def toot(**columns):
-        post = make_post(microblogs, author, f'https://mastodon.example/statuses/{next(counter)}', microblog=True)
-        for name, value in columns.items():
-            setattr(post, name, value)
-        db.session.commit()
-        return post
-
-    return SimpleNamespace(viewer=viewer, author=author, remote=remote, microblogs=microblogs, toot=toot)
-
-
-@pytest.fixture
-def client(app):
-    return app.test_client()
-
-
 def teaser_ids(html):
     return [int(found) for found in re.findall(r'id="post_(\d+)"', html)]
 
@@ -292,40 +260,40 @@ FRAGMENT = '/community/microblogs/live/posts'
 
 class TestLiveFragment:
 
-    def test_new_posts_after_the_cursor_come_back_newest_first_with_the_new_cursor(self, client, live):
+    def test_new_posts_after_the_cursor_come_back_newest_first_with_the_new_cursor(self, microblog_live_client, live):
         seen = live.toot()
         older = live.toot(posted_at=utcnow() - timedelta(minutes=5))
         newer = live.toot()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        response = client.get(f'{FRAGMENT}?after={seen.id}')
+        response = microblog_live_client.get(f'{FRAGMENT}?after={seen.id}')
 
         assert response.status_code == 200
         assert teaser_ids(response.get_data(as_text=True)) == [newer.id, older.id]
         assert response.headers['X-Live-Cursor'] == str(max(newer.id, older.id))
 
-    def test_nothing_new_is_204(self, client, live):
+    def test_nothing_new_is_204(self, microblog_live_client, live):
         latest = live.toot()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        response = client.get(f'{FRAGMENT}?after={latest.id}')
+        response = microblog_live_client.get(f'{FRAGMENT}?after={latest.id}')
 
         assert response.status_code == 204 and response.get_data() == b''
 
-    def test_a_backfilled_post_is_not_new(self, client, live):
+    def test_a_backfilled_post_is_not_new(self, microblog_live_client, live):
         live.toot(posted_at=utcnow() - timedelta(hours=2))
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert client.get(f'{FRAGMENT}?after=0').status_code == 204
+        assert microblog_live_client.get(f'{FRAGMENT}?after=0').status_code == 204
 
-    def test_at_most_forty_posts(self, client, live):
+    def test_at_most_forty_posts(self, microblog_live_client, live):
         for _ in range(41):
             live.toot()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert len(teaser_ids(client.get(f'{FRAGMENT}?after=0').get_data(as_text=True))) == 40
+        assert len(teaser_ids(microblog_live_client.get(f'{FRAGMENT}?after=0').get_data(as_text=True))) == 40
 
-    def test_the_viewers_blocks_and_settings_apply(self, client, live):
+    def test_the_viewers_blocks_and_settings_apply(self, microblog_live_client, live):
         kept = live.toot()
         pest = make_user(live.remote, 'pest')
         make_post(live.microblogs, pest, 'https://mastodon.example/statuses/pest', microblog=True)
@@ -338,58 +306,58 @@ class TestLiveFragment:
         make_instance_block(live.viewer, elsewhere)
         live.viewer.hide_nsfw = 1
         db.session.commit()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert teaser_ids(client.get(f'{FRAGMENT}?after=0').get_data(as_text=True)) == [kept.id]
+        assert teaser_ids(microblog_live_client.get(f'{FRAGMENT}?after=0').get_data(as_text=True)) == [kept.id]
 
-    def test_the_cursor_advances_even_when_a_keyword_filter_hides_every_teaser(self, client, live, monkeypatch):
+    def test_the_cursor_advances_even_when_a_keyword_filter_hides_every_teaser(self, microblog_live_client, live, monkeypatch):
         hidden = live.toot()
         monkeypatch.setattr(Post, 'blocked_by_content_filter', lambda self, filters, user_id: '-1')
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        response = client.get(f'{FRAGMENT}?after=0')
+        response = microblog_live_client.get(f'{FRAGMENT}?after=0')
 
         assert response.status_code == 200
         assert teaser_ids(response.get_data(as_text=True)) == []
         assert response.headers['X-Live-Cursor'] == str(hidden.id)
 
-    def test_an_anonymous_visitor_is_sent_to_log_in(self, client, live):
-        response = client.get(f'{FRAGMENT}?after=0')
+    def test_an_anonymous_visitor_is_sent_to_log_in(self, microblog_live_client, live):
+        response = microblog_live_client.get(f'{FRAGMENT}?after=0')
 
         assert response.status_code == 302 and '/auth/login' in response.headers['Location']
 
-    def test_another_community_has_no_live_fragment(self, client, live):
+    def test_another_community_has_no_live_fragment(self, microblog_live_client, live):
         make_community('general')
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert client.get('/community/general/live/posts?after=0').status_code == 404
+        assert microblog_live_client.get('/community/general/live/posts?after=0').status_code == 404
 
-    def test_a_private_community_refuses_a_viewer_who_is_not_a_member(self, client, live):
+    def test_a_private_community_refuses_a_viewer_who_is_not_a_member(self, microblog_live_client, live):
         live.toot()
         live.microblogs.private = True
         db.session.commit()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert client.get(f'{FRAGMENT}?after=0').status_code == 403
+        assert microblog_live_client.get(f'{FRAGMENT}?after=0').status_code == 403
 
-    def test_a_private_community_still_serves_its_members(self, client, live):
+    def test_a_private_community_still_serves_its_members(self, microblog_live_client, live):
         live.toot()
         live.microblogs.private = True
         make_community_member(live.viewer, live.microblogs)
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert client.get(f'{FRAGMENT}?after=0').status_code == 200
+        assert microblog_live_client.get(f'{FRAGMENT}?after=0').status_code == 200
 
-    def test_an_unknown_community_has_none_either(self, client, live):
-        login(client, live.viewer)
+    def test_an_unknown_community_has_none_either(self, microblog_live_client, live):
+        login(microblog_live_client, live.viewer)
 
-        assert client.get('/community/nosuch/live/posts?after=0').status_code == 404
+        assert microblog_live_client.get('/community/nosuch/live/posts?after=0').status_code == 404
 
     @pytest.mark.parametrize('query', ['', '?after=', '?after=abc'])
-    def test_a_missing_or_unreadable_cursor_is_400(self, client, live, query):
-        login(client, live.viewer)
+    def test_a_missing_or_unreadable_cursor_is_400(self, microblog_live_client, live, query):
+        login(microblog_live_client, live.viewer)
 
-        assert client.get(f'{FRAGMENT}{query}').status_code == 400
+        assert microblog_live_client.get(f'{FRAGMENT}{query}').status_code == 400
 
     def test_the_thirteenth_request_in_a_minute_is_refused(self, live):
         from app import create_app, limiter
@@ -462,25 +430,25 @@ class TestLiveFragment:
 
 class TestLivePage:
 
-    def test_the_live_button_shows_for_a_logged_in_viewer_of_microblogs(self, client, live):
-        login(client, live.viewer)
+    def test_the_live_button_shows_for_a_logged_in_viewer_of_microblogs(self, microblog_live_client, live):
+        login(microblog_live_client, live.viewer)
 
-        assert '?sort=live' in client.get('/c/microblogs').get_data(as_text=True)
+        assert '?sort=live' in microblog_live_client.get('/c/microblogs').get_data(as_text=True)
 
-    def test_no_live_button_for_an_anonymous_visitor(self, client, live):
-        assert '?sort=live' not in client.get('/c/microblogs').get_data(as_text=True)
+    def test_no_live_button_for_an_anonymous_visitor(self, microblog_live_client, live):
+        assert '?sort=live' not in microblog_live_client.get('/c/microblogs').get_data(as_text=True)
 
-    def test_no_live_button_on_another_community(self, client, live):
+    def test_no_live_button_on_another_community(self, microblog_live_client, live):
         make_community('general')
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert '?sort=live' not in client.get('/c/general').get_data(as_text=True)
+        assert '?sort=live' not in microblog_live_client.get('/c/general').get_data(as_text=True)
 
-    def test_the_live_page_carries_the_client_contract(self, client, live):
+    def test_the_live_page_carries_the_client_contract(self, microblog_live_client, live):
         posts = [live.toot(), live.toot()]
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+        html = microblog_live_client.get('/c/microblogs?sort=live').get_data(as_text=True)
 
         assert 'id="live_feed"' in html
         assert f'data-cursor="{max(post.id for post in posts)}"' in html
@@ -493,30 +461,30 @@ class TestLivePage:
         assert set(teaser_ids(html)) == {post.id for post in posts}
 
     @pytest.mark.parametrize('query', ['flair=x', 'tag=x'])
-    def test_a_filtered_view_is_not_live(self, client, live, query):
-        login(client, live.viewer)
+    def test_a_filtered_view_is_not_live(self, microblog_live_client, live, query):
+        login(microblog_live_client, live.viewer)
 
-        html = client.get(f'/c/microblogs?sort=live&{query}').get_data(as_text=True)
+        html = microblog_live_client.get(f'/c/microblogs?sort=live&{query}').get_data(as_text=True)
 
         assert 'id="live_feed"' not in html
 
-    def test_the_pill_string_reads_right_for_any_count(self, client, live):
-        login(client, live.viewer)
+    def test_the_pill_string_reads_right_for_any_count(self, microblog_live_client, live):
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+        html = microblog_live_client.get('/c/microblogs?sort=live').get_data(as_text=True)
 
         assert 'data-str-new-posts="New posts: %d"' in html
 
-    def test_an_empty_community_starts_the_cursor_at_zero(self, client, live):
-        login(client, live.viewer)
+    def test_an_empty_community_starts_the_cursor_at_zero(self, microblog_live_client, live):
+        login(microblog_live_client, live.viewer)
 
-        assert 'data-cursor="0"' in client.get('/c/microblogs?sort=live').get_data(as_text=True)
+        assert 'data-cursor="0"' in microblog_live_client.get('/c/microblogs?sort=live').get_data(as_text=True)
 
-    def test_with_a_notification_server_the_page_names_the_live_stream(self, app, client, live, monkeypatch):
+    def test_with_a_notification_server_the_page_names_the_live_stream(self, app, microblog_live_client, live, monkeypatch):
         monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+        html = microblog_live_client.get('/c/microblogs?sort=live').get_data(as_text=True)
 
         assert f'data-sse-url="https://notifs.example/live/stream?feed=community:{live.microblogs.id}"' in html
 
@@ -526,47 +494,47 @@ class TestLivePage:
         ('/c/microblogs?sort=live&content_type=comments', True),
         ('/c/microblogs?sort=live&page=2', True),
     ])
-    def test_sort_live_falls_back_to_new_where_live_is_not_available(self, client, live, path, as_viewer):
+    def test_sort_live_falls_back_to_new_where_live_is_not_available(self, microblog_live_client, live, path, as_viewer):
         make_community('general')
         if as_viewer:
-            login(client, live.viewer)
+            login(microblog_live_client, live.viewer)
 
-        response = client.get(path)
+        response = microblog_live_client.get(path)
 
         assert response.status_code == 200
         assert 'id="live_feed"' not in response.get_data(as_text=True)
 
-    def test_live_leaves_out_sticky_posts(self, client, live):
+    def test_live_leaves_out_sticky_posts(self, microblog_live_client, live):
         pinned = live.toot(sticky=True)
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert pinned.id not in teaser_ids(client.get('/c/microblogs?sort=live').get_data(as_text=True))
+        assert pinned.id not in teaser_ids(microblog_live_client.get('/c/microblogs?sort=live').get_data(as_text=True))
 
-    def test_live_forces_the_list_layout(self, client, live):
+    def test_live_forces_the_list_layout(self, microblog_live_client, live):
         live.microblogs.default_layout = 'masonry'
         db.session.commit()
         live.toot()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+        html = microblog_live_client.get('/c/microblogs?sort=live').get_data(as_text=True)
 
         assert 'id="masonry"' not in html and 'id="live_feed"' in html
 
-    def test_live_works_in_low_bandwidth_mode(self, client, live):
+    def test_live_works_in_low_bandwidth_mode(self, microblog_live_client, live):
         live.toot()
-        login(client, live.viewer)
-        client.set_cookie('low_bandwidth', '1')
+        login(microblog_live_client, live.viewer)
+        microblog_live_client.set_cookie('low_bandwidth', '1')
 
-        assert 'id="live_feed"' in client.get('/c/microblogs?sort=live').get_data(as_text=True)
+        assert 'id="live_feed"' in microblog_live_client.get('/c/microblogs?sort=live').get_data(as_text=True)
 
-    def test_older_posts_continue_in_the_new_sort(self, client, live):
+    def test_older_posts_continue_in_the_new_sort(self, microblog_live_client, live):
         for _ in range(3):
             live.toot()
         live.viewer.page_length = 2
         db.session.commit()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/c/microblogs?sort=live').get_data(as_text=True)
+        html = microblog_live_client.get('/c/microblogs?sort=live').get_data(as_text=True)
 
         assert 'Older posts' in html
         assert re.search(r'href="[^"]*page=2[^"]*sort=new|href="[^"]*sort=new[^"]*page=2', html)
@@ -684,30 +652,30 @@ class TestLiveCapableCommunities:
         with app.test_request_context():
             assert not is_live_community(community)
 
-    def test_the_remote_piefed_microblogs_page_goes_live(self, client, live):
+    def test_the_remote_piefed_microblogs_page_goes_live(self, microblog_live_client, live):
         community = piefed_microblogs()
         make_post(community, live.author, 'https://piefed.social/post/1', microblog=True)
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/c/microblogs@piefed.social?sort=live').get_data(as_text=True)
+        html = microblog_live_client.get('/c/microblogs@piefed.social?sort=live').get_data(as_text=True)
 
         assert 'id="live_feed"' in html
         assert 'data-posts-url="/community/microblogs@piefed.social/live/posts"' in html
 
-    def test_a_remote_lemmy_microblogs_page_has_no_live(self, client, live):
+    def test_a_remote_lemmy_microblogs_page_has_no_live(self, microblog_live_client, live):
         piefed_microblogs('lemmy.example', 'lemmy')
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get('/c/microblogs@lemmy.example?sort=live').get_data(as_text=True)
+        html = microblog_live_client.get('/c/microblogs@lemmy.example?sort=live').get_data(as_text=True)
 
         assert 'id="live_feed"' not in html and '?sort=live' not in html
 
-    def test_the_remote_piefed_fragment_serves_new_posts(self, client, live):
+    def test_the_remote_piefed_fragment_serves_new_posts(self, microblog_live_client, live):
         community = piefed_microblogs()
         post = make_post(community, live.author, 'https://piefed.social/post/2', microblog=True)
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        response = client.get('/community/microblogs@piefed.social/live/posts?after=0')
+        response = microblog_live_client.get('/community/microblogs@piefed.social/live/posts?after=0')
 
         assert response.status_code == 200 and teaser_ids(response.get_data(as_text=True)) == [post.id]
 

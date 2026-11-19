@@ -9,22 +9,22 @@ import pytest
 from app import db
 from app.models import Domain, Post, SiteDomain
 from app.storefront import clear_domain_cache, host_hidden_here, host_not_hidden_clause
-from tests.test_instance_visible_here import get, scene  # noqa: F401 -- scene is a fixture
-from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
-from tests.two_domains import FIRST, ONION, default_request, two_domains  # noqa: F401
+from tests.test_instance_visible_here import get
+from tests.test_per_domain_ap_routes import onion_proxy
+from tests.two_domains import FIRST, ONION, default_request
 
 pytestmark = pytest.mark.usefixtures('site')
 
 
 @pytest.fixture
-def links(scene):  # noqa: F811
+def links(instance_visible_here_scene):
     """The onion's post links to the onion, and a first-domain post to an ordinary site, each filed under its host."""
     onion_host, ordinary = Domain(name=ONION, post_count=1), Domain(name='example.com', post_count=1)
     db.session.add_all([onion_host, ordinary])
     db.session.flush()
     Post.query.filter_by(title='ONIONPOST').one().domain_id = onion_host.id
     db.session.commit()
-    return scene, onion_host, ordinary
+    return instance_visible_here_scene, onion_host, ordinary
 
 
 @pytest.mark.parametrize('signed_in', [False, True])
@@ -68,13 +68,13 @@ UNRELATED = ['zyx.onion', f'x{ONION}', 'example.com']   # another onion; a name 
 
 
 @pytest.fixture
-def spellings(scene):  # noqa: F811
+def spellings(instance_visible_here_scene):
     """A Domain row for each spelling of the onion's host a link can produce (Tor ignores an onion's subdomains, and
     a host may end in a dot or be written in capitals), and some that are not ours."""
     rows = {name: Domain(name=name, post_count=1) for name in VARIANTS + UNRELATED}
     db.session.add_all(rows.values())
     db.session.commit()
-    return scene, rows
+    return instance_visible_here_scene, rows
 
 
 def listed(app, host, user):
@@ -102,7 +102,7 @@ def test_the_onion_lists_and_shows_every_spelling_of_its_host(app, spellings):
         assert get(app, f'/d/{rows[name].id}', host=ONION, user=scene.onion_bob).status_code == 200, name
 
 
-def test_a_like_wildcard_in_a_hidden_host_matches_only_itself(app, two_domains):  # noqa: F811
+def test_a_like_wildcard_in_a_hidden_host_matches_only_itself(app, two_domains):
     """The listing filter escapes LIKE's wildcards: a hidden host with `_` in it hides no other name."""
     db.session.add(SiteDomain(domain='a_b.onion', scheme='http', federates=False))
     db.session.add_all([Domain(name='x.a_b.onion'), Domain(name='x.aXb.onion'), Domain(name='a_b.onion')])

@@ -18,7 +18,7 @@ from app.storefront import clear_domain_cache, rewrite_response_for_storefront, 
 from app.utils import feed_entry_body
 from tests.linear_time import grows_linearly
 from tests.test_storefront_links import in_onion_request
-from tests.test_storefront_presentation import CANONICAL, ONION, onion  # noqa: F401  (onion is a fixture)
+from tests.test_storefront_presentation import CANONICAL, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -133,7 +133,7 @@ def hide(body, mimetype='text/html'):
     (f'<div style="background:url(https\\3a //{S3}/x)">t</div>', '<div>t</div>'),
     ('<div style="background:url(\'https://\\63 dn.example.test/x\')">t</div>', '<div>t</div>'),
 ])
-def test_s3_media_is_hidden_on_the_onion(app, onion, s3, body, shown):
+def test_s3_media_is_hidden_on_the_onion(app, storefront_presentation_onion, s3, body, shown):
     out = hide(body)
     assert out == shown
     assert S3 not in out.lower()
@@ -153,7 +153,7 @@ def test_s3_media_is_hidden_on_the_onion(app, onion, s3, body, shown):
     f'<link rel="stylesheet" href="{S3}.css"/>',
     f'<img src="{S3}/x.jpg"/>',   # a relative path whose first segment happens to be the host
 ])
-def test_what_is_not_on_the_s3_host_is_left_alone(app, onion, s3, body):
+def test_what_is_not_on_the_s3_host_is_left_alone(app, storefront_presentation_onion, s3, body):
     assert hide(body) == body
 
 
@@ -164,18 +164,18 @@ def test_what_is_not_on_the_s3_host_is_left_alone(app, onion, s3, body):
     f'https://evil.test/?u=https://{S3}/x.jpg',   # ours in a query
     f'https://user@evil.test/{S3}',
 ])
-def test_a_remote_host_that_is_not_the_s3_host_is_proxied_not_hidden(app, onion, s3, src):
+def test_a_remote_host_that_is_not_the_s3_host_is_proxied_not_hidden(app, storefront_presentation_onion, s3, src):
     assert hide(f'<img src="{src}"/>') == f'<img src="{proxy_url(src)}"/>'   # the onion media proxy, not hidden
 
 
-def test_a_page_without_s3_media_is_still_parsed_once_when_s3_is_set(app, onion, s3):
+def test_a_page_without_s3_media_is_still_parsed_once_when_s3_is_set(app, storefront_presentation_onion, s3):
     # a raw-text pre-check could be fooled by an entity or a percent-escape, so with S3 set the onion always parses
     with patch.object(storefront, 'BeautifulSoup', wraps=storefront.BeautifulSoup) as parser:
         assert hide('<img src="/x.jpg"/>') == '<img src="/x.jpg"/>'
     assert parser.call_count == 1
 
 
-def test_s3_hiding_and_the_link_rewrite_share_one_parse(app, onion, s3):
+def test_s3_hiding_and_the_link_rewrite_share_one_parse(app, storefront_presentation_onion, s3):
     with patch.object(storefront, 'BeautifulSoup', wraps=storefront.BeautifulSoup) as parser:
         out = hide(f'<img src="https://{S3}/x.jpg"/><a href="https://{CANONICAL}/x">x</a>')
     assert out == f'{HIDDEN}<a href="http://{ONION}/x">x</a>'
@@ -186,13 +186,13 @@ def test_s3_hiding_and_the_link_rewrite_share_one_parse(app, onion, s3):
     ('', False), (f'https://{S3}/', True), (f'{S3}/media', True), (f'{S3}:9000', True), (f'https://user@{S3}/x', True),
     ('https://[::1', False),   # not a host: nothing is hidden, and nothing raises
 ])
-def test_the_s3_host_is_read_from_the_public_url_as_a_host(app, onion, monkeypatch, public, hidden):
+def test_the_s3_host_is_read_from_the_public_url_as_a_host(app, storefront_presentation_onion, monkeypatch, public, hidden):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', public)
     out = hide(f'<img src="https://{S3}/x.jpg"/>')
     assert (HIDDEN in out) is hidden
 
 
-def test_nothing_is_parsed_when_s3_is_not_configured(app, onion, monkeypatch):
+def test_nothing_is_parsed_when_s3_is_not_configured(app, storefront_presentation_onion, monkeypatch):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', '')
     body = f'<img src="https://{S3}/x.jpg"/><a href="https://{CANONICAL}/x">x</a>'
     context = in_onion_request(current_app._get_current_object())
@@ -206,30 +206,30 @@ def test_nothing_is_parsed_when_s3_is_not_configured(app, onion, monkeypatch):
     assert parser.call_count == 1   # the link rewrite's own parse
 
 
-def test_s3_media_is_hidden_and_the_links_move(app, onion, s3):
+def test_s3_media_is_hidden_and_the_links_move(app, storefront_presentation_onion, s3):
     out = hide(f'<img src="https://{S3}/x.jpg"/><a href="https://{CANONICAL}/x">x</a>')
     assert out == f'{HIDDEN}<a href="http://{ONION}/x">x</a>'
 
 
-def test_the_placeholder_is_translated(app, onion, s3):
+def test_the_placeholder_is_translated(app, storefront_presentation_onion, s3):
     with patch.object(storefront, '_', side_effect=lambda text: f'[{text}]'):
         assert '<span class="onion-media-hidden">[Media hidden on the onion site]</span>' in hide(
             f'<img src="https://{S3}/x.jpg"/>')
 
 
-def test_json_and_other_types_are_left_alone(app, onion, s3):
+def test_json_and_other_types_are_left_alone(app, storefront_presentation_onion, s3):
     body = f'{{"image": "https://{S3}/x.jpg"}}'
     assert hide(body, mimetype='application/json') == body
 
 
-def test_clearnet_keeps_s3_media(app, onion, s3):
+def test_clearnet_keeps_s3_media(app, storefront_presentation_onion, s3):
     body = f'<img src="https://{S3}/x.jpg"/>'
     with app.test_request_context(base_url=f'https://{CANONICAL}'):
         app.preprocess_request()
         assert rewrite_response_for_storefront(Response(body, mimetype='text/html')).get_data(as_text=True) == body
 
 
-def test_a_clearnet_alias_keeps_s3_media(app, onion, s3):
+def test_a_clearnet_alias_keeps_s3_media(app, storefront_presentation_onion, s3):
     # only an onion storefront hides it: another domain of the site is as public as the canonical one
     db.session.add(SiteDomain(domain='alias.test', scheme='https', federates=False))
     db.session.commit()
@@ -240,13 +240,13 @@ def test_a_clearnet_alias_keeps_s3_media(app, onion, s3):
         assert rewrite_response_for_storefront(Response(body, mimetype='text/html')).get_data(as_text=True) == body
 
 
-def test_s3_host_that_is_one_of_ours_is_not_hidden(app, onion, monkeypatch):
+def test_s3_host_that_is_one_of_ours_is_not_hidden(app, storefront_presentation_onion, monkeypatch):
     # the host is served by this site, so the rewrite moves it onto the onion: nothing leaves it
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', CANONICAL)
     assert hide(f'<img src="https://{CANONICAL}/x.jpg"/>') == f'<img src="http://{ONION}/x.jpg"/>'
 
 
-def test_a_feed_entry_on_the_onion_hides_s3_media(app, onion, s3):
+def test_a_feed_entry_on_the_onion_hides_s3_media(app, storefront_presentation_onion, s3):
     class Post:
         content_warning = None
         body_html = f'<p>pic</p><img src="https://{S3}/x.jpg"/>'
@@ -272,13 +272,13 @@ def page(app, base_url, rewrite=True):
         return (rewrite_response_for_storefront(response) if rewrite else response).get_data(as_text=True)
 
 
-def test_an_onion_page_with_an_s3_image_shows_the_placeholder_and_no_s3_host(app, onion, s3):
+def test_an_onion_page_with_an_s3_image_shows_the_placeholder_and_no_s3_host(app, storefront_presentation_onion, s3):
     onion_page = page(app, f'https://{ONION}')
     assert 'Media hidden on the onion site' in onion_page
     assert S3 not in onion_page   # base.html's preconnect is not written for an onion page either
 
 
-def test_a_clearnet_page_keeps_its_s3_image_and_preconnect(app, onion, s3):
+def test_a_clearnet_page_keeps_its_s3_image_and_preconnect(app, storefront_presentation_onion, s3):
     clearnet = page(app, f'https://{CANONICAL}')
     assert f'<img src="https://{S3}/posts/ab/cd/x.jpg"/>' in clearnet
     assert f'<link rel="preconnect" href="{S3}">' in clearnet
@@ -289,20 +289,20 @@ def test_browser_host_of_something_that_is_no_url():
     assert storefront.browser_host('/relative/x') == ''
 
 
-def test_an_onion_page_proxies_rather_than_hides_when_s3_is_not_configured(app, onion, monkeypatch):
+def test_an_onion_page_proxies_rather_than_hides_when_s3_is_not_configured(app, storefront_presentation_onion, monkeypatch):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', '')
     onion_page = page(app, f'https://{ONION}')
     assert f'<img src="{proxy_url(f"https://{S3}/posts/ab/cd/x.jpg")}"/>' in onion_page
     assert 'onion-media-hidden' not in onion_page
 
 
-def test_the_layout_writes_no_s3_preconnect_on_an_onion_page(app, onion, s3):
+def test_the_layout_writes_no_s3_preconnect_on_an_onion_page(app, storefront_presentation_onion, s3):
     # without the rewrite: the template itself must not contact the S3 host
     assert f'rel="preconnect" href="{S3}"' not in page(app, f'https://{ONION}', rewrite=False)
     assert f'rel="preconnect" href="{S3}"' in page(app, f'https://{CANONICAL}', rewrite=False)
 
 
-def test_nothing_about_domains_is_read_when_s3_is_not_configured(app, onion, monkeypatch):
+def test_nothing_about_domains_is_read_when_s3_is_not_configured(app, storefront_presentation_onion, monkeypatch):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', '')
     with app.test_request_context(base_url=f'https://{ONION}'):
         app.preprocess_request()
@@ -319,13 +319,13 @@ def test_nothing_about_domains_is_read_when_s3_is_not_configured(app, onion, mon
     ('[::1]', 'https://[0:0::1]/x'),
     ('https://[2001:db8::1]:9000/p', 'https://[2001:0db8:0:0:0:0:0:1]/x'),
 ])
-def test_an_ip_literal_s3_host_is_compared_as_the_address(app, onion, monkeypatch, public, src):
+def test_an_ip_literal_s3_host_is_compared_as_the_address(app, storefront_presentation_onion, monkeypatch, public, src):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', public)
     assert hide(f'<img src="{src}"/>') == HIDDEN
 
 
 @pytest.mark.parametrize('src', ['https://203.0.113.6/x', 'https://[::2]/x', 'https://256.1.1.1/x', 'https://1.2.3.4.5/x'])
-def test_another_address_is_not_the_s3_host(app, onion, monkeypatch, src):
+def test_another_address_is_not_the_s3_host(app, storefront_presentation_onion, monkeypatch, src):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', '203.0.113.5')
     shown = proxy_url(src) if storefront.browser_host(src) else src   # no host a browser loads: nothing to proxy
     assert hide(f'<img src="{src}"/>') == f'<img src="{shown}"/>'
@@ -392,12 +392,12 @@ def test_css_quoted_strings(style, urls):
     ('203.0.113.5', 'https://[::ffff:203.0.113.5]/x'),
     ('203.0.113.5', 'https://[::ffff:cb00:7105]/x'),
 ])
-def test_an_idn_or_mapped_s3_host_matches_every_spelling(app, onion, monkeypatch, public, src):
+def test_an_idn_or_mapped_s3_host_matches_every_spelling(app, storefront_presentation_onion, monkeypatch, public, src):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', public)
     assert hide(f'<img src="{src}"/>') == HIDDEN
 
 
-def test_another_idn_is_not_the_s3_host(app, onion, monkeypatch):
+def test_another_idn_is_not_the_s3_host(app, storefront_presentation_onion, monkeypatch):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', 'xn--bcher-kva.test')
     src = 'https://b\u00fcchers.test/x'
     assert hide(f'<img src="{src}"/>') == f'<img src="{proxy_url(src)}"/>'
@@ -484,7 +484,7 @@ def test_the_backstop_keeps_another_host(public, text):
     assert not storefront._names_host(text, public)
 
 
-def test_an_idn_s3_host_named_in_unicode_in_a_style_is_hidden(app, onion, monkeypatch):
+def test_an_idn_s3_host_named_in_unicode_in_a_style_is_hidden(app, storefront_presentation_onion, monkeypatch):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', 'xn--bcher-kva.test')
     assert hide('<div style="--x: b\u00fccher.test">t</div>') == '<div>t</div>'
 
@@ -494,7 +494,7 @@ def test_an_idn_s3_host_named_in_unicode_in_a_style_is_hidden(app, onion, monkey
     "background-image:u\\72l(https://0xcb.0.113.5/x)",
     "--a:'https://%33405803781/x",
 ])
-def test_an_address_s3_host_named_in_a_style_is_hidden(app, onion, monkeypatch, style):
+def test_an_address_s3_host_named_in_a_style_is_hidden(app, storefront_presentation_onion, monkeypatch, style):
     monkeypatch.setitem(current_app.config, 'S3_PUBLIC_URL', '203.0.113.5')
     assert hide(f'<div style="{style}">t</div>') == '<div>t</div>'
 
@@ -503,7 +503,7 @@ def test_browser_host_never_raises_on_a_lone_surrogate():
     assert storefront.browser_host('https://a\ud800.test/x') == storefront.UNMAPPABLE
 
 
-def test_an_error_in_the_s3_check_hides_the_element_and_is_logged(app, onion, s3, caplog):
+def test_an_error_in_the_s3_check_hides_the_element_and_is_logged(app, storefront_presentation_onion, s3, caplog):
     with patch.object(storefront, '_points_at', side_effect=RuntimeError('boom')):
         out = hide('<p>a<b class="c">t</b></p>')
     assert out == f'<p>a{HIDDEN}</p>'

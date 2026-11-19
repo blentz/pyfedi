@@ -16,7 +16,7 @@ from app.models import User, utcnow
 from app.reads.users import BY_ID, BY_NAME, People, person_by_id, person_listing, person_named, \
     refuse_hidden_person
 from tests.factories import make_user
-from tests.two_domains import ONION, default_request, onion_request, two_domains  # noqa: F401 -- a fixture
+from tests.two_domains import ONION, default_request, onion_request
 
 
 def remote_named(name, ap_domain):
@@ -32,7 +32,7 @@ def world(app, api_baseline):
 
 
 @pytest.fixture
-def onion_person(app, site, two_domains):  # noqa: F811 -- two_domains is the fixture
+def onion_person(app, site, two_domains):  # -- two_domains is the fixture
     """A local account of the local-only onion: hidden off the onion from everyone, and on it from a logged-out
     viewer."""
     return two_domains.local_user('hermit', two_domains.domains[1])

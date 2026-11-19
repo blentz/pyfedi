@@ -15,8 +15,8 @@ from app.local_only import content_local_only, hidden_here, hidden_here_clause, 
 from app.models import Community, Feed, Post, PostReply, SiteDomain, User
 from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import make_feed, make_instance, make_local_feed, make_post, make_post_reply, make_user
-from tests.test_per_domain_ap_routes import SHOP, onion_proxy, twins  # noqa: F401
-from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401
+from tests.test_per_domain_ap_routes import SHOP, onion_proxy
+from tests.two_domains import FIRST, ONION, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -55,7 +55,7 @@ def reply_chain(post, *authors):
 
 
 @pytest.fixture
-def world(app, twins, two_domains):  # noqa: F811
+def world(app, twins, two_domains):
     first_bob, first_art, onion_bob, onion_art, shop_bob, shop_art = twins
     peer = make_instance('peer.example')
     remote = make_user(peer, 'remote')

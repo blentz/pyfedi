@@ -29,27 +29,6 @@ AUTHOR = 'https://remote.test/u/someone'
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 
 
-@pytest.fixture
-def env(app, api_baseline, monkeypatch):
-    from types import SimpleNamespace
-
-    g.admin_ids = []
-    g.site = db.session.get(Site, 1)
-    community = make_community('probeland')
-    author = make_user(api_baseline.instance_remote, 'someone')
-    author.ap_id = 'someone@remote.test'
-    author.ap_profile_id = AUTHOR
-    author.ap_public_url = AUTHOR
-    db.session.commit()
-    make_community_member(author, community)
-    monkeypatch.setitem(current_app.config, 'IMAGE_HASHING_ENDPOINT', '')
-    local = make_user(api_baseline.instance_local, 'localuser', local=True)
-    local.ap_profile_id = f"{current_app.config['SERVER_URL']}/u/localuser"
-    db.session.commit()
-    return SimpleNamespace(community=community, author=author, local=local,
-                           baseline=api_baseline)
-
-
 def an_activity(**overrides):
     obj = {'id': f'https://remote.test/p/{abs(hash(str(sorted(overrides)))) % 100000}',
            'type': 'Page', 'name': 'a post', 'attributedTo': AUTHOR,
@@ -71,99 +50,99 @@ class TestAPostThatMentionsSomebodyHere:
         tag.update(extra)
         return [tag]
 
-    def test_the_post_arrives(self, env):
-        post = new(env, tag=self.a_mention(env.local.ap_profile_id))
+    def test_the_post_arrives(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, tag=self.a_mention(models_post_new_branches_env.local.ap_profile_id))
         assert post is not None
         assert post.title == 'a post'
 
-    def test_the_mentioned_user_is_notified(self, env):
-        post = new(env, tag=self.a_mention(env.local.ap_profile_id))
-        notification = Notification.query.filter_by(user_id=env.local.id).one()
+    def test_the_mentioned_user_is_notified(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, tag=self.a_mention(models_post_new_branches_env.local.ap_profile_id))
+        notification = Notification.query.filter_by(user_id=models_post_new_branches_env.local.id).one()
         assert str(post.id) in notification.url
-        assert notification.author_id == env.author.id
+        assert notification.author_id == models_post_new_branches_env.author.id
 
-    def test_their_unread_count_goes_up(self, env):
-        before = env.local.unread_notifications
-        new(env, tag=self.a_mention(env.local.ap_profile_id))
-        db.session.refresh(env.local)
-        assert env.local.unread_notifications == before + 1
+    def test_their_unread_count_goes_up(self, models_post_new_branches_env):
+        before = models_post_new_branches_env.local.unread_notifications
+        new(models_post_new_branches_env, tag=self.a_mention(models_post_new_branches_env.local.ap_profile_id))
+        db.session.refresh(models_post_new_branches_env.local)
+        assert models_post_new_branches_env.local.unread_notifications == before + 1
 
-    def test_the_notification_names_the_author(self, env):
-        new(env, tag=self.a_mention(env.local.ap_profile_id))
-        notification = Notification.query.filter_by(user_id=env.local.id).one()
+    def test_the_notification_names_the_author(self, models_post_new_branches_env):
+        new(models_post_new_branches_env, tag=self.a_mention(models_post_new_branches_env.local.ap_profile_id))
+        notification = Notification.query.filter_by(user_id=models_post_new_branches_env.local.id).one()
         assert notification.targets['author_user_name'] == 'someone@remote.test'
 
-    def test_a_mention_whose_path_is_in_another_case_still_finds_them(self, env):
+    def test_a_mention_whose_path_is_in_another_case_still_finds_them(self, models_post_new_branches_env):
         """The href is lowercased before the lookup, because `ap_profile_id` is
         stored lowercase. Only the PATH can differ: the `startswith(SERVER_URL)`
         gate runs BEFORE the lowercasing, so an href whose scheme or host is
         uppercased is dropped instead -- correct for a URL comparison it is not,
         but no peer sends one, and the test below says so rather than leaving the
         asymmetry undocumented."""
-        profile = env.local.ap_profile_id
+        profile = models_post_new_branches_env.local.ap_profile_id
         server = current_app.config['SERVER_URL']
-        post = new(env, tag=self.a_mention(
+        post = new(models_post_new_branches_env, tag=self.a_mention(
             server + profile[len(server):].upper()))
         assert post is not None
-        assert Notification.query.filter_by(user_id=env.local.id).count() == 1
+        assert Notification.query.filter_by(user_id=models_post_new_branches_env.local.id).count() == 1
 
-    def test_a_mention_whose_host_is_uppercased_is_matched(self, env):
+    def test_a_mention_whose_host_is_uppercased_is_matched(self, models_post_new_branches_env):
         """A URL's scheme and host ignore case, and the guard is by domain now
         (`storefront.is_federating_url`, plan C3), not the case-sensitive
         `startswith(SERVER_URL)` it was."""
-        post = new(env, tag=self.a_mention(env.local.ap_profile_id.upper()))
+        post = new(models_post_new_branches_env, tag=self.a_mention(models_post_new_branches_env.local.ap_profile_id.upper()))
         assert post is not None
-        assert Notification.query.filter_by(user_id=env.local.id).count() == 1
+        assert Notification.query.filter_by(user_id=models_post_new_branches_env.local.id).count() == 1
 
-    def test_a_mention_of_a_local_only_domains_account_is_not_matched(self, env):
+    def test_a_mention_of_a_local_only_domains_account_is_not_matched(self, models_post_new_branches_env):
         """The guard itself, as distinct from the lookup after it: an onion
         account is local (ap_id None) and its ap_profile_id equals the href, so
         only the guard -- a local-only domain is no domain a peer may name --
         keeps the Mention from notifying."""
         onion = register_local_only_onion()
-        env.local.ap_profile_id = f'{onion}/u/{env.local.user_name}'
+        models_post_new_branches_env.local.ap_profile_id = f'{onion}/u/{models_post_new_branches_env.local.user_name}'
         db.session.commit()
-        post = new(env, tag=self.a_mention(env.local.ap_profile_id))
+        post = new(models_post_new_branches_env, tag=self.a_mention(models_post_new_branches_env.local.ap_profile_id))
         assert post is not None
-        assert Notification.query.filter_by(user_id=env.local.id).count() == 0
+        assert Notification.query.filter_by(user_id=models_post_new_branches_env.local.id).count() == 0
 
-    def test_somebody_who_has_blocked_the_author_is_not_notified(self, env):
-        db.session.add(UserBlock(blocker_id=env.local.id,
-                                 blocked_id=env.author.id))
+    def test_somebody_who_has_blocked_the_author_is_not_notified(self, models_post_new_branches_env):
+        db.session.add(UserBlock(blocker_id=models_post_new_branches_env.local.id,
+                                 blocked_id=models_post_new_branches_env.author.id))
         db.session.commit()
-        post = new(env, tag=self.a_mention(env.local.ap_profile_id))
+        post = new(models_post_new_branches_env, tag=self.a_mention(models_post_new_branches_env.local.ap_profile_id))
         assert post is not None
-        assert Notification.query.filter_by(user_id=env.local.id).count() == 0
+        assert Notification.query.filter_by(user_id=models_post_new_branches_env.local.id).count() == 0
 
-    def test_a_mention_of_somebody_who_is_not_here(self, env):
-        post = new(env, tag=self.a_mention(
+    def test_a_mention_of_somebody_who_is_not_here(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, tag=self.a_mention(
             f"{current_app.config['SERVER_URL']}/u/nobody"))
         assert post is not None
         assert Notification.query.count() == 0
 
-    def test_a_mention_of_a_remote_actor_is_not_ours_to_notify(self, env):
-        post = new(env, tag=self.a_mention('https://other.test/u/bob'))
+    def test_a_mention_of_a_remote_actor_is_not_ours_to_notify(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, tag=self.a_mention('https://other.test/u/bob'))
         assert post is not None
         assert Notification.query.count() == 0
 
-    def test_a_mention_with_no_href(self, env):
-        post = new(env, tag=[{'type': 'Mention'}])
+    def test_a_mention_with_no_href(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, tag=[{'type': 'Mention'}])
         assert post is not None
 
-    def test_a_mention_whose_href_is_not_a_string(self, env):
-        post = new(env, tag=[{'type': 'Mention', 'href': 5}])
+    def test_a_mention_whose_href_is_not_a_string(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, tag=[{'type': 'Mention', 'href': 5}])
         assert post is not None
 
-    def test_two_mentions_notify_both(self, env):
-        second = make_user(env.baseline.instance_local, 'another', local=True)
+    def test_two_mentions_notify_both(self, models_post_new_branches_env):
+        second = make_user(models_post_new_branches_env.baseline.instance_local, 'another', local=True)
         second.ap_profile_id = f"{current_app.config['SERVER_URL']}/u/another"
         db.session.commit()
-        new(env, tag=[{'type': 'Mention', 'href': env.local.ap_profile_id},
+        new(models_post_new_branches_env, tag=[{'type': 'Mention', 'href': models_post_new_branches_env.local.ap_profile_id},
                       {'type': 'Mention', 'href': second.ap_profile_id}])
         assert Notification.query.count() == 2
 
-    def test_a_tag_list_that_is_not_a_list(self, env):
-        assert new(env, tag={'type': 'Mention'}) is not None
+    def test_a_tag_list_that_is_not_a_list(self, models_post_new_branches_env):
+        assert new(models_post_new_branches_env, tag={'type': 'Mention'}) is not None
 
 
 class TestAQuestionFromAPeer:
@@ -171,8 +150,8 @@ class TestAQuestionFromAPeer:
 
     WELL_FORMED = {'type': 'Question', 'endTime': '2026-02-01T00:00:00Z'}
 
-    def test_a_single_choice_poll(self, env):
-        post = new(env, **self.WELL_FORMED,
+    def test_a_single_choice_poll(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, **self.WELL_FORMED,
                    oneOf=[{'name': 'yes'}, {'name': 'no'}])
         assert post.type == POST_TYPE_POLL
         poll = Poll.query.filter_by(post_id=post.id).one()
@@ -181,12 +160,12 @@ class TestAQuestionFromAPeer:
                 in PollChoice.query.filter_by(post_id=post.id)
                 .order_by(PollChoice.sort_order)] == ['yes', 'no']
 
-    def test_a_multiple_choice_poll(self, env):
-        post = new(env, **self.WELL_FORMED, anyOf=[{'name': 'yes'}])
+    def test_a_multiple_choice_poll(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, **self.WELL_FORMED, anyOf=[{'name': 'yes'}])
         assert Poll.query.filter_by(post_id=post.id).one().mode == 'multiple'
 
-    def test_the_end_time_is_stored_as_a_moment(self, env):
-        post = new(env, **self.WELL_FORMED, oneOf=[{'name': 'yes'}])
+    def test_the_end_time_is_stored_as_a_moment(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, **self.WELL_FORMED, oneOf=[{'name': 'yes'}])
         poll = Poll.query.filter_by(post_id=post.id).one()
         assert poll.end_poll.year == 2026
         assert poll.end_poll.month == 2
@@ -210,43 +189,43 @@ class TestAQuestionFromAPeer:
         ({'type': 'Question', 'endTime': '2026-02-01T00:00:00Z',
           'oneOf': [{'name': 5}]}, 'a choice whose name is a number'),
     ])
-    def test_a_question_it_cannot_read_still_lands_as_a_post(self, env,
+    def test_a_question_it_cannot_read_still_lands_as_a_post(self, models_post_new_branches_env,
                                                             overrides, reason):
         """The post is what matters: it stays an ordinary post rather than
         becoming a poll with nothing in it."""
-        post = new(env, **overrides)
+        post = new(models_post_new_branches_env, **overrides)
         assert post is not None, reason
         assert post.type == POST_TYPE_ARTICLE
         assert Poll.query.filter_by(post_id=post.id).count() == 0
         assert PollChoice.query.filter_by(post_id=post.id).count() == 0
 
-    def test_choices_given_as_bare_strings_are_taken(self, env):
+    def test_choices_given_as_bare_strings_are_taken(self, models_post_new_branches_env):
         """Deliberately lenient: a list of strings names the choices as clearly
         as a list of dicts does."""
-        post = new(env, **self.WELL_FORMED, oneOf=['yes', 'no'])
+        post = new(models_post_new_branches_env, **self.WELL_FORMED, oneOf=['yes', 'no'])
         assert post.type == POST_TYPE_POLL
         assert [choice.choice_text for choice
                 in PollChoice.query.filter_by(post_id=post.id)
                 .order_by(PollChoice.sort_order)] == ['yes', 'no']
 
-    def test_the_unusable_choices_in_a_mixed_list_are_skipped(self, env):
-        post = new(env, **self.WELL_FORMED,
+    def test_the_unusable_choices_in_a_mixed_list_are_skipped(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, **self.WELL_FORMED,
                    oneOf=[{'name': 'yes'}, {}, 5, {'name': 'no'}])
         assert [choice.choice_text for choice
                 in PollChoice.query.filter_by(post_id=post.id)
                 .order_by(PollChoice.sort_order)] == ['yes', 'no']
 
-    def test_the_sort_order_has_no_gaps(self, env):
+    def test_the_sort_order_has_no_gaps(self, models_post_new_branches_env):
         """It is `enumerate` over what was kept, not over what arrived, so a
         skipped choice does not leave a hole the UI has to cope with."""
-        post = new(env, **self.WELL_FORMED,
+        post = new(models_post_new_branches_env, **self.WELL_FORMED,
                    oneOf=[{}, {'name': 'yes'}, {}, {'name': 'no'}])
         assert sorted(choice.sort_order for choice
                       in PollChoice.query.filter_by(post_id=post.id)) == [1, 2]
 
-    def test_a_poll_that_has_already_closed_is_still_a_poll(self, env):
+    def test_a_poll_that_has_already_closed_is_still_a_poll(self, models_post_new_branches_env):
         """Unlike a ban's expiry, a past end time is meaningful here."""
-        post = new(env, type='Question', endTime='2020-01-01T00:00:00Z',
+        post = new(models_post_new_branches_env, type='Question', endTime='2020-01-01T00:00:00Z',
                    oneOf=[{'name': 'yes'}])
         assert post.type == POST_TYPE_POLL
 
@@ -308,13 +287,13 @@ class TestTheAiCheck:
     somewhere else."""
 
     @pytest.fixture
-    def configured(self, env, monkeypatch):
+    def configured(self, models_post_new_branches_env, monkeypatch):
         monkeypatch.setitem(current_app.config, 'DETECT_AI_ENDPOINT',
                             'https://ai.example/check')
-        env.author.created = current_app.config and __import__(
+        models_post_new_branches_env.author.created = current_app.config and __import__(
             'app.models', fromlist=['utcnow']).utcnow()
         db.session.commit()
-        return env
+        return models_post_new_branches_env
 
     def body(self):
         return {'name': 'a post', 'content': 'x' * 300}
@@ -423,13 +402,13 @@ class TestTheSameCheckOnAComment:
     """`PostReply.new` carries the same block, and it had no guard at all."""
 
     @pytest.fixture
-    def configured(self, env, monkeypatch):
+    def configured(self, models_post_new_branches_env, monkeypatch):
         from app.models import utcnow
         monkeypatch.setitem(current_app.config, 'DETECT_AI_ENDPOINT',
                             'https://ai.example/check')
-        env.author.created = utcnow()
+        models_post_new_branches_env.author.created = utcnow()
         db.session.commit()
-        return env
+        return models_post_new_branches_env
 
     def _answer(self, http_mock, payload=None, text=None):
         if text is not None:
@@ -438,10 +417,10 @@ class TestTheSameCheckOnAComment:
         return http_mock.get(url__startswith='https://ai.example/check').mock(
             return_value=httpx.Response(200, json=payload))
 
-    def a_reply(self, env):
+    def a_reply(self, models_post_new_branches_env):
         from app.models import PostReply
-        post = new(env, name='a post')
-        return PostReply.new(env.author, post, in_reply_to=None, body='x' * 300,
+        post = new(models_post_new_branches_env, name='a post')
+        return PostReply.new(models_post_new_branches_env.author, post, in_reply_to=None, body='x' * 300,
                              body_html='<p>' + 'x' * 300 + '</p>',
                              notify_author=False, language_id=None,
                              distinguished=False, answer=None,
@@ -483,13 +462,13 @@ class TestAPostWithNoBodyAtAll:
     """
 
     @pytest.fixture
-    def configured(self, env, monkeypatch):
+    def configured(self, models_post_new_branches_env, monkeypatch):
         from app.models import utcnow
         monkeypatch.setitem(current_app.config, 'DETECT_AI_ENDPOINT',
                             'https://ai.example/check')
-        env.author.created = utcnow()
+        models_post_new_branches_env.author.created = utcnow()
         db.session.commit()
-        return env
+        return models_post_new_branches_env
 
     def test_a_post_with_no_body_still_arrives(self, configured):
         post = new(configured, name='a title and nothing else')
@@ -524,14 +503,14 @@ class TestAPostWithNoBodyAtAll:
                                                 'content': ''}})
         assert reply is not None
 
-    def test_an_instance_with_no_endpoint_configured_never_looks(self, env,
+    def test_an_instance_with_no_endpoint_configured_never_looks(self, models_post_new_branches_env,
                                                                  http_mock):
         """The first operand, asserted so the guard above is known to be the
         reason and not the configuration."""
         from app.models import utcnow
-        env.author.created = utcnow()
+        models_post_new_branches_env.author.created = utcnow()
         db.session.commit()
-        assert new(env, name='a post', content='x' * 300) is not None
+        assert new(models_post_new_branches_env, name='a post', content='x' * 300) is not None
         assert len(http_mock.calls) == 0
 
 
@@ -563,13 +542,13 @@ class TestACommentWhoseBodyIsNull:
         assert reply_is_low_effort('  This. ') is True
         assert reply_is_low_effort('a real comment') is False
 
-    def test_a_comment_with_a_null_source_content_still_lands(self, env):
+    def test_a_comment_with_a_null_source_content_still_lands(self, models_post_new_branches_env):
         """The whole path: a peer's Note whose `source.content` is null."""
         from app.activitypub.util import notify_about_post_reply  # noqa: F401
         from app.models import PostReply
 
-        post = new(env, name='a post')
-        reply = PostReply.new(env.author, post, in_reply_to=None, body=None,
+        post = new(models_post_new_branches_env, name='a post')
+        reply = PostReply.new(models_post_new_branches_env.author, post, in_reply_to=None, body=None,
                               body_html='', notify_author=False, language_id=None,
                               distinguished=False, answer=None,
                               request_json={'id': 'https://remote.test/c/9',
@@ -595,25 +574,25 @@ class TestTheAuthorTheNotificationNames:
     (fact 653), rather than by pretending the schema can produce it.
     """
 
-    def test_a_notification_is_not_written_without_an_author(self, env,
+    def test_a_notification_is_not_written_without_an_author(self, models_post_new_branches_env,
                                                              monkeypatch):
         from app import db as real_db
 
         original_get = real_db.session.get
 
         def get_without_the_author(model, identity, *args, **keywords):
-            if model is User and identity == env.author.id:
+            if model is User and identity == models_post_new_branches_env.author.id:
                 return None
             return original_get(model, identity, *args, **keywords)
 
         post = None
         monkeypatch.setattr(real_db.session, 'get', get_without_the_author)
-        post = new(env, tag=[{'type': 'Mention',
-                              'href': env.local.ap_profile_id}])
+        post = new(models_post_new_branches_env, tag=[{'type': 'Mention',
+                              'href': models_post_new_branches_env.local.ap_profile_id}])
         monkeypatch.undo()
 
         assert post is not None
-        assert Notification.query.filter_by(user_id=env.local.id).count() == 0
+        assert Notification.query.filter_by(user_id=models_post_new_branches_env.local.id).count() == 0
 
 
 class TestAnEventFromAPeer:
@@ -629,21 +608,21 @@ class TestAnEventFromAPeer:
 
     MINIMAL = {'type': 'Event', 'startTime': '2026-06-01T18:00:00Z'}
 
-    def test_an_event_with_only_a_start_time(self, env):
+    def test_an_event_with_only_a_start_time(self, models_post_new_branches_env):
         from app.constants import POST_TYPE_EVENT
         from app.models import Event
 
-        post = new(env, **self.MINIMAL)
+        post = new(models_post_new_branches_env, **self.MINIMAL)
         assert post is not None
         assert post.type == POST_TYPE_EVENT
         event = Event.query.filter_by(post_id=post.id).one()
         assert event.start.year == 2026
         assert event.end is None
 
-    def test_a_full_event(self, env):
+    def test_a_full_event(self, models_post_new_branches_env):
         from app.models import Event
 
-        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+        post = new(models_post_new_branches_env, type='Event', startTime='2026-06-01T18:00:00Z',
                    endTime='2026-06-01T20:00:00Z', timezone='Europe/London',
                    maximumAttendeeCapacity=50, participantCount=3,
                    onlineLink='https://meet.example/x', joinMode='free',
@@ -671,7 +650,7 @@ class TestAnEventFromAPeer:
         'anonymousParticipation', 'isOnline', 'buyTicketsLink', 'feeCurrency',
         'feeAmount', 'location',
     ])
-    def test_an_event_missing_one_optional_key(self, env, key):
+    def test_an_event_missing_one_optional_key(self, models_post_new_branches_env, key):
         """Thirteen of the fourteen. Each of these was a KeyError of its own."""
         from app.constants import POST_TYPE_EVENT
 
@@ -685,83 +664,83 @@ class TestAnEventFromAPeer:
                 'feeCurrency': 'GBP', 'feeAmount': 1,
                 'location': {'type': 'Place'}}
         del full[key]
-        post = new(env, **full)
+        post = new(models_post_new_branches_env, **full)
         assert post is not None
         assert post.type == POST_TYPE_EVENT
 
-    def test_an_event_with_no_start_time_stays_an_ordinary_post(self, env):
+    def test_an_event_with_no_start_time_stays_an_ordinary_post(self, models_post_new_branches_env):
         """The fourteenth. Without a start there is no event to record, and the
         post is worth more than the field -- the same choice D1330 made for a
         Question with no usable choices."""
         from app.constants import POST_TYPE_ARTICLE
         from app.models import Event
 
-        post = new(env, type='Event', endTime='2026-06-01T20:00:00Z')
+        post = new(models_post_new_branches_env, type='Event', endTime='2026-06-01T20:00:00Z')
         assert post is not None
         assert post.type == POST_TYPE_ARTICLE
         assert Event.query.filter_by(post_id=post.id).count() == 0
 
     @pytest.mark.parametrize('start', ['not a date', '', None, 5, [],
                                        '2026-13-45T99:99:99Z'])
-    def test_a_start_time_that_is_not_a_date(self, env, start):
+    def test_a_start_time_that_is_not_a_date(self, models_post_new_branches_env, start):
         """A string straight into a DateTime column is a DataError at commit,
         which poisons the transaction and takes the post with it."""
         from app.constants import POST_TYPE_ARTICLE
 
-        post = new(env, type='Event', startTime=start)
+        post = new(models_post_new_branches_env, type='Event', startTime=start)
         assert post is not None
         assert post.type == POST_TYPE_ARTICLE
 
-    def test_an_end_time_that_is_not_a_date_is_simply_absent(self, env):
+    def test_an_end_time_that_is_not_a_date_is_simply_absent(self, models_post_new_branches_env):
         from app.models import Event
 
-        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+        post = new(models_post_new_branches_env, type='Event', startTime='2026-06-01T18:00:00Z',
                    endTime='whenever')
         assert Event.query.filter_by(post_id=post.id).one().end is None
 
     @pytest.mark.parametrize('value', ['ten', None, [], {}, True])
-    def test_a_capacity_that_is_not_a_number(self, env, value):
+    def test_a_capacity_that_is_not_a_number(self, models_post_new_branches_env, value):
         """These columns are Integer and Float, so a list where a number belongs
         is a DataError at commit."""
         from app.models import Event
 
-        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+        post = new(models_post_new_branches_env, type='Event', startTime='2026-06-01T18:00:00Z',
                    maximumAttendeeCapacity=value, feeAmount=value)
         event = Event.query.filter_by(post_id=post.id).one()
         assert event.max_attendees == 0
         assert event.event_fee_amount == 0
 
     @pytest.mark.parametrize('value', [5, [], {}, True, ''])
-    def test_a_link_that_is_not_text(self, env, value):
+    def test_a_link_that_is_not_text(self, models_post_new_branches_env, value):
         from app.models import Event
 
-        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+        post = new(models_post_new_branches_env, type='Event', startTime='2026-06-01T18:00:00Z',
                    onlineLink=value, buyTicketsLink=value, timezone=value)
         event = Event.query.filter_by(post_id=post.id).one()
         assert event.online_link is None
         assert event.buy_tickets_link is None
 
-    def test_a_join_mode_that_is_not_text_falls_back_to_free(self, env):
+    def test_a_join_mode_that_is_not_text_falls_back_to_free(self, models_post_new_branches_env):
         from app.models import Event
 
-        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+        post = new(models_post_new_branches_env, type='Event', startTime='2026-06-01T18:00:00Z',
                    joinMode=5)
         assert Event.query.filter_by(post_id=post.id).one().join_mode == 'free'
 
     @pytest.mark.parametrize('value', ['a hall', 5, True])
-    def test_a_location_that_is_not_an_object(self, env, value):
+    def test_a_location_that_is_not_an_object(self, models_post_new_branches_env, value):
         """The column is JSON, which would take a bare string -- but every reader
         of it expects the Place object the vocabulary describes."""
         from app.models import Event
 
-        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+        post = new(models_post_new_branches_env, type='Event', startTime='2026-06-01T18:00:00Z',
                    location=value)
         assert Event.query.filter_by(post_id=post.id).one().location is None
 
-    def test_a_location_given_as_a_list_is_kept(self, env):
+    def test_a_location_given_as_a_list_is_kept(self, models_post_new_branches_env):
         from app.models import Event
 
-        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+        post = new(models_post_new_branches_env, type='Event', startTime='2026-06-01T18:00:00Z',
                    location=[{'type': 'Place'}])
         assert Event.query.filter_by(post_id=post.id).one().location == \
             [{'type': 'Place'}]
@@ -772,14 +751,14 @@ class TestAnEventFromAPeer:
                                            ('buyTicketsLink', 1024),
                                            ('feeCurrency', 4),
                                            ('joinMode', 10)])
-    def test_a_value_longer_than_its_column(self, env, key, limit):
+    def test_a_value_longer_than_its_column(self, models_post_new_branches_env, key, limit):
         """Found while writing these tests, not while reading the code: a peer
         choosing a 200-character timezone for a `String(30)` is a DataError at
         commit, which loses the post. Every string here is trimmed to the width
         the column declares."""
         from app.models import Event
 
-        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+        post = new(models_post_new_branches_env, type='Event', startTime='2026-06-01T18:00:00Z',
                    **{key: 'z' * 4000})
         assert post is not None
         event = Event.query.filter_by(post_id=post.id).one()
@@ -789,13 +768,13 @@ class TestAnEventFromAPeer:
             if value is not None:
                 assert len(value) <= 1024
 
-    def test_a_timezone_that_is_not_text(self, env):
+    def test_a_timezone_that_is_not_text(self, models_post_new_branches_env):
         """`timezone` was the one string this round's first fix left unguarded,
         and a dict there is `psycopg2.ProgrammingError: can't adapt type 'dict'`
         rather than a DataError -- a different error, the same lost post."""
         from app.models import Event
 
-        post = new(env, type='Event', startTime='2026-06-01T18:00:00Z',
+        post = new(models_post_new_branches_env, type='Event', startTime='2026-06-01T18:00:00Z',
                    timezone={'a': 1})
         assert Event.query.filter_by(post_id=post.id).one().timezone is None
 
@@ -811,16 +790,16 @@ class TestAVideoFromAPeer:
     It reads every file under `app/` now.
     """
 
-    def test_a_video_with_an_icon(self, env):
+    def test_a_video_with_an_icon(self, models_post_new_branches_env):
         from app.constants import POST_TYPE_VIDEO
 
-        post = new(env, type='Video', icon=[{'url': 'https://peer.test/thumb.png'}])
+        post = new(models_post_new_branches_env, type='Video', icon=[{'url': 'https://peer.test/thumb.png'}])
         assert post.type == POST_TYPE_VIDEO
         assert post.image.source_url == 'https://peer.test/thumb.png'
 
-    def test_the_largest_icon_is_taken(self, env):
+    def test_the_largest_icon_is_taken(self, models_post_new_branches_env):
         """The LAST entry, which is where the largest is conventionally offered."""
-        post = new(env, type='Video',
+        post = new(models_post_new_branches_env, type='Video',
                    icon=[{'url': 'https://peer.test/small.png'},
                          {'url': 'https://peer.test/large.png'}])
         assert post.image.source_url == 'https://peer.test/large.png'
@@ -828,25 +807,25 @@ class TestAVideoFromAPeer:
     @pytest.mark.parametrize('icon', [[], [5], [{}], [{'url': None}], [None],
                                       'https://peer.test/thumb.png', 5, None,
                                       {'url': 'https://peer.test/thumb.png'}])
-    def test_an_icon_shape_that_used_to_lose_the_post(self, env, icon):
+    def test_an_icon_shape_that_used_to_lose_the_post(self, models_post_new_branches_env, icon):
         """`icon: []` was an IndexError, `icon: [5]` a TypeError. A bare string and
         a dict are accepted now, as they are everywhere else `image_url_from`
         reads."""
         from app.constants import POST_TYPE_VIDEO
 
-        post = new(env, type='Video', icon=icon)
+        post = new(models_post_new_branches_env, type='Video', icon=icon)
         assert post is not None
         assert post.type == POST_TYPE_VIDEO
 
-    def test_a_video_with_no_icon_at_all(self, env):
+    def test_a_video_with_no_icon_at_all(self, models_post_new_branches_env):
         from app.constants import POST_TYPE_VIDEO
 
-        post = new(env, type='Video')
+        post = new(models_post_new_branches_env, type='Video')
         assert post.type == POST_TYPE_VIDEO
         assert post.image_id is None
 
-    def test_the_url_is_the_objects_own_id(self, env):
-        post = new(env, type='Video', icon=[])
+    def test_the_url_is_the_objects_own_id(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, type='Video', icon=[])
         assert post.url == 'https://remote.test/p/' + post.ap_id.rsplit('/', 1)[1]
 
 
@@ -870,25 +849,25 @@ class TestAPostsLanguage:
         None,
         [],
     ])
-    def test_the_post_arrives_whatever_the_language_is(self, env, language):
-        post = new(env, language=language)
+    def test_the_post_arrives_whatever_the_language_is(self, models_post_new_branches_env, language):
+        post = new(models_post_new_branches_env, language=language)
 
         assert post is not None
         assert post.title == 'a post'
 
-    def test_a_usable_language_is_applied(self, env):
-        post = new(env, language={'identifier': 'de', 'name': 'Deutsch'})
+    def test_a_usable_language_is_applied(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, language={'identifier': 'de', 'name': 'Deutsch'})
 
         assert post.language is not None
         assert post.language.code == 'de'
 
-    def test_an_over_long_identifier_is_truncated_rather_than_dropped(self, env):
-        post = new(env, language={'identifier': 'abcdefgh', 'name': 'x'})
+    def test_an_over_long_identifier_is_truncated_rather_than_dropped(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, language={'identifier': 'abcdefgh', 'name': 'x'})
 
         assert post.language.code == 'abcde'
 
-    def test_a_language_with_no_name_takes_its_code(self, env):
-        post = new(env, language={'identifier': 'nl'})
+    def test_a_language_with_no_name_takes_its_code(self, models_post_new_branches_env):
+        post = new(models_post_new_branches_env, language={'identifier': 'nl'})
 
         assert post.language.code == 'nl'
         assert post.language.name == 'nl'

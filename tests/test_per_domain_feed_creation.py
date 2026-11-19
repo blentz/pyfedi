@@ -14,7 +14,7 @@ from app.feed.util import feeds_for_form
 from app.models import Feed, FeedMember, Role, Site, role_grant
 from app.shared.feed import edit_feed, make_feed, parent_feed_on
 from app.utils import feed_tree
-from tests.three_domains import FIRST, ONION, SHOP, three_domains, two_domains  # noqa: F401
+from tests.three_domains import FIRST, ONION, SHOP
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -64,14 +64,6 @@ def make_admin(user):
     db.session.add(role)
     db.session.commit()
     db.session.execute(role_grant.insert().values(user_id=user.id, role_id=role.id))
-    db.session.commit()
-
-
-@pytest.fixture
-def api_site(app, site):
-    g.admin_ids = []
-    g.site = db.session.get(Site, 1)
-    g.site.enable_nsfw = g.site.enable_nsfl = True
     db.session.commit()
 
 

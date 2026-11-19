@@ -16,7 +16,7 @@ from app.utils import set_setting
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_user
 from tests.test_admin_federation import login
-from tests.test_local_only_invisible import _post, world  # noqa: F401
+from tests.test_local_only_invisible import _post
 
 pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 
@@ -49,8 +49,8 @@ def _viewer(client, name='carol', host=None):
     return viewer
 
 
-def test_a_post_url_on_the_first_domain_opens_the_local_post_here(app, world):
-    post = _post(app, world.clearnet, world.bob)
+def test_a_post_url_on_the_first_domain_opens_the_local_post_here(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     client = app.test_client()
     _viewer(client)
 
@@ -60,8 +60,8 @@ def test_a_post_url_on_the_first_domain_opens_the_local_post_here(app, world):
     assert resolver.call_count == 0
 
 
-def test_a_post_url_on_the_onion_opens_the_local_post_on_the_onion(app, world):
-    post = _post(app, world.hidden, world.onionite)
+def test_a_post_url_on_the_onion_opens_the_local_post_on_the_onion(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.hidden, local_only_invisible_world.onionite)
     client = app.test_client()
     _viewer(client, host='abc.onion')
 
@@ -73,8 +73,8 @@ def test_a_post_url_on_the_onion_opens_the_local_post_on_the_onion(app, world):
     assert resolver.call_count == 0
 
 
-def test_a_first_domain_url_viewed_from_the_onion_opens_the_post_on_the_onion(app, world):
-    post = _post(app, world.clearnet, world.bob)
+def test_a_first_domain_url_viewed_from_the_onion_opens_the_post_on_the_onion(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     client = app.test_client()
     _viewer(client, host='abc.onion')
 
@@ -85,7 +85,7 @@ def test_a_first_domain_url_viewed_from_the_onion_opens_the_post_on_the_onion(ap
     assert app.config['SERVER_NAME'] not in response.headers['Location']
 
 
-def test_a_remote_url_is_still_resolved_as_before(app, world):
+def test_a_remote_url_is_still_resolved_as_before(app, local_only_invisible_world):
     client = app.test_client()
     _viewer(client)
 
@@ -95,7 +95,7 @@ def test_a_remote_url_is_still_resolved_as_before(app, world):
     assert resolver.call_args.args[0] == 'https://remote.example/post/1'
 
 
-def test_a_hosted_url_that_names_no_post_is_not_found_and_not_fetched(app, world):
+def test_a_hosted_url_that_names_no_post_is_not_found_and_not_fetched(app, local_only_invisible_world):
     client = app.test_client()
     _viewer(client)
 
@@ -133,9 +133,9 @@ def _nsfw_in_a_restricted_country(post, world):
 
 @pytest.mark.parametrize('hide', [_followers_only, _draft, _deleted_by_a_moderator, _in_a_banned_community,
                                   _in_a_private_community, _nsfw_in_a_restricted_country])
-def test_a_post_the_viewer_may_not_open_is_not_found(app, world, hide):
-    post = _post(app, world.clearnet, world.bob)
-    hide(post, world)
+def test_a_post_the_viewer_may_not_open_is_not_found(app, local_only_invisible_world, hide):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
+    hide(post, local_only_invisible_world)
     client = app.test_client()
     viewer = _viewer(client)
     if hide is _nsfw_in_a_restricted_country:
@@ -148,8 +148,8 @@ def test_a_post_the_viewer_may_not_open_is_not_found(app, world, hide):
     assert resolver.call_count == 0
 
 
-def test_a_post_its_author_deleted_still_opens(app, world):
-    post = _post(app, world.clearnet, world.bob)
+def test_a_post_its_author_deleted_still_opens(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     post.deleted = True
     post.deleted_by = post.user_id
     db.session.commit()
@@ -162,14 +162,14 @@ def test_a_post_its_author_deleted_still_opens(app, world):
 
 
 @pytest.mark.parametrize('who', ['author', 'moderator', 'admin'])
-def test_staff_and_the_author_may_open_what_is_hidden_from_others(app, world, who):
-    post = _post(app, world.clearnet, world.bob)
+def test_staff_and_the_author_may_open_what_is_hidden_from_others(app, local_only_invisible_world, who):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     post.deleted = True
-    post.deleted_by = world.alice.id
+    post.deleted_by = local_only_invisible_world.alice.id
     post.status = POST_STATUS_DRAFT
     db.session.commit()
     client = app.test_client()
-    viewer = {'author': world.bob, 'moderator': world.alice, 'admin': None}[who]
+    viewer = {'author': local_only_invisible_world.bob, 'moderator': local_only_invisible_world.alice, 'admin': None}[who]
     if viewer is None:
         viewer = _viewer(client)
         role = Role(name='Admin', built_in=True)
@@ -196,8 +196,8 @@ def _video(app, client, url, host=None):
     return response, resolver
 
 
-def test_an_own_domain_video_result_opens_the_local_post_here(app, world):
-    post = _post(app, world.clearnet, world.bob)
+def test_an_own_domain_video_result_opens_the_local_post_here(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     client = app.test_client()
     _viewer(client)
 
@@ -207,8 +207,8 @@ def test_an_own_domain_video_result_opens_the_local_post_here(app, world):
     assert resolver.call_count == 0
 
 
-def test_an_own_domain_video_result_on_the_onion_opens_the_post_on_the_onion(app, world):
-    post = _post(app, world.hidden, world.onionite)
+def test_an_own_domain_video_result_on_the_onion_opens_the_post_on_the_onion(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.hidden, local_only_invisible_world.onionite)
     client = app.test_client()
     _viewer(client, host='abc.onion')
 
@@ -218,8 +218,8 @@ def test_an_own_domain_video_result_on_the_onion_opens_the_post_on_the_onion(app
     assert app.config['SERVER_NAME'] not in response.headers['Location']
 
 
-def test_an_own_domain_video_result_the_viewer_may_not_open_goes_back_to_the_search(app, world):
-    post = _post(app, world.clearnet, world.bob)
+def test_an_own_domain_video_result_the_viewer_may_not_open_goes_back_to_the_search(app, local_only_invisible_world):
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     post.visibility = VISIBILITY_FOLLOWERS
     db.session.commit()
     client = app.test_client()

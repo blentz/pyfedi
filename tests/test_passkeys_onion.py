@@ -5,14 +5,14 @@ from unittest.mock import patch
 import pytest
 
 from tests.test_passkeys import _passkey, _seed, authenticated
-from tests.test_storefront_api import CANONICAL, ONION, onion  # noqa: F401  (the fixture registers abc.onion)
+from tests.test_storefront_api import CANONICAL, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
 ONION_URL = f'http://{ONION}'
 
 
-def test_login_options_on_the_onion_carry_the_onion_rp_id(app, db_session, onion):
+def test_login_options_on_the_onion_carry_the_onion_rp_id(app, db_session, storefront_api_onion):
     instance, alice = _seed()
     response = app.test_client().post('/auth/passkeys/login_options', json={'username': 'alice'},
                                       base_url=ONION_URL)
@@ -25,7 +25,7 @@ def test_login_options_on_the_clearnet_are_unchanged(app, db_session):
     assert response.get_json()['rpId'] == CANONICAL
 
 
-def test_login_on_the_onion_expects_the_onion_origin(app, db_session, onion):
+def test_login_on_the_onion_expects_the_onion_origin(app, db_session, storefront_api_onion):
     instance, alice = _seed()
     _passkey(alice)
     with patch('app.auth.passkeys.parse_authentication_credential_json', return_value='CRED'):
@@ -37,7 +37,7 @@ def test_login_on_the_onion_expects_the_onion_origin(app, db_session, onion):
     assert verify.call_args.kwargs['expected_origin'] == ONION_URL
 
 
-def test_the_origin_is_not_taken_from_the_host_header(app, db_session, onion):
+def test_the_origin_is_not_taken_from_the_host_header(app, db_session, storefront_api_onion):
     """The Host header names a registered storefront, but its port is the client's: the origin has none."""
     instance, alice = _seed()
     _passkey(alice)
@@ -49,7 +49,7 @@ def test_the_origin_is_not_taken_from_the_host_header(app, db_session, onion):
     assert verify.call_args.kwargs['expected_origin'] == ONION_URL
 
 
-def test_registration_on_the_onion_uses_the_onion_rp_id_and_origin(app, db_session, onion):
+def test_registration_on_the_onion_uses_the_onion_rp_id_and_origin(app, db_session, storefront_api_onion):
     instance, alice = _seed()
     client = app.test_client()
     with client.session_transaction(base_url=ONION_URL) as sess:

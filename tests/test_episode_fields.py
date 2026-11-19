@@ -13,8 +13,7 @@ from app.constants import POST_TYPE_LINK
 from app.models import Post
 from app.shared.media import episode_form_wanted, episode_of, with_episode
 from tests.factories import make_post
-from tests.podcast_fixtures import episode_post  # noqa: F401
-from tests.test_media_upload import env, fixture_bytes, stored_post, submit, submit_url  # noqa: F401
+from tests.test_media_upload import fixture_bytes, stored_post, submit, submit_url
 
 pytestmark = pytest.mark.usefixtures('site', 'private_static_tree')
 
@@ -58,102 +57,102 @@ def test_a_deleted_mixin_field_is_gone_from_the_form_instance(app):
     assert 'episode_number' in F()
 
 
-def test_episode_form_wanted(env):
-    assert episode_form_wanted(env.cast) is True
-    assert episode_form_wanted(env.talk) is False
-    episode = stored_post(env, env.cast, 'audio.mp3', 'audio', POST_TYPE_LINK)
-    assert episode_form_wanted(env.cast, episode) is True
-    video = make_post(env.chan, env.mod, ap_id='https://test.piefed.local/post/v', title='V')
-    assert episode_form_wanted(env.cast, video) is False   # no media: not an audio episode
+def test_episode_form_wanted(media_upload_env):
+    assert episode_form_wanted(media_upload_env.cast) is True
+    assert episode_form_wanted(media_upload_env.talk) is False
+    episode = stored_post(media_upload_env, media_upload_env.cast, 'audio.mp3', 'audio', POST_TYPE_LINK)
+    assert episode_form_wanted(media_upload_env.cast, episode) is True
+    video = make_post(media_upload_env.chan, media_upload_env.mod, ap_id='https://test.piefed.local/post/v', title='V')
+    assert episode_form_wanted(media_upload_env.cast, video) is False   # no media: not an audio episode
 
 
-def test_upload_form_of_a_podcast_shows_episode_fields(env):
-    client, _ = env.client_for(env.mod)
-    page = client.get(submit_url(env.app, env.cast, 'audio')).data
+def test_upload_form_of_a_podcast_shows_episode_fields(media_upload_env):
+    client, _ = media_upload_env.client_for(media_upload_env.mod)
+    page = client.get(submit_url(media_upload_env.app, media_upload_env.cast, 'audio')).data
     assert b'name="episode_number"' in page and b'name="season"' in page and b'name="explicit"' in page
 
 
-def test_upload_form_without_media_upload_has_no_episode_fields(env):
-    client, _ = env.client_for(env.stranger)
-    page = client.get(submit_url(env.app, env.cast, 'audio')).data
+def test_upload_form_without_media_upload_has_no_episode_fields(media_upload_env):
+    client, _ = media_upload_env.client_for(media_upload_env.stranger)
+    page = client.get(submit_url(media_upload_env.app, media_upload_env.cast, 'audio')).data
     assert b'name="episode_number"' not in page
 
 
-def test_link_form_of_a_podcast_has_no_episode_fields(env):
-    client, _ = env.client_for(env.mod)
-    page = client.get(submit_url(env.app, env.cast, 'link')).data
+def test_link_form_of_a_podcast_has_no_episode_fields(media_upload_env):
+    client, _ = media_upload_env.client_for(media_upload_env.mod)
+    page = client.get(submit_url(media_upload_env.app, media_upload_env.cast, 'link')).data
     assert b'name="episode_number"' not in page
 
 
-def test_upload_stores_episode_fields(env):
-    response = submit(env, env.mod, env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'),
+def test_upload_stores_episode_fields(media_upload_env):
+    response = submit(media_upload_env, media_upload_env.mod, media_upload_env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'),
                       episode_number='4', season='2', explicit='y')
     assert response.status_code == 302
     post = Post.query.one()
     assert episode_of(post) == {'episode_number': 4, 'season': 2, 'explicit': True}
 
 
-def test_upload_with_only_explicit_stores_no_numbers(env):
-    submit(env, env.mod, env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'), explicit='y')
+def test_upload_with_only_explicit_stores_no_numbers(media_upload_env):
+    submit(media_upload_env, media_upload_env.mod, media_upload_env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'), explicit='y')
     assert episode_of(Post.query.one()) == {'explicit': True}
 
 
-def test_upload_without_episode_fields_stores_explicit_false(env):
-    submit(env, env.mod, env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'))
+def test_upload_without_episode_fields_stores_explicit_false(media_upload_env):
+    submit(media_upload_env, media_upload_env.mod, media_upload_env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'))
     assert episode_of(Post.query.one()) == {'explicit': False}
 
 
-def test_episode_number_below_one_is_refused(env):
-    response = submit(env, env.mod, env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'),
+def test_episode_number_below_one_is_refused(media_upload_env):
+    response = submit(media_upload_env, media_upload_env.mod, media_upload_env.cast, 'audio', 'episode.mp3', fixture_bytes('audio.mp3'),
                       episode_number='0')
     assert response.status_code == 200
     assert Post.query.count() == 0
     assert b'Number must be at least 1' in response.data
 
 
-def test_edit_form_is_prefilled_and_saves(env, http_mock):
+def test_edit_form_is_prefilled_and_saves(media_upload_env, http_mock):
     http_mock.head(re.compile(r'.*\.mp3')).respond(200, headers={'Content-Type': 'audio/mpeg'})
-    post = stored_post(env, env.cast, 'audio.mp3', 'audio', POST_TYPE_LINK)
+    post = stored_post(media_upload_env, media_upload_env.cast, 'audio.mp3', 'audio', POST_TYPE_LINK)
     with_episode(post, 4, 2, True)
     db.session.commit()
-    client, token = env.client_for(env.mod)
+    client, token = media_upload_env.client_for(media_upload_env.mod)
     page = client.get(f'/post/{post.id}/edit').data
     assert b'name="episode_number"' in page and b'value="4"' in page and b'value="2"' in page
 
     response = client.post(f'/post/{post.id}/edit', content_type='multipart/form-data', data={
-        'title': 'Renamed', 'body': 'about it', 'link_url': post.url, 'language_id': str(env.english.id),
+        'title': 'Renamed', 'body': 'about it', 'link_url': post.url, 'language_id': str(media_upload_env.english.id),
         'timezone': 'Europe/London', 'csrf_token': token, 'episode_number': '5', 'season': '2'})
     assert response.status_code == 302
     db.session.expire_all()
     assert episode_of(db.session.get(Post, post.id)) == {'episode_number': 5, 'season': 2, 'explicit': False}
 
 
-def test_edit_of_a_non_episode_link_has_no_episode_fields(env, http_mock):
+def test_edit_of_a_non_episode_link_has_no_episode_fields(media_upload_env, http_mock):
     http_mock.head('https://example.com/page').respond(200, headers={'Content-Type': 'text/html'})
-    post = make_post(env.talk, env.mod, ap_id='https://test.piefed.local/post/plain', title='Plain')
+    post = make_post(media_upload_env.talk, media_upload_env.mod, ap_id='https://test.piefed.local/post/plain', title='Plain')
     post.type = POST_TYPE_LINK
     post.url = 'https://example.com/page'
     db.session.commit()
-    client, token = env.client_for(env.mod)
+    client, token = media_upload_env.client_for(media_upload_env.mod)
     assert b'name="episode_number"' not in client.get(f'/post/{post.id}/edit').data
 
     response = client.post(f'/post/{post.id}/edit', content_type='multipart/form-data', data={
         'title': 'Renamed', 'body': 'about it', 'link_url': 'https://example.com/page',
-        'language_id': str(env.english.id), 'timezone': 'Europe/London', 'csrf_token': token,
+        'language_id': str(media_upload_env.english.id), 'timezone': 'Europe/London', 'csrf_token': token,
         'episode_number': '5', 'explicit': 'y'})
     assert response.status_code == 302
     db.session.expire_all()
     assert 'podcast' not in (db.session.get(Post, post.id).extensions or {})
 
 
-def test_api_edit_keeps_episode_fields(env, monkeypatch, http_mock):
+def test_api_edit_keeps_episode_fields(media_upload_env, monkeypatch, http_mock):
     http_mock.head(re.compile(r'.*\.mp3')).respond(200, headers={'Content-Type': 'audio/mpeg'})
-    post = stored_post(env, env.cast, 'audio.mp3', 'audio', POST_TYPE_LINK)
+    post = stored_post(media_upload_env, media_upload_env.cast, 'audio.mp3', 'audio', POST_TYPE_LINK)
     with_episode(post, 4, 2, True)
     db.session.commit()
-    monkeypatch.setitem(env.app.config, 'ENABLE_ALPHA_API', 'true')
-    client, _ = env.client_for(env.mod)
-    response = client.put('/api/alpha/post', headers={'Authorization': f'Bearer {env.mod.encode_jwt_token()}'},
+    monkeypatch.setitem(media_upload_env.app.config, 'ENABLE_ALPHA_API', 'true')
+    client, _ = media_upload_env.client_for(media_upload_env.mod)
+    response = client.put('/api/alpha/post', headers={'Authorization': f'Bearer {media_upload_env.mod.encode_jwt_token()}'},
                           json={'post_id': post.id, 'title': 'Renamed by api'})
     assert response.status_code == 200
     db.session.expire_all()

@@ -16,22 +16,21 @@ from app import cache, db
 from app.constants import POST_TYPE_LINK
 from app.models import Community, Domain, utcnow
 from tests.factories import grant_permissions, COMMUNITY_ADMINISTRATION, grant_permission, make_post, make_post_vote
-from tests.test_instance_visible_here import scene  # noqa: F401 -- scene is a fixture
-from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
+from tests.test_per_domain_ap_routes import onion_proxy
 from tests.test_per_domain_html_routes import Visitor
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
 
 @pytest.fixture
-def admins(app, scene, monkeypatch):  # noqa: F811
+def admins(app, instance_visible_here_scene, monkeypatch):
     """first_bob administers on the first domain, onion_bob on the onion; a real cache, as production has."""
     monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
-    for user in (scene.first_bob, scene.onion_bob):
+    for user in (instance_visible_here_scene.first_bob, instance_visible_here_scene.onion_bob):
         grant_permissions(user, *COMMUNITY_ADMINISTRATION)
         grant_permission(user, 'manage users')
-    return scene
+    return instance_visible_here_scene
 
 
 def seen_by(app, monkeypatch, user, host, path):

@@ -16,13 +16,13 @@ from app import db
 from app.constants import POST_TYPE_GALLERY
 from app.models import File, Post, Site
 from app.utils import set_setting
-from tests.test_media_upload import env, submit, submit_url  # noqa: F401 (env)
+from tests.test_media_upload import submit, submit_url
 
 pytestmark = pytest.mark.usefixtures('site', 'private_static_tree')
 
 
 @pytest.fixture
-def images_allowed(env, monkeypatch):
+def images_allowed(media_upload_env, monkeypatch):
     db.session.get(Site, 1).allow_local_image_posts = True
     db.session.commit()
     monkeypatch.setattr('app.shared.post.make_image_sizes', lambda *a, **k: None)   # resizing is not under test
@@ -34,7 +34,7 @@ def images_allowed(env, monkeypatch):
         db.session.flush()
         return thumbnail.id
     monkeypatch.setattr('app.shared.post.build_gallery_thumbnail', composite)
-    return env
+    return media_upload_env
 
 
 def png(colour=(1, 2, 3), size=(10, 10)) -> bytes:

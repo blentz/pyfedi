@@ -21,7 +21,7 @@ from app.main.routes import home_feed_source
 from app.utils import get_deduped_post_ids
 from tests.conftest import forget_login
 from tests.factories import bearer, make_community, make_instance, make_post, make_post_reply, make_user
-from tests.test_local_only_invisible import _post, _reply, world  # noqa: F401 -- world is a fixture
+from tests.test_local_only_invisible import _post, _reply
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -31,7 +31,7 @@ ONION_HEADERS = {'X-PieFed-Via': 'onion', 'X-Forwarded-For': '10.89.0.7'}
 
 
 @pytest.fixture
-def scene(app, world, monkeypatch):  # noqa: F811
+def scene(app, local_only_invisible_world, monkeypatch):
     """`world`'s the first domain community `clearnet` and onion community `hidden`, plus a remote community `remote`
     (no domain stamped, as every remote row is). Each holds one post and one reply, titled for the community."""
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
@@ -42,27 +42,27 @@ def scene(app, world, monkeypatch):  # noqa: F811
     remote.ap_id = 'remote@peer.example'
     remote.instance_id = peer.id
     remote.user_id = remote_user.id
-    world.alice.rss_token = 'alice-rss-token'
-    world.onionite.rss_token = 'onionite-rss-token'
+    local_only_invisible_world.alice.rss_token = 'alice-rss-token'
+    local_only_invisible_world.onionite.rss_token = 'onionite-rss-token'
     posts = {}
-    for key, community, author in (('clear', world.clearnet, world.alice), ('onion', world.hidden, world.onionite)):
+    for key, community, author in (('clear', local_only_invisible_world.clearnet, local_only_invisible_world.alice), ('onion', local_only_invisible_world.hidden, local_only_invisible_world.onionite)):
         posts[key] = _post(app, community, author)
     posts['remote'] = make_post(remote, remote_user, 'https://peer.example/post/1')
     for key, title in (('clear', 'CLEARPOST'), ('onion', 'ONIONPOST'), ('remote', 'REMOTEPOST')):
         posts[key].title = title
-    replies = {'clear': _reply(app, posts['clear'], world.alice), 'onion': _reply(app, posts['onion'], world.onionite)}
+    replies = {'clear': _reply(app, posts['clear'], local_only_invisible_world.alice), 'onion': _reply(app, posts['onion'], local_only_invisible_world.onionite)}
     replies['remote'] = make_post_reply(posts['remote'], remote_user)
     replies['remote'].ap_id = 'https://peer.example/comment/1'
     # the onion's rows live on the onion's own instance row (C2), as creation on that domain stores them
-    onion_instance = storefront.domain_by_id(world.onion.id).instance_id
+    onion_instance = storefront.domain_by_id(local_only_invisible_world.onion.id).instance_id
     assert onion_instance != 1
-    for row in (world.onionite, world.hidden, posts['onion'], replies['onion']):
+    for row in (local_only_invisible_world.onionite, local_only_invisible_world.hidden, posts['onion'], replies['onion']):
         row.instance_id = onion_instance
     replies['onion'].ap_id = f'{ONION}/comment/{replies["onion"].id}'
     db.session.commit()
     assert remote.site_domain_id is None and remote.ap_id is not None
-    world.remote = remote
-    return SimpleNamespace(world=world, posts=SimpleNamespace(**posts), replies=SimpleNamespace(**replies),
+    local_only_invisible_world.remote = remote
+    return SimpleNamespace(world=local_only_invisible_world, posts=SimpleNamespace(**posts), replies=SimpleNamespace(**replies),
                            remote=remote)
 
 

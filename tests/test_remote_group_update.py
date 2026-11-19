@@ -20,8 +20,7 @@ from app.constants import SRC_API
 from app.models import Community, CommunityFlair
 from app.shared.community import edit_community
 from tests.factories import a_keypair, make_community_member, make_instance, make_user
-from tests.test_community_kind_rules import _remote, url, web  # noqa: F401  (fixture)
-from tests.test_local_only_outbound import wire  # noqa: F401  (fixture)
+from tests.test_community_kind_rules import _remote, url
 from tests.test_shared_community_lifecycle import _api_input
 
 PEER_INBOX = 'https://peer.example/inbox'
@@ -29,20 +28,20 @@ REMOTE_INBOX = 'https://remote.example/c/far/inbox'
 
 
 @pytest.fixture
-def scene(web):
+def scene(community_kind_rules_web):
     """`general` (local) and `far` (remote, with a stored inbox), both moderated by the founder (an admin), and a
     follower of `general` on a peer, so a local edit has somewhere to go."""
-    web.founder.private_key, web.founder.public_key = a_keypair()
-    general = web.community
+    community_kind_rules_web.founder.private_key, community_kind_rules_web.founder.public_key = a_keypair()
+    general = community_kind_rules_web.community
     general.private_key, general.public_key = a_keypair()
     far = _remote()
     far.ap_inbox_url = REMOTE_INBOX
-    make_community_member(web.founder, far, is_moderator=True)
+    make_community_member(community_kind_rules_web.founder, far, is_moderator=True)
     peer = make_instance('peer.example', software='lemmy')
     peer.inbox = PEER_INBOX
     make_community_member(make_user(peer, 'fan'), general)
     db.session.commit()
-    return web, general, far
+    return community_kind_rules_web, general, far
 
 
 @pytest.fixture
@@ -134,17 +133,17 @@ TRIGGERS = [web_flair_add, web_flair_edit, web_flair_delete, api_flair_create, a
 
 
 @pytest.mark.parametrize('trigger', TRIGGERS, ids=lambda trigger: trigger.__name__)
-def test_an_edit_of_a_remote_community_is_kept_here_and_sent_nowhere(scene, sent, wire, trigger):
+def test_an_edit_of_a_remote_community_is_kept_here_and_sent_nowhere(scene, sent, local_only_outbound_wire, trigger):
     web, _general, far = scene
     changed = trigger(web, far)
     db.session.expire_all()
     assert changed()   # our copy changes as it always did
     assert sent == []
-    assert wire.calls == []   # and nothing else left the server either
+    assert local_only_outbound_wire.calls == []   # and nothing else left the server either
 
 
 @pytest.mark.parametrize('trigger', TRIGGERS, ids=lambda trigger: trigger.__name__)
-def test_an_edit_of_a_local_community_still_sends_its_group_update(scene, sent, wire, trigger):
+def test_an_edit_of_a_local_community_still_sends_its_group_update(scene, sent, local_only_outbound_wire, trigger):
     web, general, _far = scene
     changed = trigger(web, general)
     db.session.expire_all()

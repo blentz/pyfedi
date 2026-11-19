@@ -47,10 +47,9 @@ from tests.factories import COMMUNITY_ADMINISTRATION, grant_permissions, grant_p
 from tests.test_admin_user_administration import _add_payload, _roles
 from tests.test_community_lifecycle import _add_payload as _community_payload, able_to_create, csrf
 from tests.test_per_domain_actor_documents import site_named_first  # noqa: F401  (fixture)
-from tests.test_per_domain_object_ids import FIRST_BASE, SHOP, SHOP_BASE, a_post, a_reply, captured, no_first, \
-    sites  # noqa: F401  (fixture)
+from tests.test_per_domain_object_ids import FIRST_BASE, SHOP, SHOP_BASE, a_post, a_reply, captured, no_first
 from tests.test_shared_post_edit import _api_input
-from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401  (fixture)
+from tests.two_domains import FIRST, ONION, request_on
 
 pytestmark = pytest.mark.usefixtures('site', 'private_static_tree', 'site_named_first')
 

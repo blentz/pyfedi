@@ -134,28 +134,6 @@ def url(app, endpoint, **values):
         return url_for(endpoint, **values)
 
 
-@pytest.fixture
-def web(app, db_session, site):
-    """User 1, an admin who clears every gate before `add_local`, who also owns `general`."""
-    founder = make_user(make_instance('test.piefed.local'), 'founder', local=True)
-    assert founder.id == 1
-    founder.verified = True
-    founder.private_key = 'a private key'
-    founder.created = utcnow() - timedelta(days=30)
-    db.session.add(Language(code='und', name='Undetermined'))
-    english = Language(code='en', name='English')
-    db.session.add(english)
-    db.session.get(Site, 1).community_creation_admin_only = False
-    community = make_community('general')
-    membership = make_community_member(founder, community, is_moderator=True)
-    membership.is_owner = True
-    db.session.commit()
-    client = app.test_client()
-    login(client, founder)
-    return SimpleNamespace(app=app, client=client, token=csrf(app, client), founder=founder, english=english,
-                           community=community)
-
-
 def _post(web, endpoint, payload, **values):
     payload = {'csrf_token': web.token, 'icon_file': (io.BytesIO(b''), ''), 'banner_file': (io.BytesIO(b''), ''),
                **payload}
@@ -185,24 +163,24 @@ def _stored(community_id):
     return db.session.get(Community, community_id)
 
 
-def test_the_add_form_creates_a_video_channel_owned_by_its_creator(web):
-    _add(web, kind='video_channel')
+def test_the_add_form_creates_a_video_channel_owned_by_its_creator(community_kind_rules_web):
+    _add(community_kind_rules_web, kind='video_channel')
 
     community = Community.query.filter_by(name='brandnew').one()
     assert community.kind == COMMUNITY_KIND_VIDEO_CHANNEL
-    assert community.user_id == web.founder.id
+    assert community.user_id == community_kind_rules_web.founder.id
 
 
-def test_the_add_form_defaults_to_discussion(web):
-    _add(web)
+def test_the_add_form_defaults_to_discussion(community_kind_rules_web):
+    _add(community_kind_rules_web)
 
     community = Community.query.filter_by(name='brandnew').one()
     assert community.kind == COMMUNITY_KIND_DISCUSSION
-    assert community.user_id == web.founder.id
+    assert community.user_id == community_kind_rules_web.founder.id
 
 
-def test_the_add_form_refuses_microblogs(web):
-    _response, render = _add(web, kind='microblogs')
+def test_the_add_form_refuses_microblogs(community_kind_rules_web):
+    _response, render = _add(community_kind_rules_web, kind='microblogs')
 
     assert 'kind' in render.call_args.kwargs['form'].errors
     assert Community.query.filter_by(name='brandnew').count() == 0
@@ -221,45 +199,45 @@ def _kind_select(web, form):
     return html[:html.index('>')], html
 
 
-def test_the_add_page_offers_the_three_kinds(web):
-    _opening, html = _kind_select(web, _get_form(web, 'community.add_local'))
+def test_the_add_page_offers_the_three_kinds(community_kind_rules_web):
+    _opening, html = _kind_select(community_kind_rules_web, _get_form(community_kind_rules_web, 'community.add_local'))
 
     assert 'Video channel' in html and 'Podcast' in html and 'Discussion' in html
     assert 'microblogs' not in html
 
 
-def test_the_edit_form_sets_the_kind_of_an_empty_community(web):
-    _edit(web, kind='podcast')
+def test_the_edit_form_sets_the_kind_of_an_empty_community(community_kind_rules_web):
+    _edit(community_kind_rules_web, kind='podcast')
 
-    assert _stored(web.community.id).kind == COMMUNITY_KIND_PODCAST
+    assert _stored(community_kind_rules_web.community.id).kind == COMMUNITY_KIND_PODCAST
 
 
-def test_the_edit_form_refuses_a_kind_change_once_there_are_posts(web):
-    make_post(web.community, web.founder, ap_id='https://test.piefed.local/post/1')
+def test_the_edit_form_refuses_a_kind_change_once_there_are_posts(community_kind_rules_web):
+    make_post(community_kind_rules_web.community, community_kind_rules_web.founder, ap_id='https://test.piefed.local/post/1')
 
-    _response, render = _edit(web, kind='video_channel', title='Renamed')
+    _response, render = _edit(community_kind_rules_web, kind='video_channel', title='Renamed')
 
     assert OWN_REFUSAL in render.call_args.kwargs['form'].kind.errors
-    stored = _stored(web.community.id)
+    stored = _stored(community_kind_rules_web.community.id)
     assert (stored.title, stored.kind) == ('general', COMMUNITY_KIND_DISCUSSION)
 
 
-def test_the_edit_form_without_a_kind_keeps_it_once_there_are_posts(web):
-    make_post(web.community, web.founder, ap_id='https://test.piefed.local/post/1')
+def test_the_edit_form_without_a_kind_keeps_it_once_there_are_posts(community_kind_rules_web):
+    make_post(community_kind_rules_web.community, community_kind_rules_web.founder, ap_id='https://test.piefed.local/post/1')
 
-    _edit(web, title='Renamed')
+    _edit(community_kind_rules_web, title='Renamed')
 
-    stored = _stored(web.community.id)
+    stored = _stored(community_kind_rules_web.community.id)
     assert (stored.title, stored.kind) == ('Renamed', COMMUNITY_KIND_DISCUSSION)
 
 
-def test_the_edit_form_refuses_a_kind_on_a_remote_community(web):
+def test_the_edit_form_refuses_a_kind_on_a_remote_community(community_kind_rules_web):
     remote = _remote()
-    make_community_member(web.founder, remote, is_moderator=True)
+    make_community_member(community_kind_rules_web.founder, remote, is_moderator=True)
 
-    _response, render = _post(web, 'community.community_edit',
+    _response, render = _post(community_kind_rules_web, 'community.community_edit',
                               {'title': 'Far', 'description': '', 'theme': 'disabled', 'posting_warning': '',
-                               'invitations': '0', 'languages': str(web.english.id), 'default_layout': '',
+                               'invitations': '0', 'languages': str(community_kind_rules_web.english.id), 'default_layout': '',
                                'default_post_type': 'link', 'downvote_accept_mode': '0',
                                'post_url_type': 'friendly', 'submit': 'Save', 'kind': 'video_channel'},
                               community_id=remote.id)
@@ -268,60 +246,60 @@ def test_the_edit_form_refuses_a_kind_on_a_remote_community(web):
     assert _stored(remote.id).kind == COMMUNITY_KIND_DISCUSSION
 
 
-def test_the_edit_form_without_a_kind_keeps_it_on_a_remote_community(web):
+def test_the_edit_form_without_a_kind_keeps_it_on_a_remote_community(community_kind_rules_web):
     remote = _remote()
-    make_community_member(web.founder, remote, is_moderator=True)
+    make_community_member(community_kind_rules_web.founder, remote, is_moderator=True)
 
-    form = _get_form(web, 'community.community_edit', community_id=remote.id)
-    opening, _html = _kind_select(web, form)
+    form = _get_form(community_kind_rules_web, 'community.community_edit', community_id=remote.id)
+    opening, _html = _kind_select(community_kind_rules_web, form)
     assert 'disabled' in opening
 
-    _post(web, 'community.community_edit',
+    _post(community_kind_rules_web, 'community.community_edit',
           {'title': 'Far2', 'description': '', 'theme': 'disabled', 'posting_warning': '', 'invitations': '0',
-           'languages': str(web.english.id), 'default_layout': '', 'default_post_type': 'link',
+           'languages': str(community_kind_rules_web.english.id), 'default_layout': '', 'default_post_type': 'link',
            'downvote_accept_mode': '0', 'post_url_type': 'friendly', 'submit': 'Save'}, community_id=remote.id)
     assert _stored(remote.id).kind == COMMUNITY_KIND_DISCUSSION
 
 
-def test_the_edit_page_disables_the_kind_once_there_are_posts(web):
-    make_post(web.community, web.founder, ap_id='https://test.piefed.local/post/1')
+def test_the_edit_page_disables_the_kind_once_there_are_posts(community_kind_rules_web):
+    make_post(community_kind_rules_web.community, community_kind_rules_web.founder, ap_id='https://test.piefed.local/post/1')
 
-    form = _get_form(web, 'community.community_edit', community_id=web.community.id)
+    form = _get_form(community_kind_rules_web, 'community.community_edit', community_id=community_kind_rules_web.community.id)
 
-    opening, _html = _kind_select(web, form)
+    opening, _html = _kind_select(community_kind_rules_web, form)
     assert 'disabled' in opening
     assert form.kind.data == COMMUNITY_KIND_DISCUSSION
 
 
-def test_the_edit_page_leaves_the_kind_open_while_there_are_no_posts(web):
-    web.community.kind = COMMUNITY_KIND_PODCAST
+def test_the_edit_page_leaves_the_kind_open_while_there_are_no_posts(community_kind_rules_web):
+    community_kind_rules_web.community.kind = COMMUNITY_KIND_PODCAST
     db.session.commit()
 
-    form = _get_form(web, 'community.community_edit', community_id=web.community.id)
+    form = _get_form(community_kind_rules_web, 'community.community_edit', community_id=community_kind_rules_web.community.id)
 
-    opening, _html = _kind_select(web, form)
+    opening, _html = _kind_select(community_kind_rules_web, form)
     assert 'disabled' not in opening
     assert form.kind.data == COMMUNITY_KIND_PODCAST
 
 
-def test_the_edit_page_shows_the_microblogs_kind_read_only(web):
-    web.community.kind = COMMUNITY_KIND_MICROBLOGS
+def test_the_edit_page_shows_the_microblogs_kind_read_only(community_kind_rules_web):
+    community_kind_rules_web.community.kind = COMMUNITY_KIND_MICROBLOGS
     db.session.commit()
 
-    form = _get_form(web, 'community.community_edit', community_id=web.community.id)
+    form = _get_form(community_kind_rules_web, 'community.community_edit', community_id=community_kind_rules_web.community.id)
 
-    opening, html = _kind_select(web, form)
+    opening, html = _kind_select(community_kind_rules_web, form)
     assert 'disabled' in opening
     assert 'Microblogs' in html and 'video_channel' not in html
 
 
-def test_the_edit_form_keeps_the_microblogs_kind_when_none_is_sent(web):
-    web.community.kind = COMMUNITY_KIND_MICROBLOGS
+def test_the_edit_form_keeps_the_microblogs_kind_when_none_is_sent(community_kind_rules_web):
+    community_kind_rules_web.community.kind = COMMUNITY_KIND_MICROBLOGS
     db.session.commit()
 
-    _edit(web, title='Renamed')
+    _edit(community_kind_rules_web, title='Renamed')
 
-    stored = _stored(web.community.id)
+    stored = _stored(community_kind_rules_web.community.id)
     assert (stored.title, stored.kind) == ('Renamed', COMMUNITY_KIND_MICROBLOGS)
 
 

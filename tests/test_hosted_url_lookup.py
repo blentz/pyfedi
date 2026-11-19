@@ -38,135 +38,95 @@ pytestmark = pytest.mark.usefixtures('site')
 SHOP = 'shop.example'
 
 
-@pytest.fixture
-def wire(monkeypatch):
-    """As in test_no_http_to_hosted.py: every outbound HTTP request, answered 202. `wire.calls` is what left."""
-    monkeypatch.setattr(socket, 'getaddrinfo', _getaddrinfo_without_the_network)
-    with respx.mock(assert_all_called=False) as router:
-        yield router.route().mock(return_value=httpx.Response(202, html='<html></html>'))
-
-
-@pytest.fixture
-def env(db_session):
-    """The first domain (SERVER_NAME) and shop.example, each with an alice and a den: local names are unique per domain
-    (C1), so the same name on both is two rows. A shop post in shop's den with a first-domain reply, a site-wide feed, and a
-    legacy first-domain post whose ap_id is a URL no path form matches."""
-    local = make_instance(SERVER, software='piefed')
-    if db.session.query(SiteDomain).filter_by(is_default=True).first() is None:
-        db.session.add(SiteDomain(domain=SERVER, is_default=True))
-    shop_row = SiteDomain(domain=SHOP)
-    db.session.add(shop_row)
-    db.session.commit()
-    clear_domain_cache()
-    shop = make_instance(SHOP, software='piefed')
-    peer = make_instance('peer.example', software='lemmy')
-    first_alice = make_user(local, 'alice', local=True)   # id 1: make_community's owner
-    shop_alice = make_user(shop, 'alice', local=True)
-    shop_alice.site_domain_id = shop_row.id
-    first_den = make_community('den')
-    shop_den = make_community('den', host=SHOP)
-    shop_den.site_domain_id, shop_den.instance_id = shop_row.id, shop.id
-    db.session.commit()
-    post = make_post(shop_den, shop_alice, None, title='a shop post')
-    legacy = make_post(first_den, first_alice, f'https://{SERVER}/p/legacy', title='a legacy post')
-    reply = make_post_reply(post, first_alice)
-    feed = make_local_feed('reads')
-    shop_feed = make_local_feed('reads', domain=domain_for_host(SHOP))
-    yield SimpleNamespace(local=local, shop=shop, peer=peer, shop_row=shop_row, first_alice=first_alice,
-                          shop_alice=shop_alice, first_den=first_den, shop_den=shop_den, post=post, legacy=legacy,
-                          reply=reply, feed=feed, shop_feed=shop_feed)
-    clear_domain_cache()
-
-
 def lookup(url):
     return federation_urls.local_object_for_url(url)
 
 
 # -- local_object_for_url ---------------------------------------------------------------------------------------------
 
-def test_every_path_form_resolves_to_its_row_on_either_domain(env, wire):
-    p, r = env.post.id, env.reply.id
+def test_every_path_form_resolves_to_its_row_on_either_domain(hosted_url_lookup_env, hosted_url_lookup_wire):
+    p, r = hosted_url_lookup_env.post.id, hosted_url_lookup_env.reply.id
     expected = {
-        f'https://{SHOP}/post/{p}': env.post,
-        f'https://{SHOP}/post/{p}/a-slug': env.post,
-        f'https://{SHOP}/c/den/p/{p}': env.post,
-        f'https://{SHOP}/c/den/p/{p}/a-slug': env.post,
-        f'https://{SHOP}/comment/{r}': env.reply,
-        f'https://{SERVER}/comment/{r}': env.reply,
-        f'https://{SHOP}/u/alice': env.shop_alice,
-        f'https://{SERVER}/u/alice': env.first_alice,
-        f'https://{SHOP}/u/Alice/': env.shop_alice,
-        f'https://{SERVER}/u/alice@{SHOP}': env.shop_alice,   # a handle in the path names its own domain's row
-        f'https://{SHOP}/c/Den': env.shop_den,
-        f'https://{SERVER}/c/Den': env.first_den,
-        f'https://{SHOP}/c/den': env.shop_den,                # its stored ap_profile_id
-        f'https://{SERVER}/f/reads': env.feed,
-        f'https://{SHOP}/f/Reads': env.shop_feed,             # a feed is named on its own domain, as a community is
-        f'HTTP://SHOP.EXAMPLE/post/{p}/': env.post,
+        f'https://{SHOP}/post/{p}': hosted_url_lookup_env.post,
+        f'https://{SHOP}/post/{p}/a-slug': hosted_url_lookup_env.post,
+        f'https://{SHOP}/c/den/p/{p}': hosted_url_lookup_env.post,
+        f'https://{SHOP}/c/den/p/{p}/a-slug': hosted_url_lookup_env.post,
+        f'https://{SHOP}/comment/{r}': hosted_url_lookup_env.reply,
+        f'https://{SERVER}/comment/{r}': hosted_url_lookup_env.reply,
+        f'https://{SHOP}/u/alice': hosted_url_lookup_env.shop_alice,
+        f'https://{SERVER}/u/alice': hosted_url_lookup_env.first_alice,
+        f'https://{SHOP}/u/Alice/': hosted_url_lookup_env.shop_alice,
+        f'https://{SERVER}/u/alice@{SHOP}': hosted_url_lookup_env.shop_alice,   # a handle in the path names its own domain's row
+        f'https://{SHOP}/c/Den': hosted_url_lookup_env.shop_den,
+        f'https://{SERVER}/c/Den': hosted_url_lookup_env.first_den,
+        f'https://{SHOP}/c/den': hosted_url_lookup_env.shop_den,                # its stored ap_profile_id
+        f'https://{SERVER}/f/reads': hosted_url_lookup_env.feed,
+        f'https://{SHOP}/f/Reads': hosted_url_lookup_env.shop_feed,             # a feed is named on its own domain, as a community is
+        f'HTTP://SHOP.EXAMPLE/post/{p}/': hosted_url_lookup_env.post,
     }
     for url, row in expected.items():
         assert lookup(url) is row, url
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('sub', ['replies', 'context', 'likes', 'dislikes', 'shares', 'edit', 'embed', 'oembed'])
-def test_a_sub_resource_of_a_post_is_not_the_post(env, wire, sub):
+def test_a_sub_resource_of_a_post_is_not_the_post(hosted_url_lookup_env, hosted_url_lookup_wire, sub):
     """/post/<id>/replies and the rest are other routes of ours (a collection, a page): only a slug is the post."""
-    assert lookup(f'https://{SHOP}/post/{env.post.id}/{sub}') is None
-    assert lookup(f'https://{SHOP}/post/{env.post.id}/{sub}-of-a-slug') is env.post
-    assert wire.calls.call_count == 0
+    assert lookup(f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}/{sub}') is None
+    assert lookup(f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}/{sub}-of-a-slug') is hosted_url_lookup_env.post
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_post_asked_for_on_the_wrong_sister_is_still_that_post(env, wire):
-    assert lookup(f'https://{SERVER}/post/{env.post.id}') is env.post
-    assert lookup(f'https://{SERVER}/c/den/p/{env.post.id}/slug') is env.post
-    assert wire.calls.call_count == 0
+def test_a_post_asked_for_on_the_wrong_sister_is_still_that_post(hosted_url_lookup_env, hosted_url_lookup_wire):
+    assert lookup(f'https://{SERVER}/post/{hosted_url_lookup_env.post.id}') is hosted_url_lookup_env.post
+    assert lookup(f'https://{SERVER}/c/den/p/{hosted_url_lookup_env.post.id}/slug') is hosted_url_lookup_env.post
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_stored_url_matches_whatever_case_its_host_and_however_it_ends(env, wire):
-    assert lookup(f'https://{SERVER.upper()}/p/legacy/') is env.legacy
-    assert lookup(f'https://{SERVER}/p/legacy') is env.legacy
-    assert wire.calls.call_count == 0
+def test_a_stored_url_matches_whatever_case_its_host_and_however_it_ends(hosted_url_lookup_env, hosted_url_lookup_wire):
+    assert lookup(f'https://{SERVER.upper()}/p/legacy/') is hosted_url_lookup_env.legacy
+    assert lookup(f'https://{SERVER}/p/legacy') is hosted_url_lookup_env.legacy
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('path', ['/post/999999', '/comment/999999', '/post/99999999999', '/post/2147483648',
                                   '/c/den/p/999999/slug', '/u/nobody', '/c/nothing', '/f/nothing', '/u/a%00b',
                                   '/about', '/post/abc', '/post/1/comment/2/extra', '/', ''])
-def test_a_url_of_ours_that_names_nothing_is_none_without_http(env, wire, path):
+def test_a_url_of_ours_that_names_nothing_is_none_without_http(hosted_url_lookup_env, hosted_url_lookup_wire, path):
     assert lookup(f'https://{SHOP}{path}') is None
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('url', ['https://peer.example/post/1', 'https://shop.example.evil/post/1', '', None, 12345,
                                  'https://shop.example:8443/post/1'])
-def test_a_url_on_no_domain_of_ours_is_none(env, wire, url):
+def test_a_url_on_no_domain_of_ours_is_none(hosted_url_lookup_env, hosted_url_lookup_wire, url):
     assert lookup(url) is None
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_name_in_a_url_with_userinfo_names_nobody(env, wire):
+def test_a_name_in_a_url_with_userinfo_names_nobody(hosted_url_lookup_env, hosted_url_lookup_wire):
     """httpx would connect to shop with userinfo, so it is ours (is_hosted_uri), but no domain row's authority names
     it: its ids still resolve, its names do not."""
     assert lookup(f'https://x@{SHOP}/u/alice') is None
-    assert lookup(f'https://x@{SHOP}/post/{env.post.id}') is env.post
-    for url in (f'https://[@{SHOP}/post/{env.post.id}', f'https://x]@{SHOP}/post/{env.post.id}'):
+    assert lookup(f'https://x@{SHOP}/post/{hosted_url_lookup_env.post.id}') is hosted_url_lookup_env.post
+    for url in (f'https://[@{SHOP}/post/{hosted_url_lookup_env.post.id}', f'https://x]@{SHOP}/post/{hosted_url_lookup_env.post.id}'):
         assert lookup(url) is None, url   # httpx reads shop as the host; urllib refuses the authority
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 # -- resolve_remote_post_from_search: the search page, the discovery view, an inbox Move ------------------------------
 
-def test_a_hosted_post_url_resolves_from_the_database(env, wire):
-    assert resolve_remote_post_from_search(f'https://{SHOP}/c/den/p/{env.post.id}/slug') is env.post
-    assert wire.calls.call_count == 0
+def test_a_hosted_post_url_resolves_from_the_database(hosted_url_lookup_env, hosted_url_lookup_wire):
+    assert resolve_remote_post_from_search(f'https://{SHOP}/c/den/p/{hosted_url_lookup_env.post.id}/slug') is hosted_url_lookup_env.post
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('path', ['/post/999999', '/u/alice', '/comment/{reply}'])
-def test_a_hosted_url_that_is_no_post_is_none_without_a_fetch(env, wire, monkeypatch, path):
+def test_a_hosted_url_that_is_no_post_is_none_without_a_fetch(hosted_url_lookup_env, hosted_url_lookup_wire, monkeypatch, path):
     fetched = []
     monkeypatch.setattr('app.activitypub.util.remote_object_to_json', lambda *a, **k: fetched.append(a))
-    assert resolve_remote_post_from_search(f'https://{SHOP}{path.format(reply=env.reply.id)}') is None
-    assert fetched == [] and wire.calls.call_count == 0
+    assert resolve_remote_post_from_search(f'https://{SHOP}{path.format(reply=hosted_url_lookup_env.reply.id)}') is None
+    assert fetched == [] and hosted_url_lookup_wire.calls.call_count == 0
 
 
 def post_as_alice(app, env, path, data):
@@ -194,9 +154,9 @@ def search_for(app, env, address):
     return response.get_data(as_text=True)
 
 
-def test_search_for_a_sister_post_url_opens_the_post_here(app, env, wire):
-    assert search_for(app, env, f'https://{SHOP}/c/den/p/{env.post.id}/slug') == f'/post/{env.post.id}'
-    assert wire.calls.call_count == 0
+def test_search_for_a_sister_post_url_opens_the_post_here(app, hosted_url_lookup_env, hosted_url_lookup_wire):
+    assert search_for(app, hosted_url_lookup_env, f'https://{SHOP}/c/den/p/{hosted_url_lookup_env.post.id}/slug') == f'/post/{hosted_url_lookup_env.post.id}'
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 def _deleted(env):
@@ -229,82 +189,82 @@ def _unpublished(env):
 
 @pytest.mark.parametrize('hide', [_deleted, _followers_only, _direct, _private_community, _local_only_community,
                                   _local_only_post, _unpublished])
-def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_url(app, env, wire, hide):
+def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_url(app, hosted_url_lookup_env, hosted_url_lookup_wire, hide):
     """Our ActivityPub post route serves none of these to a peer, so the resolver a peer's Move reaches finds nothing
     either (security review of dbbb74c91). The viewer's search is not the peer gate: see the next test."""
-    hide(env)
+    hide(hosted_url_lookup_env)
     db.session.commit()
-    for url in (f'https://{SHOP}/post/{env.post.id}', f'https://{SERVER}/c/den/p/{env.post.id}/slug'):
+    for url in (f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}', f'https://{SERVER}/c/den/p/{hosted_url_lookup_env.post.id}/slug'):
         assert resolve_remote_post_from_search(url) is None
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('hide, opens', [(_deleted, True), (_followers_only, False), (_direct, False),
                                          (_private_community, False), (_local_only_community, True),
                                          (_local_only_post, True), (_unpublished, True)])
-def test_a_search_for_a_hosted_post_is_held_to_what_the_post_page_shows_the_viewer(app, env, wire, hide, opens):
+def test_a_search_for_a_hosted_post_is_held_to_what_the_post_page_shows_the_viewer(app, hosted_url_lookup_env, hosted_url_lookup_wire, hide, opens):
     """alice (user 1) is an admin: she opens what the page shows an admin, and gets the plain not-found for the rest."""
-    hide(env)
+    hide(hosted_url_lookup_env)
     db.session.commit()
-    for url in (f'https://{SHOP}/post/{env.post.id}', f'https://{SERVER}/c/den/p/{env.post.id}/slug'):
-        found = search_for(app, env, url)
+    for url in (f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}', f'https://{SERVER}/c/den/p/{hosted_url_lookup_env.post.id}/slug'):
+        found = search_for(app, hosted_url_lookup_env, url)
         if opens:
-            assert found == f'/post/{env.post.id}', url
+            assert found == f'/post/{hosted_url_lookup_env.post.id}', url
         else:
             assert 'Post not found.' in found and 'a shop post' not in found, url
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('hide', [_deleted, _followers_only, _private_community])
-def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_its_stored_url(app, env, wire, hide):
+def test_a_hosted_post_no_peer_may_fetch_is_not_found_by_its_stored_url(app, hosted_url_lookup_env, hosted_url_lookup_wire, hide):
     """A post on one of our domains stores its canonical URL as ap_id, so `Post.get_by_ap_id` finds that spelling
     before the hosted branch runs. It is gated the same way: the stored URL and any other spelling of it agree."""
-    stored = f'https://{SHOP}/post/{env.post.id}'
-    env.post.ap_id = stored
-    hide(env)
+    stored = f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}'
+    hosted_url_lookup_env.post.ap_id = stored
+    hide(hosted_url_lookup_env)
     db.session.commit()
     assert resolve_remote_post_from_search(stored) is None
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_public_hosted_post_is_found_by_its_stored_url(app, env, wire):
-    stored = f'https://{SHOP}/post/{env.post.id}'
-    env.post.ap_id = stored
+def test_a_public_hosted_post_is_found_by_its_stored_url(app, hosted_url_lookup_env, hosted_url_lookup_wire):
+    stored = f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}'
+    hosted_url_lookup_env.post.ap_id = stored
     db.session.commit()
-    assert search_for(app, env, stored) == f'/post/{env.post.id}'
-    assert resolve_remote_post_from_search(stored) is env.post
-    assert wire.calls.call_count == 0
+    assert search_for(app, hosted_url_lookup_env, stored) == f'/post/{hosted_url_lookup_env.post.id}'
+    assert resolve_remote_post_from_search(stored) is hosted_url_lookup_env.post
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_remote_post_found_by_its_stored_url_is_returned_as_before(env, wire):
+def test_a_remote_post_found_by_its_stored_url_is_returned_as_before(hosted_url_lookup_env, hosted_url_lookup_wire):
     """Only our own posts are gated: a remote post already stored is the peer's to serve, and is returned as it was."""
     remote_den = make_community('remote_den', host='peer.example')
     remote_den.ap_id = 'https://peer.example/c/remote_den'
-    author = make_user(env.peer, 'author')
+    author = make_user(hosted_url_lookup_env.peer, 'author')
     post = make_post(remote_den, author, 'https://peer.example/post/7', title='a peer post')
     post.deleted = True
     db.session.commit()
     assert resolve_remote_post_from_search('https://peer.example/post/7') is post
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_the_discovery_view_opens_a_hosted_post_from_the_database(app, env, wire):
+def test_the_discovery_view_opens_a_hosted_post_from_the_database(app, hosted_url_lookup_env, hosted_url_lookup_wire):
     """A hosted URL is never fetched: the discovery view opens the local post on the domain the viewer is on
     (follow-up F2)."""
-    response = post_as_alice(app, env, '/discovery/video/resolve',
-                             {'q': 'x', 'url': f'https://{SHOP}/post/{env.post.id}'})
+    response = post_as_alice(app, hosted_url_lookup_env, '/discovery/video/resolve',
+                             {'q': 'x', 'url': f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}'})
     assert response.status_code == 302
-    assert response.headers['Location'] == f'/post/{env.post.id}'
-    assert wire.calls.call_count == 0
+    assert response.headers['Location'] == f'/post/{hosted_url_lookup_env.post.id}'
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 # -- a boost of a hosted object ---------------------------------------------------------------------------------------
 
 @pytest.fixture
-def booster(env):
-    remote = make_user(env.peer, 'booster')
+def booster(hosted_url_lookup_env):
+    remote = make_user(hosted_url_lookup_env.peer, 'booster')
     remote.ap_fetched_at = utcnow()   # fresh: its own profile is not refreshed over HTTP mid-test
-    make_follow(env.first_alice, remote)
+    make_follow(hosted_url_lookup_env.first_alice, remote)
     return remote
 
 
@@ -322,48 +282,48 @@ def boost(booster, uri):
             'actor': booster.ap_profile_id, 'object': uri}
 
 
-def test_a_boost_of_a_sister_post_by_its_path_is_recorded_without_a_fetch(env, wire, booster, ap_logs):
-    found = process_microblog_announce(boost(booster, f'https://{SHOP}/post/{env.post.id}'), 'b1', False)
-    assert found is env.post
-    assert PostBoost.query.filter_by(post_id=env.post.id, user_id=booster.id).count() == 1
-    assert wire.calls.call_count == 0
+def test_a_boost_of_a_sister_post_by_its_path_is_recorded_without_a_fetch(hosted_url_lookup_env, hosted_url_lookup_wire, booster, ap_logs):
+    found = process_microblog_announce(boost(booster, f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}'), 'b1', False)
+    assert found is hosted_url_lookup_env.post
+    assert PostBoost.query.filter_by(post_id=hosted_url_lookup_env.post.id, user_id=booster.id).count() == 1
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('hide', [_local_only_post, _unpublished])
-def test_a_boost_by_path_of_a_post_we_would_not_serve_is_ignored(env, wire, booster, ap_logs, hide):
+def test_a_boost_by_path_of_a_post_we_would_not_serve_is_ignored(hosted_url_lookup_env, hosted_url_lookup_wire, booster, ap_logs, hide):
     """Before C4 the URL was fetched from our own post route, which refuses a local-only (404) or unpublished (403)
     post: a peer's boost of one by its guessable URL records nothing (review I1)."""
-    hide(env)
+    hide(hosted_url_lookup_env)
     db.session.commit()
-    assert process_microblog_announce(boost(booster, f'https://{SHOP}/post/{env.post.id}'), 'b3', False) is None
+    assert process_microblog_announce(boost(booster, f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}'), 'b3', False) is None
     assert ap_logs == [(APLOG_ANNOUNCE, APLOG_IGNORED, 'Boosted post is not served to other servers')]
     assert PostBoost.query.count() == 0
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_boost_of_a_hosted_object_we_lack_is_dropped_without_a_fetch(env, wire, booster, ap_logs):
+def test_a_boost_of_a_hosted_object_we_lack_is_dropped_without_a_fetch(hosted_url_lookup_env, hosted_url_lookup_wire, booster, ap_logs):
     uri = f'https://{SHOP}/post/999999'
     assert process_microblog_announce(boost(booster, uri), 'b2', False) is None
     assert ap_logs == [(APLOG_ANNOUNCE, APLOG_IGNORED, f'Boosted object is on a domain of ours and not here: {uri}')]
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 # -- a relayed object -------------------------------------------------------------------------------------------------
 
-def test_a_relayed_hosted_object_we_lack_is_dropped_without_a_fetch(env, wire, monkeypatch):
+def test_a_relayed_hosted_object_we_lack_is_dropped_without_a_fetch(hosted_url_lookup_env, hosted_url_lookup_wire, monkeypatch):
     lines = []
     monkeypatch.setattr(inbound, 'log_incoming_ap', lambda *args: lines.append(args))
     uri = f'https://{SHOP}/post/999999'
     inbound.process_relayed_announce(make_relay().id, uri)
     assert [line[2:] for line in lines] == [(APLOG_IGNORED, None, 'relayed object on a domain of ours, not here')]
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_relayed_hosted_object_we_have_is_left_alone(env, wire, monkeypatch):
+def test_a_relayed_hosted_object_we_have_is_left_alone(hosted_url_lookup_env, hosted_url_lookup_wire, monkeypatch):
     lines = []
     monkeypatch.setattr(inbound, 'log_incoming_ap', lambda *args: lines.append(args))
-    inbound.process_relayed_announce(make_relay().id, f'https://{SHOP}/c/den/p/{env.post.id}/slug')
-    assert lines == [] and wire.calls.call_count == 0
+    inbound.process_relayed_announce(make_relay().id, f'https://{SHOP}/c/den/p/{hosted_url_lookup_env.post.id}/slug')
+    assert lines == [] and hosted_url_lookup_wire.calls.call_count == 0
 
 
 # -- a local community's moderators, outbox and featured posts --------------------------------------------------------
@@ -384,27 +344,27 @@ def _with_collections(community, host):
     db.session.commit()
 
 
-def test_an_empty_local_community_is_never_backfilled_over_http(env, wire, fetches):
-    _with_collections(env.shop_den, SHOP)
-    assert retrieve_mods_and_backfill(env.shop_den.id, SHOP, 'den') is None
-    assert fetches == [] and wire.calls.call_count == 0
+def test_an_empty_local_community_is_never_backfilled_over_http(hosted_url_lookup_env, hosted_url_lookup_wire, fetches):
+    _with_collections(hosted_url_lookup_env.shop_den, SHOP)
+    assert retrieve_mods_and_backfill(hosted_url_lookup_env.shop_den.id, SHOP, 'den') is None
+    assert fetches == [] and hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_an_empty_local_community_added_to_a_feed_is_not_fetched(env, wire, fetches):
-    _with_collections(env.first_den, SERVER)
-    env.first_den.post_count = 0
-    env.feed.num_communities = 1
-    make_feed_item(env.feed, env.first_den)
+def test_an_empty_local_community_added_to_a_feed_is_not_fetched(hosted_url_lookup_env, hosted_url_lookup_wire, fetches):
+    _with_collections(hosted_url_lookup_env.first_den, SERVER)
+    hosted_url_lookup_env.first_den.post_count = 0
+    hosted_url_lookup_env.feed.num_communities = 1
+    make_feed_item(hosted_url_lookup_env.feed, hosted_url_lookup_env.first_den)
     db.session.commit()
-    initialise_new_communities(env.feed)
-    assert fetches == [] and wire.calls.call_count == 0
+    initialise_new_communities(hosted_url_lookup_env.feed)
+    assert fetches == [] and hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_an_empty_local_community_imported_in_settings_is_not_fetched(app, env, wire, fetches, monkeypatch):
+def test_an_empty_local_community_imported_in_settings_is_not_fetched(app, hosted_url_lookup_env, hosted_url_lookup_wire, fetches, monkeypatch):
     """The settings import's follow of an empty community runs its backfill (user/routes.py import_settings_task):
     for one of ours, nothing is fetched."""
     quiet = make_community('quiet', host=SHOP)
-    quiet.site_domain_id = env.shop_row.id
+    quiet.site_domain_id = hosted_url_lookup_env.shop_row.id
     _with_collections(quiet, SHOP)
     backfilled = []
 
@@ -418,27 +378,27 @@ def test_an_empty_local_community_imported_in_settings_is_not_fetched(app, env, 
     redis = SimpleNamespace(get=lambda key: json.dumps({'followed_communities': [f'https://{SHOP}/c/quiet']}),
                             exists=lambda key: 1, delete=lambda key: None)
     monkeypatch.setattr('app.redis_client', redis, raising=False)
-    import_settings_task(env.first_alice.id, 'a-redis-key')
+    import_settings_task(hosted_url_lookup_env.first_alice.id, 'a-redis-key')
     assert backfilled == [quiet.id]
-    assert fetches == [] and wire.calls.call_count == 0
+    assert fetches == [] and hosted_url_lookup_wire.calls.call_count == 0
 
 
 # -- discovery --------------------------------------------------------------------------------------------------------
 
-def test_our_own_hosts_are_excluded_from_discovery(env):
+def test_our_own_hosts_are_excluded_from_discovery(hosted_url_lookup_env):
     assert host_is_excluded(SHOP, frozenset())
     assert host_is_excluded(SERVER, frozenset())
     assert host_is_excluded('SHOP.EXAMPLE', frozenset())
     assert not host_is_excluded('peer.example', frozenset())
 
 
-def test_discovery_backfill_of_a_hosted_community_is_skipped(env, wire, fetches):
-    assert backfill.run_backfill(env.shop_den.id) is None
-    assert fetches == [] and wire.calls.call_count == 0
+def test_discovery_backfill_of_a_hosted_community_is_skipped(hosted_url_lookup_env, hosted_url_lookup_wire, fetches):
+    assert backfill.run_backfill(hosted_url_lookup_env.shop_den.id) is None
+    assert fetches == [] and hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('actor_url', [f'https://{SHOP}/c/den', f'https://{SHOP}/c/gone'])
-def test_discovery_sync_never_adds_a_hosted_community(env, wire, fetches, monkeypatch, actor_url):
+def test_discovery_sync_never_adds_a_hosted_community(hosted_url_lookup_env, hosted_url_lookup_wire, fetches, monkeypatch, actor_url):
     monkeypatch.setattr(sync, 'find_actor_or_create', lambda *a, **k: pytest.fail('must not resolve our own URL'))
     entry = DiscoveryEntry(kind='community', platform='peertube', actor_url=actor_url, name='den', host=SHOP,
                            source='test')
@@ -446,7 +406,7 @@ def test_discovery_sync_never_adds_a_hosted_community(env, wire, fetches, monkey
     db.session.commit()
     assert sync._add(entry, {}) is False
     assert db.session.query(DiscoverySync).count() == 0
-    assert fetches == [] and wire.calls.call_count == 0
+    assert fetches == [] and hosted_url_lookup_wire.calls.call_count == 0
 
 
 # -- podcast credits --------------------------------------------------------------------------------------------------
@@ -461,25 +421,25 @@ def actor_fetches(monkeypatch):
     return calls
 
 
-def test_a_credit_naming_a_sister_account_is_that_account(env, wire, actor_fetches):
-    db.session.add(UserExtraField(user_id=env.shop_alice.id, label='podcast', text=PODCAST.ap_profile_id))
+def test_a_credit_naming_a_sister_account_is_that_account(hosted_url_lookup_env, hosted_url_lookup_wire, actor_fetches):
+    db.session.add(UserExtraField(user_id=hosted_url_lookup_env.shop_alice.id, label='podcast', text=PODCAST.ap_profile_id))
     db.session.commit()
-    assert credits.verified_credit_user(f'https://{SHOP}/u/alice', PODCAST) == env.shop_alice.id
+    assert credits.verified_credit_user(f'https://{SHOP}/u/alice', PODCAST) == hosted_url_lookup_env.shop_alice.id
     assert credits.verified_credit_user(f'https://{SERVER}/u/alice', PODCAST) is None   # The first domain's alice: no link
-    assert actor_fetches == [] and wire.calls.call_count == 0
+    assert actor_fetches == [] and hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_credit_naming_a_hosted_url_we_do_not_store_is_not_fetched(env, wire, actor_fetches):
-    make_user(env.peer, 'bob')   # remote: a hosted path naming its handle finds it, and it does not vouch
+def test_a_credit_naming_a_hosted_url_we_do_not_store_is_not_fetched(hosted_url_lookup_env, hosted_url_lookup_wire, actor_fetches):
+    make_user(hosted_url_lookup_env.peer, 'bob')   # remote: a hosted path naming its handle finds it, and it does not vouch
     assert credits.verified_credit_user(f'https://{SHOP}/u/bob@peer.example', PODCAST) is None
     assert credits.verified_credit_user(f'https://{SHOP}/@ghost', PODCAST) is None
-    assert credits.verified_credit_user(f'https://{SHOP}/post/{env.post.id}', PODCAST) is None
-    assert actor_fetches == [] and wire.calls.call_count == 0
+    assert credits.verified_credit_user(f'https://{SHOP}/post/{hosted_url_lookup_env.post.id}', PODCAST) is None
+    assert actor_fetches == [] and hosted_url_lookup_wire.calls.call_count == 0
 
 
 # -- the instance chooser ---------------------------------------------------------------------------------------------
 
-def test_the_instance_chooser_never_asks_our_own_domains(env, http_mock, monkeypatch):
+def test_the_instance_chooser_never_asks_our_own_domains(hosted_url_lookup_env, http_mock, monkeypatch):
     nodes = [{'domain': d, 'uptime_alltime': 99, 'monthsmonitored': 12} for d in (SHOP, SERVER, 'peer.example')]
     http_mock.get(url__regex=r'https://piefed\.social/static/media/known_instances\.json.*').respond(200, json=nodes)
     http_mock.get('https://peer.example/api/alpha/site/instance_chooser').respond(200, json={'nsfw': False})

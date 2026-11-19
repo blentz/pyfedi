@@ -29,9 +29,7 @@ from app.utils import get_redis_connection, set_setting
 from config import Config, limits_redis_uri
 from tests.conftest import TestConfig
 from tests.factories import make_community, make_post
-from tests.test_onion_pow import (FROM_CADDY, MARKER, ONION_URL, PASSWORD, PROXY, alice, challenge, dora,  # noqa: F401
-                                  login_data, onion, onion_get, onion_page, onion_post, open_registration,
-                                  register_data)
+from tests.test_onion_pow import FROM_CADDY, MARKER, ONION_URL, PASSWORD, PROXY, challenge, login_data, onion_get, onion_page, onion_post, register_data
 
 CLEARNET_IP = '198.51.100.23'
 # The Celery broker's own keys, the spec's one exception: its queues (app/__init__.py CELERY_ROUTES), kombu's
@@ -173,7 +171,7 @@ def unchanged(before, after, slack=30):
 
 
 @pytest.fixture
-def world(app, site, alice, open_registration, main_redis, monkeypatch):
+def world(app, site, onion_pow_alice, onion_pow_open_registration, main_redis, monkeypatch):
     """A community with a post by someone else, on the default domain, and alice, who logs in over the onion."""
     set_setting('onion_pow_difficulty', 0)      # any nonce solves a challenge
     site.private_instance = False
@@ -181,7 +179,7 @@ def world(app, site, alice, open_registration, main_redis, monkeypatch):
     community = make_community('news')
     author = User.query.filter_by(user_name='founder').first()
     post = make_post(community, author, 'https://test.piefed.local/post/1', title='hello')
-    return {'community': community, 'post': post, 'alice': alice}
+    return {'community': community, 'post': post, 'alice': onion_pow_alice}
 
 
 def pages(post):
@@ -307,7 +305,7 @@ def test_onion_browsing_works_when_the_onion_store_is_down(limited_app, world, l
     assert not limits_on.main.storage
 
 
-def test_clearnet_login_unaffected_when_the_onion_store_is_down(app, world, dora, main_redis, onion_store_down,
+def test_clearnet_login_unaffected_when_the_onion_store_is_down(app, world, onion_pow_dora, main_redis, onion_store_down,
                                                                 monkeypatch):
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', False)
     client = app.test_client()
@@ -359,7 +357,7 @@ def test_the_routed_storage_outside_the_onion(app):
     assert not storage.main.storage and not storage.onion.storage
 
 
-def test_the_onion_fallback_is_made_once(app, onion):
+def test_the_onion_fallback_is_made_once(app, onion_pow_onion):
     storage = storage_from_string('onion-routed://', main='memory://', onion='memory://')
     storage.onion = DownStorage()
     with app.test_request_context('/', base_url=ONION_URL, headers=MARKER,
@@ -375,7 +373,7 @@ def onion_request(app):
                                     environ_base={'werkzeug.proxy_fix.orig': FROM_CADDY})
 
 
-def test_request_redis(app, onion, main_redis, onion_redis):
+def test_request_redis(app, onion_pow_onion, main_redis, onion_redis):
     assert request_redis() is main_redis                 # outside a request
     with app.test_request_context('/'):
         assert request_redis() is main_redis
@@ -390,7 +388,7 @@ def test_clearnet_redis_errors_go_on_as_before(app, guard):
             raise RedisConnectionError('main down')
 
 
-def test_the_optional_block_is_skipped_on_the_onion(app, onion):
+def test_the_optional_block_is_skipped_on_the_onion(app, onion_pow_onion):
     reached = []
     with onion_request(app):
         with onion_store_optional():
@@ -582,7 +580,7 @@ def test_an_onion_store_that_never_answers_times_out():
         assert time.monotonic() - started < 2
 
 
-def test_the_limiter_fallback_warns_once_a_minute(app, onion, caplog):
+def test_the_limiter_fallback_warns_once_a_minute(app, onion_pow_onion, caplog):
     """A store outage is several limiter calls per request: one fixed WARNING per 60 s per process, not one per call.
     The clock is injected; nothing sleeps."""
     now = [1000.0]
@@ -605,7 +603,7 @@ def test_the_limiter_fallback_warns_once_a_minute(app, onion, caplog):
     assert all(r.onion_safe for r in warnings())
 
 
-def test_an_onion_ai_detection_tally_expires_within_a_day_and_a_clearnet_one_is_as_it_was(app, onion, main_redis,
+def test_an_onion_ai_detection_tally_expires_within_a_day_and_a_clearnet_one_is_as_it_was(app, onion_pow_onion, main_redis,
                                                                                         onion_redis):
     key = 'ai_detection:user:5'
     now = 1_800_000_000.0

@@ -5,23 +5,23 @@ from app import db
 from app.discovery import SYNC_ACCEPTED, SYNC_NONE, SYNC_PENDING, SYNC_REJECTED, admin_views, SYNC_FAILED
 from app.models import DiscoverySync, utcnow
 from app.utils import get_setting, set_setting
-from tests.discovery_fixtures import admin, fresh_cache  # noqa: F401
+from tests.discovery_fixtures import fresh_cache
 from tests.factories import make_community, make_instance
 
 pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 PAGE = '/admin/federation/discovery'
 
 
-def test_the_form_shows_the_defaults(admin):
-    client, _ = admin
+def test_the_form_shows_the_defaults(discovery_admin):
+    client, _ = discovery_admin
     html = client.get(PAGE).get_data(as_text=True)
     assert 'name="sync_per_host"' in html and 'value="0"' in html
     assert 'name="sync_external_search"' in html
     assert 'preload_count' not in html and 'preload_subscribe' not in html
 
 
-def test_saving_stores_the_settings(admin):
-    client, token = admin
+def test_saving_stores_the_settings(discovery_admin):
+    client, token = discovery_admin
     response = client.post(PAGE, data={'csrf_token': token, 'sync_per_host': '5', 'sync_platforms': ['castopod'],
                                        'sync_people_per_host': '0', 'sync_save': 'Save'})
     assert response.status_code == 302
@@ -31,15 +31,15 @@ def test_saving_stores_the_settings(admin):
 
 
 @pytest.mark.parametrize('value', ['-1', '51', 'many'])
-def test_an_out_of_range_count_is_refused_and_nothing_stored(admin, value):
-    client, token = admin
+def test_an_out_of_range_count_is_refused_and_nothing_stored(discovery_admin, value):
+    client, token = discovery_admin
     response = client.post(PAGE, data={'csrf_token': token, 'sync_per_host': value, 'sync_save': 'Save'})
     assert response.status_code == 200
     assert get_setting('discovery_sync_per_host') is None
 
 
-def test_sync_now_queues_the_reconcile(admin, monkeypatch, app):
-    client, token = admin
+def test_sync_now_queues_the_reconcile(discovery_admin, monkeypatch, app):
+    client, token = discovery_admin
     queued = []
     monkeypatch.setattr(app, 'debug', False)
     monkeypatch.setattr(admin_views.reconcile_sync_task, 'delay', lambda: queued.append(True))
@@ -49,8 +49,8 @@ def test_sync_now_queues_the_reconcile(admin, monkeypatch, app):
     assert response.status_code == 302 and queued == [True]
 
 
-def test_sync_now_in_debug_runs_inline(admin, monkeypatch, app):
-    client, token = admin
+def test_sync_now_in_debug_runs_inline(discovery_admin, monkeypatch, app):
+    client, token = discovery_admin
     ran = []
     monkeypatch.setattr(app, 'debug', True)
     monkeypatch.setattr(admin_views, 'reconcile_sync_task', lambda: ran.append(True))
@@ -60,16 +60,16 @@ def test_sync_now_in_debug_runs_inline(admin, monkeypatch, app):
     assert ran == [True]
 
 
-def test_sync_now_without_csrf_is_refused(admin, monkeypatch):
-    client, _ = admin
+def test_sync_now_without_csrf_is_refused(discovery_admin, monkeypatch):
+    client, _ = discovery_admin
     queued = []
     monkeypatch.setattr(admin_views.reconcile_sync_task, 'delay', lambda: queued.append(True))
     client.post(PAGE, data={'sync_now': 'Sync now'})
     assert queued == []
 
 
-def test_the_status_table_lists_each_synced_community(admin):
-    client, _ = admin
+def test_the_status_table_lists_each_synced_community(discovery_admin):
+    client, _ = discovery_admin
     instance = make_instance('tube.example', software='peertube')
     community = make_community('zqchan', host='tube.example')
     community.instance_id = instance.id
@@ -82,8 +82,8 @@ def test_the_status_table_lists_each_synced_community(admin):
     assert 'tube.example' in html and 'Following' in html and 'outbox unreadable' in html
 
 
-def test_an_empty_status_table_says_so(admin):
-    client, _ = admin
+def test_an_empty_status_table_says_so(discovery_admin):
+    client, _ = discovery_admin
     assert 'Nothing is synced yet.' in client.get(PAGE).get_data(as_text=True)
 
 
@@ -92,8 +92,8 @@ STATE_LABELS = {SYNC_NONE: 'Not followed yet', SYNC_PENDING: 'Waiting for an ans
 
 
 @pytest.mark.parametrize('state', STATE_LABELS)
-def test_each_follow_state_reads_as_its_label_not_its_raw_value(admin, state):
-    client, _ = admin
+def test_each_follow_state_reads_as_its_label_not_its_raw_value(discovery_admin, state):
+    client, _ = discovery_admin
     community = make_community('statechan', host='tube.example')
     db.session.add(DiscoverySync(community_id=community.id, follow_target='https://tube.example/video-channels/s',
                                  follow_state=state))
@@ -105,8 +105,8 @@ def test_each_follow_state_reads_as_its_label_not_its_raw_value(admin, state):
     assert f'<td>{state}</td>' not in html
 
 
-def test_the_community_title_links_to_its_page(admin):
-    client, _ = admin
+def test_the_community_title_links_to_its_page(discovery_admin):
+    client, _ = discovery_admin
     community = make_community('linkchan', host='tube.example')
     community.ap_id = 'linkchan@tube.example'
     db.session.add(DiscoverySync(community_id=community.id, follow_target='https://tube.example/video-channels/l'))

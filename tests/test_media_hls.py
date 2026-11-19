@@ -24,15 +24,14 @@ from tests import test_media_probe as probe_tests
 from tests.test_media_probe import run, stored_post
 from tests.test_media_renditions import ready, render
 
-env, s3 = probe_tests.env, probe_tests.s3   # its fixtures: a private static tree, and a moto bucket
 
 FIX = probe_tests.FIX
 
 
 @pytest.fixture
-def hls_on(env):
+def hls_on(media_probe_env):
     set_setting(HLS_SETTING, True)
-    return env
+    return media_probe_env
 
 
 def packaged(post):
@@ -63,8 +62,8 @@ def test_the_names_are_beside_the_upload_and_derived_from_it():
     {'name': '480p', 'width': True, 'height': 1, 'bandwidth': 1, 'bytes': 1},
     {'name': '480p', 'width': 1, 'height': 1, 'bandwidth': 1},
 ], ids=['not-a-dict', 'unknown-name', 'zero', 'bool', 'missing-key'])
-def test_only_well_formed_variants_are_read(env, entry):
-    post = rendered(env)
+def test_only_well_formed_variants_are_read(media_probe_env, entry):
+    post = rendered(media_probe_env)
     good = {'name': '360p', 'width': 640, 'height': 360, 'bandwidth': 8, 'bytes': 1, 'extra': 'dropped'}
     with_media(post, hls=[entry, good, dict(good, bytes=2)])
     assert hls_of(post) == [{'name': '360p', 'width': 640, 'height': 360, 'bandwidth': 8, 'bytes': 2}]
@@ -74,10 +73,10 @@ def test_only_well_formed_variants_are_read(env, entry):
 
 # when
 
-def test_hls_is_off_by_default(env):
-    post = rendered(env)
+def test_hls_is_off_by_default(media_probe_env):
+    post = rendered(media_probe_env)
     assert not wants_hls(post)
-    assert 'make_hls' not in [key for key, _ in env.tasks]
+    assert 'make_hls' not in [key for key, _ in media_probe_env.tasks]
 
 
 def test_with_hls_on_a_video_is_queued_once_its_renditions_are_recorded(hls_on):
@@ -239,21 +238,21 @@ def bucket_keys(s3):
     return {item['Key'] for item in s3.list_objects_v2(Bucket='pyfedi-test').get('Contents', [])}
 
 
-def test_with_s3_the_copies_go_into_the_bucket_beside_the_upload(hls_on, s3):
+def test_with_s3_the_copies_go_into_the_bucket_beside_the_upload(hls_on, media_probe_s3):
     post = rendered(hls_on)
     post = packaged(post)
     key = post.url.split('cdn.probeland.test/', 1)[1]
     prefix = hls_directory(key)
-    assert {name for name in bucket_keys(s3) if name.startswith(prefix)} == {
+    assert {name for name in bucket_keys(media_probe_s3) if name.startswith(prefix)} == {
         f'{prefix}/{name}' for name in ('master.m3u8', 'source.m3u8', 'source.mp4', '480p.m3u8', '480p.mp4',
                                         '360p.m3u8', '360p.mp4')}
-    assert s3.head_object(Bucket='pyfedi-test', Key=f'{prefix}/master.m3u8')['ContentType'] == \
+    assert media_probe_s3.head_object(Bucket='pyfedi-test', Key=f'{prefix}/master.m3u8')['ContentType'] == \
         'application/vnd.apple.mpegurl'
     assert not [name for name in os.listdir('app/static/tmp') if name.endswith('_hls')]
     assert [variant['name'] for variant in hls_of(post)] == ['source', '480p', '360p']
 
 
-def test_with_s3_a_failed_store_keeps_nothing(hls_on, s3, monkeypatch):
+def test_with_s3_a_failed_store_keeps_nothing(hls_on, media_probe_s3, monkeypatch):
     post = rendered(hls_on)
     calls = []
 
@@ -267,10 +266,10 @@ def test_with_s3_a_failed_store_keeps_nothing(hls_on, s3, monkeypatch):
     post = packaged(post)
     assert media_of(post)['hls'] == []
     key = post.url.split('cdn.probeland.test/', 1)[1]
-    assert not [name for name in bucket_keys(s3) if name.startswith(hls_directory(key))]
+    assert not [name for name in bucket_keys(media_probe_s3) if name.startswith(hls_directory(key))]
 
 
-def test_with_s3_a_post_gone_meanwhile_leaves_nothing_in_the_bucket(hls_on, s3, monkeypatch):
+def test_with_s3_a_post_gone_meanwhile_leaves_nothing_in_the_bucket(hls_on, media_probe_s3, monkeypatch):
     post = rendered(hls_on)
     key = post.url.split('cdn.probeland.test/', 1)[1]
     real = media_tasks._upload_hls
@@ -283,7 +282,7 @@ def test_with_s3_a_post_gone_meanwhile_leaves_nothing_in_the_bucket(hls_on, s3, 
         return made
     monkeypatch.setattr(media_tasks, '_upload_hls', gone)
     packaged(post)
-    assert not [name for name in bucket_keys(s3) if name.startswith(hls_directory(key))]
+    assert not [name for name in bucket_keys(media_probe_s3) if name.startswith(hls_directory(key))]
 
 
 # deleting
@@ -295,7 +294,7 @@ def test_a_deleted_post_takes_its_hls_copies(hls_on):
     assert not os.path.exists(hls_directory(source))
 
 
-def test_with_s3_a_deleted_post_takes_its_hls_copies_from_the_bucket(hls_on, s3):
+def test_with_s3_a_deleted_post_takes_its_hls_copies_from_the_bucket(hls_on, media_probe_s3):
     post = packaged(rendered(hls_on))
     key = post.url.split('cdn.probeland.test/', 1)[1]
     hls_on.app.debug, debug = True, hls_on.app.debug   # delete_from_s3 inline
@@ -303,7 +302,7 @@ def test_with_s3_a_deleted_post_takes_its_hls_copies_from_the_bucket(hls_on, s3)
         post.delete_dependencies()
     finally:
         hls_on.app.debug = debug
-    assert not [name for name in bucket_keys(s3) if name.startswith(hls_directory(key))]
+    assert not [name for name in bucket_keys(media_probe_s3) if name.startswith(hls_directory(key))]
 
 
 # PeerTube's API
@@ -345,11 +344,11 @@ def test_delete_all_removes_every_copy_and_its_record(hls_on):
     assert wants_hls(post)   # a backfill makes them again
 
 
-def test_delete_all_with_s3_empties_the_bucket_of_copies(hls_on, s3):
+def test_delete_all_with_s3_empties_the_bucket_of_copies(hls_on, media_probe_s3):
     post = packaged(rendered(hls_on))
     key = post.url.split('cdn.probeland.test/', 1)[1]
     delete_all_hls(False)
-    assert not [name for name in bucket_keys(s3) if name.startswith(hls_directory(key))]
+    assert not [name for name in bucket_keys(media_probe_s3) if name.startswith(hls_directory(key))]
 
 
 @pytest.mark.parametrize('job', [backfill_hls, delete_all_hls], ids=['backfill', 'delete'])
@@ -367,7 +366,7 @@ def test_a_failing_make_hls_rolls_back(hls_on, monkeypatch):
 
 # the edges
 
-def test_with_s3_a_store_failing_at_once_sends_nothing_back(hls_on, s3, monkeypatch):
+def test_with_s3_a_store_failing_at_once_sends_nothing_back(hls_on, media_probe_s3, monkeypatch):
     removed = []
     post = rendered(hls_on)
     monkeypatch.setattr(media_tasks, 'upload_file_to_s3', lambda *args: (_ for _ in ()).throw(OSError('down')))

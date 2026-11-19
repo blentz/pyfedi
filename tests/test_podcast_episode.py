@@ -13,7 +13,6 @@ from app.shared.media import with_media
 import app.shared.tasks.pages as pages
 from app.shared.tasks.pages import send_post
 from tests.peertube_video_fixtures import _remote
-from tests.podcast_fixtures import env, episode_post, sent  # noqa: F401
 
 
 def test_episode_attachment_is_an_audio_document(episode_post):
@@ -45,26 +44,26 @@ def test_fetch_carries_the_document(episode_post):
     assert post_to_page(episode_post)['attachment'] == [episode_attachment(episode_post)]
 
 
-def test_push_carries_the_same_document(episode_post, sent):
+def test_push_carries_the_same_document(episode_post, peertube_video_sent):
     send_post(episode_post.id, session=db.session)
-    lemmy = sent['https://lemmy.example/inbox'][0]   # the community's Announce of the author's Create(Page)
+    lemmy = peertube_video_sent['https://lemmy.example/inbox'][0]   # the community's Announce of the author's Create(Page)
     assert lemmy['object']['object']['attachment'] == [episode_attachment(episode_post)]
-    mastodon = sent['https://mastodon.example/inbox'][0]   # an Announce of the id: Mastodon fetches the Page
+    mastodon = peertube_video_sent['https://mastodon.example/inbox'][0]   # an Announce of the id: Mastodon fetches the Page
     assert mastodon['object'] == episode_post.ap_id
 
 
-def test_an_edit_carries_the_document(episode_post, sent):
+def test_an_edit_carries_the_document(episode_post, peertube_video_sent):
     send_post(episode_post.id, edit=True, session=db.session)
-    lemmy = sent['https://lemmy.example/inbox'][0]   # the community's Announce of the author's Update(Page)
+    lemmy = peertube_video_sent['https://lemmy.example/inbox'][0]   # the community's Announce of the author's Update(Page)
     assert lemmy['object']['type'] == 'Update'
     assert lemmy['object']['object']['attachment'] == [episode_attachment(episode_post)]
 
 
-def test_the_mentions_note_carries_the_document(episode_post, sent, monkeypatch):
+def test_the_mentions_note_carries_the_document(episode_post, peertube_video_sent, monkeypatch):
     _, mentioned = _remote('mention.example', 'piefed', 'men')
     monkeypatch.setattr(pages, 'mentioned_users', lambda post: [mentioned])
     send_post(episode_post.id, session=db.session)
-    note = sent['https://mention.example/inbox'][0]['object']
+    note = peertube_video_sent['https://mention.example/inbox'][0]['object']
     assert note['type'] == 'Note'
     assert note['attachment'] == [episode_attachment(episode_post)]
 
@@ -107,50 +106,50 @@ def _inbound(env, media_type, kind='Document', url=AUDIO_URL):
     return post
 
 
-def test_inbound_audio_document_is_marked_audio(env):
-    post = _inbound(env, 'audio/mpeg')
+def test_inbound_audio_document_is_marked_audio(podcast_env):
+    post = _inbound(podcast_env, 'audio/mpeg')
     assert post.url == AUDIO_URL
     assert post.type == POST_TYPE_LINK
     assert post.extensions['media_type'] == 'audio'
 
 
-def test_inbound_image_document_is_not_marked_audio(env):
-    post = _inbound(env, 'image/jpeg')
+def test_inbound_image_document_is_not_marked_audio(podcast_env):
+    post = _inbound(podcast_env, 'image/jpeg')
     assert (post.extensions or {}).get('media_type') != 'audio'
 
 
-def test_inbound_audio_attachment_is_marked_audio(env):
-    post = _inbound(env, 'audio/mpeg', kind='Audio', url=AUDIO_URL + '2')
+def test_inbound_audio_attachment_is_marked_audio(podcast_env):
+    post = _inbound(podcast_env, 'audio/mpeg', kind='Audio', url=AUDIO_URL + '2')
     assert post.url == AUDIO_URL + '2'
     assert post.extensions['media_type'] == 'audio'
 
 
-def test_inbound_audio_attachment_without_media_type_is_not_marked(env):
-    post = _inbound(env, None, kind='Audio', url=AUDIO_URL + '2')
+def test_inbound_audio_attachment_without_media_type_is_not_marked(podcast_env):
+    post = _inbound(podcast_env, None, kind='Audio', url=AUDIO_URL + '2')
     assert post.url == AUDIO_URL + '2'
     assert (post.extensions or {}).get('media_type') != 'audio'
 
 
 @pytest.mark.parametrize('kind', ['Document', 'Audio'])
-def test_an_inbound_edit_with_an_audio_attachment_marks_the_post_audio(env, kind):
-    post = _inbound(env, None, kind=kind)
+def test_an_inbound_edit_with_an_audio_attachment_marks_the_post_audio(podcast_env, kind):
+    post = _inbound(podcast_env, None, kind=kind)
     assert (post.extensions or {}).get('media_type') != 'audio'
 
     update_post_from_activity(post, {
         'id': f'{post.ap_id}/update', 'type': 'Update',
-        'object': {'id': post.ap_id, 'type': 'Page', 'name': 'Ep', 'attributedTo': env.author.ap_profile_id,
+        'object': {'id': post.ap_id, 'type': 'Page', 'name': 'Ep', 'attributedTo': podcast_env.author.ap_profile_id,
                    'attachment': [{'type': kind, 'mediaType': 'audio/mpeg', 'url': AUDIO_URL, 'name': 'Ep'}]}})
 
     assert post.extensions['media_type'] == 'audio'
 
 
 @pytest.mark.parametrize('kind', ['Document', 'Audio'])
-def test_an_inbound_edit_with_a_non_audio_attachment_does_not_mark_audio(env, kind):
-    post = _inbound(env, None, kind=kind)
+def test_an_inbound_edit_with_a_non_audio_attachment_does_not_mark_audio(podcast_env, kind):
+    post = _inbound(podcast_env, None, kind=kind)
 
     update_post_from_activity(post, {
         'id': f'{post.ap_id}/update', 'type': 'Update',
-        'object': {'id': post.ap_id, 'type': 'Page', 'name': 'Ep', 'attributedTo': env.author.ap_profile_id,
+        'object': {'id': post.ap_id, 'type': 'Page', 'name': 'Ep', 'attributedTo': podcast_env.author.ap_profile_id,
                    'attachment': [{'type': kind, 'mediaType': 'image/jpeg', 'url': AUDIO_URL, 'name': 'Ep'}]}})
 
     assert (post.extensions or {}).get('media_type') != 'audio'
@@ -171,12 +170,12 @@ def _edit_with(env, post, attachment):
     [{'type': 'Image', 'url': 'https://other.example/cover.jpg'}],
     {'type': 'Image', 'url': 'https://other.example/cover.jpg'}],
     ids=['link', 'image-document', 'document-no-mime', 'audio-not-audio', 'image', 'dict'])
-def test_an_edit_whose_attachment_is_no_longer_audio_clears_the_audio_marker(env, monkeypatch, attachment):
+def test_an_edit_whose_attachment_is_no_longer_audio_clears_the_audio_marker(podcast_env, monkeypatch, attachment):
     monkeypatch.setattr('app.activitypub.util.opengraph_parse', lambda url: None)   # no network
-    post = _inbound(env, 'audio/mpeg')
+    post = _inbound(podcast_env, 'audio/mpeg')
     assert post.extensions['media_type'] == 'audio'
 
-    _edit_with(env, post, attachment)
+    _edit_with(podcast_env, post, attachment)
 
     assert (post.extensions or {}).get('media_type') != 'audio'
 
@@ -186,10 +185,10 @@ def test_an_edit_whose_attachment_is_no_longer_audio_clears_the_audio_marker(env
     [{'type': 'Document', 'url': 'https://other.example/two.mp3'}],
     None,
 ], ids=['new-audio', 'mp3-no-mime', 'no-attachment'])
-def test_an_edit_that_is_still_audio_or_has_no_attachment_keeps_the_audio_marker(env, monkeypatch, attachment):
+def test_an_edit_that_is_still_audio_or_has_no_attachment_keeps_the_audio_marker(podcast_env, monkeypatch, attachment):
     monkeypatch.setattr('app.activitypub.util.opengraph_parse', lambda url: None)
-    post = _inbound(env, 'audio/mpeg')
+    post = _inbound(podcast_env, 'audio/mpeg')
 
-    _edit_with(env, post, attachment)
+    _edit_with(podcast_env, post, attachment)
 
     assert post.extensions['media_type'] == 'audio'

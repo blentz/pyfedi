@@ -10,7 +10,6 @@ from app.models import post_file
 from tests.factories import make_file, make_post_reply
 from tests import test_mastodon_statuses as status_tests
 
-world = status_tests.world   # the fixture
 _post = status_tests._post
 
 
@@ -26,37 +25,37 @@ def _picture(name):
     return picture
 
 
-def test_a_photo_is_a_photo(app, world):
-    entity = _extended(app, _post(world, type=POST_TYPE_IMAGE, image_id=_picture('one').id, reply_count=3))
+def test_a_photo_is_a_photo(app, mastodon_statuses_world):
+    entity = _extended(app, _post(mastodon_statuses_world, type=POST_TYPE_IMAGE, image_id=_picture('one').id, reply_count=3))
     assert (entity['pf_type'], entity['reply_count'], entity['liked_by'], entity['local']) == ('photo', 3, None, True)
 
 
-def test_a_gallery_is_an_album(app, world):
-    post = _post(world, type=POST_TYPE_GALLERY, gallery_count=2)
+def test_a_gallery_is_an_album(app, mastodon_statuses_world):
+    post = _post(mastodon_statuses_world, type=POST_TYPE_GALLERY, gallery_count=2)
     db.session.execute(post_file.insert(), [{'post_id': post.id, 'file_id': _picture('a').id, 'weight': 1},
                                             {'post_id': post.id, 'file_id': _picture('b').id, 'weight': 2}])
     db.session.commit()
     assert _extended(app, post)['pf_type'] == 'photo:album'
 
 
-def test_a_video_is_a_video(app, world, monkeypatch):
+def test_a_video_is_a_video(app, mastodon_statuses_world, monkeypatch):
     monkeypatch.setattr('app.mastodon.statuses._attachments',
                         lambda row: [{'type': 'video', 'url': 'https://x/v.mp4'}])
-    assert _extended(app, _post(world))['pf_type'] == 'video'
+    assert _extended(app, _post(mastodon_statuses_world))['pf_type'] == 'video'
 
 
-def test_text_and_comments_are_text(app, world):
-    post = _post(world)
+def test_text_and_comments_are_text(app, mastodon_statuses_world):
+    post = _post(mastodon_statuses_world)
     assert _extended(app, post)['pf_type'] == 'text'
-    assert _extended(app, make_post_reply(post, world['author']))['pf_type'] == 'text'
+    assert _extended(app, make_post_reply(post, mastodon_statuses_world['author']))['pf_type'] == 'text'
 
 
 @pytest.mark.parametrize('query', ['', '?_pe=0', '?limit=20'])
-def test_without_pe_a_status_is_mastodons(app, world, query):
-    entity = _extended(app, _post(world), query)
+def test_without_pe_a_status_is_mastodons(app, mastodon_statuses_world, query):
+    entity = _extended(app, _post(mastodon_statuses_world), query)
     assert not {'pf_type', 'liked_by', 'reply_count'} & set(entity)
 
 
-def test_outside_a_request_a_status_is_mastodons(world):
-    post = _post(world)
+def test_outside_a_request_a_status_is_mastodons(mastodon_statuses_world):
+    post = _post(mastodon_statuses_world)
     assert 'pf_type' not in status(post, Page(None, [post]))

@@ -14,13 +14,10 @@ from app.hidden_routes import hidden_notifications, unread_shown
 from app.models import FeedItem, FeedMember, Notification, NotificationSubscription, User, utcnow
 from app.storefront import domain_for_host
 from tests.factories import make_local_feed, make_post
-from tests.test_instance_visible_here import scene  # noqa: F401 -- a fixture
-from tests.test_local_only_actors_hidden import world  # noqa: F401 -- a fixture
-from tests.test_onion_hidden_api_ids import alpha, call  # noqa: F401 -- alpha is a fixture
-from tests.test_onion_hidden_on_clearnet import onion  # noqa: F401 -- a fixture
-from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
+from tests.test_onion_hidden_api_ids import call
+from tests.test_per_domain_ap_routes import onion_proxy
 from tests.test_per_domain_html_routes import Visitor
-from tests.two_domains import FIRST, ONION, request_on, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -28,10 +25,10 @@ TITLE = 'ONIONFEEDTITLE'
 
 
 @pytest.fixture(params=['onion', 'legacy'])
-def notified(request, app, alpha, two_domains):  # noqa: F811
+def notified(request, app, onion_hidden_api_ids_alpha, two_domains):
     """`first_bob` joined a feed holding the first domain's art, notifications on, and a first-domain post in art
     notified him. The feed is the onion's, or (ruling N-m8) filed under the first domain but owned by an onion account."""
-    w = alpha
+    w = onion_hidden_api_ids_alpha
     first, onion_domain = two_domains.domains
     domain = onion_domain if request.param == 'onion' else first
     feed = make_local_feed('onionfeed', public=True, domain=domain, user=w.onion_bob)
@@ -112,15 +109,15 @@ def test_the_unread_email_leaves_it_out_off_the_onion(app, notified):
     assert f'/notification/{visible.id}/goto' in listed and f'/notification/{notified.notification.id}/goto' not in listed
 
 
-def test_the_stamp_and_the_per_row_rule_agree_on_feed_targets(app, alpha, two_domains):  # noqa: F811
+def test_the_stamp_and_the_per_row_rule_agree_on_feed_targets(app, onion_hidden_api_ids_alpha, two_domains):
     """The stamp says a notification may name a local-only row; the per-row rule hides it here. A feed is named by
     `targets.feed_id`: stamped when the feed is local-only by its domain or its owner, and hidden off the onion."""
     first, onion_domain = two_domains.domains
-    feeds = [make_local_feed('onionfeed', True, onion_domain, alpha.onion_bob),
-             make_local_feed('legacyfeed', True, first, alpha.onion_bob),
-             make_local_feed('firstfeed', True, first, alpha.first_bob)]
-    rows = [Notification(user_id=alpha.first_bob.id, title='t', url=f'/post/{alpha.first_post.id}', notif_type=NOTIF_FEED,
-                         targets={'feed_id': feed.id, 'post_id': alpha.first_post.id}) for feed in feeds]
+    feeds = [make_local_feed('onionfeed', True, onion_domain, onion_hidden_api_ids_alpha.onion_bob),
+             make_local_feed('legacyfeed', True, first, onion_hidden_api_ids_alpha.onion_bob),
+             make_local_feed('firstfeed', True, first, onion_hidden_api_ids_alpha.first_bob)]
+    rows = [Notification(user_id=onion_hidden_api_ids_alpha.first_bob.id, title='t', url=f'/post/{onion_hidden_api_ids_alpha.first_post.id}', notif_type=NOTIF_FEED,
+                         targets={'feed_id': feed.id, 'post_id': onion_hidden_api_ids_alpha.first_post.id}) for feed in feeds]
     db.session.add_all(rows)
     db.session.commit()
     assert [row.local_only for row in rows] == [True, True, False]

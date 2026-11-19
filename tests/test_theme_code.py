@@ -13,7 +13,6 @@ from app.models import CustomTheme, CustomThemeTemplate, ModLog, Role, RolePermi
 from app.permissions import CATALOGUE, SCOPABLE_PERMISSIONS, STAFF_PERMISSIONS, user_access
 from tests.factories import grant_role, limit_role
 from tests.test_custom_themes import make_theme
-from tests.two_domains import two_domains  # noqa: F401  (a fixture)
 
 pytestmark = pytest.mark.usefixtures('site')
 CODE = 'manage theme code'

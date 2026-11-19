@@ -48,65 +48,6 @@ pytestmark = pytest.mark.usefixtures('site')
 HOST = 'test.piefed.local'
 
 
-@pytest.fixture
-def env(app, db_session):
-    """Five communities, one post in each, so every filter has something it must
-    include and something it must leave out.
-
-    * `local_open`    -- local, public, in All and Popular
-    * `local_private` -- local, PRIVATE; the reader is a member, the stranger is not
-    * `local_quiet`   -- local, public, `show_popular` off: in All, not in Popular
-    * `local_hidden`  -- local, public, `show_all` off: in Popular, not in All
-    * `remote_open`   -- a REMOTE community, which `local` must exclude
-    """
-    from types import SimpleNamespace
-    site = db.session.get(Site, 1)
-    site.private_instance = False
-    site.enable_nsfw = True
-    g.site = site
-    g.admin_ids = []
-    db.session.commit()
-
-    local_instance = make_instance_local()
-    author = make_user(local_instance, 'author', local=True)
-    reader = make_user(local_instance, 'reader', local=True)
-    stranger = make_user(local_instance, 'stranger', local=True)
-    db.session.commit()
-
-    communities = {}
-    for name in ('local_open', 'local_private', 'local_quiet', 'local_hidden'):
-        communities[name] = make_community(name)
-    remote = make_community('remote_open', host='peer.test')
-    remote.ap_id = 'remote_open@peer.test'
-    remote.instance_id = _peer_instance().id
-    communities['remote_open'] = remote
-
-    communities['local_private'].private = True
-    communities['local_private'].show_all = False
-    communities['local_private'].show_popular = False
-    communities['local_quiet'].show_popular = False
-    communities['local_hidden'].show_all = False
-    db.session.commit()
-
-    posts = {}
-    for name, community in communities.items():
-        post = make_post(community, author, f'https://{HOST}/c/{name}/p/1',
-                         title=f'post in {name}')
-        post.posted_at = utcnow()
-        posts[name] = post
-    db.session.commit()
-
-    # The reader belongs to the private community and to local_open; the stranger
-    # belongs to nothing, which is what makes `subscribed` discriminate.
-    make_community_member(reader, communities['local_private'])
-    make_community_member(reader, communities['local_open'])
-    db.session.commit()
-
-    return SimpleNamespace(app=app, client=app.test_client(), author=author,
-                           reader=reader, stranger=stranger,
-                           communities=communities, posts=posts)
-
-
 def make_instance_local():
     from tests.factories import make_instance
     existing = db.session.get(Instance_(), 1)
@@ -159,28 +100,28 @@ ALL_LOCAL = ['post in local_hidden', 'post in local_open', 'post in local_quiet'
 
 
 class TestTheLocalFilter:
-    def test_an_anonymous_reader_sees_local_public_communities(self, env):
+    def test_an_anonymous_reader_sees_local_public_communities(self, front_page_view_filters_env):
         """`c.private is false and c.instance_id = 1`. The remote community's post
         is what proves the instance_id half, and the private one the other."""
-        titles = _titles(env, 'local')
+        titles = _titles(front_page_view_filters_env, 'local')
 
         assert titles == ALL_LOCAL
 
-    def test_a_remote_communitys_post_is_absent(self, env):
-        titles = _titles(env, 'local')
+    def test_a_remote_communitys_post_is_absent(self, front_page_view_filters_env):
+        titles = _titles(front_page_view_filters_env, 'local')
 
         assert 'post in remote_open' not in titles
 
-    def test_a_private_community_is_absent_for_a_stranger(self, env):
-        titles = _titles(env, 'local', user=env.stranger)
+    def test_a_private_community_is_absent_for_a_stranger(self, front_page_view_filters_env):
+        titles = _titles(front_page_view_filters_env, 'local', user=front_page_view_filters_env.stranger)
 
         assert 'post in local_private' not in titles
 
-    def test_a_private_community_is_present_for_its_member(self, env):
+    def test_a_private_community_is_present_for_its_member(self, front_page_view_filters_env):
         """The authenticated arm's whole difference:
         `(c.private is false OR c.id IN <their private>)`. Without the OR the member
         sees the same list as the stranger."""
-        titles = _titles(env, 'local', user=env.reader)
+        titles = _titles(front_page_view_filters_env, 'local', user=front_page_view_filters_env.reader)
 
         assert 'post in local_private' in titles
         assert titles == sorted(ALL_LOCAL + ['post in local_private'])
@@ -199,78 +140,78 @@ class TestTheLocalFilter:
 
 
 class TestThePopularFilter:
-    def test_a_community_with_show_popular_off_is_absent(self, env):
+    def test_a_community_with_show_popular_off_is_absent(self, front_page_view_filters_env):
         """`c.show_popular is true`. `make_community` leaves the column at its
         default of True, so `local_quiet` sets it False itself -- a row asserting
         absence against a default would pass for the wrong reason."""
-        titles = _titles(env, 'popular')
+        titles = _titles(front_page_view_filters_env, 'popular')
 
         assert 'post in local_quiet' not in titles
         assert 'post in local_open' in titles
 
-    def test_an_anonymous_reader_gets_no_private_community(self, env):
-        titles = _titles(env, 'popular')
+    def test_an_anonymous_reader_gets_no_private_community(self, front_page_view_filters_env):
+        titles = _titles(front_page_view_filters_env, 'popular')
 
         assert 'post in local_private' not in titles
 
-    def test_a_member_gets_their_private_community_when_it_is_popular(self, env):
+    def test_a_member_gets_their_private_community_when_it_is_popular(self, front_page_view_filters_env):
         """The authenticated arm. `local_private` has `show_popular` False in the
         fixture, so it is turned on here -- otherwise this row could not tell the
         `private` OR from the `show_popular` filter."""
-        env.communities['local_private'].show_popular = True
+        front_page_view_filters_env.communities['local_private'].show_popular = True
         db.session.commit()
 
-        titles = _titles(env, 'popular', user=env.reader)
+        titles = _titles(front_page_view_filters_env, 'popular', user=front_page_view_filters_env.reader)
 
         assert 'post in local_private' in titles
 
-    def test_a_member_still_does_not_get_a_community_that_is_not_popular(self, env):
+    def test_a_member_still_does_not_get_a_community_that_is_not_popular(self, front_page_view_filters_env):
         """`AND c.show_popular is true` on the AUTHENTICATED arm, which the
         anonymous row above cannot reach. Without this, dropping that clause for
         signed-in readers only was invisible."""
-        titles = _titles(env, 'popular', user=env.reader)
+        titles = _titles(front_page_view_filters_env, 'popular', user=front_page_view_filters_env.reader)
 
         assert 'post in local_quiet' not in titles
         assert 'post in local_open' in titles
 
-    def test_a_stranger_does_not_get_it_even_when_it_is_popular(self, env):
+    def test_a_stranger_does_not_get_it_even_when_it_is_popular(self, front_page_view_filters_env):
         """The control for the row above: `show_popular` alone must not open a
         private community to a non-member."""
-        env.communities['local_private'].show_popular = True
+        front_page_view_filters_env.communities['local_private'].show_popular = True
         db.session.commit()
 
-        titles = _titles(env, 'popular', user=env.stranger)
+        titles = _titles(front_page_view_filters_env, 'popular', user=front_page_view_filters_env.stranger)
 
         assert 'post in local_private' not in titles
 
-    def test_the_anonymous_arm_hides_low_quality_communities_outright(self, env):
+    def test_the_anonymous_arm_hides_low_quality_communities_outright(self, front_page_view_filters_env):
         """`AND c.low_quality is false` is written into the anonymous fragment and is
         conditional in the authenticated one -- an anonymous reader has no
         preference to consult, so the safe answer is hard-coded."""
-        env.communities['local_open'].low_quality = True
+        front_page_view_filters_env.communities['local_open'].low_quality = True
         db.session.commit()
 
-        titles = _titles(env, 'popular')
+        titles = _titles(front_page_view_filters_env, 'popular')
 
         assert 'post in local_open' not in titles
 
-    def test_an_authenticated_reader_who_wants_them_sees_them(self, env):
+    def test_an_authenticated_reader_who_wants_them_sees_them(self, front_page_view_filters_env):
         """`low_quality_filter` is empty unless `hide_low_quality` is set, so the
         same community that the anonymous arm hides is visible here."""
-        env.communities['local_open'].low_quality = True
-        env.reader.hide_low_quality = False
+        front_page_view_filters_env.communities['local_open'].low_quality = True
+        front_page_view_filters_env.reader.hide_low_quality = False
         db.session.commit()
 
-        titles = _titles(env, 'popular', user=env.reader)
+        titles = _titles(front_page_view_filters_env, 'popular', user=front_page_view_filters_env.reader)
 
         assert 'post in local_open' in titles
 
-    def test_an_authenticated_reader_who_hides_them_does_not(self, env):
-        env.communities['local_open'].low_quality = True
-        env.reader.hide_low_quality = True
+    def test_an_authenticated_reader_who_hides_them_does_not(self, front_page_view_filters_env):
+        front_page_view_filters_env.communities['local_open'].low_quality = True
+        front_page_view_filters_env.reader.hide_low_quality = True
         db.session.commit()
 
-        titles = _titles(env, 'popular', user=env.reader)
+        titles = _titles(front_page_view_filters_env, 'popular', user=front_page_view_filters_env.reader)
 
         assert 'post in local_open' not in titles
 
@@ -281,49 +222,49 @@ class TestThePopularFilter:
 
 
 class TestTheAllFilter:
-    def test_a_community_with_show_all_off_is_absent(self, env):
+    def test_a_community_with_show_all_off_is_absent(self, front_page_view_filters_env):
         """`community_ids = [-1]` becomes `c.show_all is true` in
         `get_deduped_post_ids`, which is the only thing that filter applies of its
         own -- so `show_all` is what decides this list."""
-        titles = _titles(env, 'all')
+        titles = _titles(front_page_view_filters_env, 'all')
 
         assert 'post in local_hidden' not in titles
         assert 'post in local_open' in titles
 
-    def test_a_remote_communitys_post_is_present(self, env):
+    def test_a_remote_communitys_post_is_present(self, front_page_view_filters_env):
         """The difference from `local`, and the reason both exist."""
-        titles = _titles(env, 'all')
+        titles = _titles(front_page_view_filters_env, 'all')
 
         assert 'post in remote_open' in titles
 
-    def test_a_private_community_is_absent_for_a_stranger(self, env):
+    def test_a_private_community_is_absent_for_a_stranger(self, front_page_view_filters_env):
         """THE SECOND MECHANISM. The `all` fragment carries no `c.private is false`
         of its own -- `get_deduped_post_ids` appends the restriction for every
         viewer, anonymous included (app/utils.py:4405-4416). `show_all` is turned on
         here so that only the private gate can be what excludes it.
         """
-        env.communities['local_private'].show_all = True
+        front_page_view_filters_env.communities['local_private'].show_all = True
         db.session.commit()
 
-        titles = _titles(env, 'all', user=env.stranger)
+        titles = _titles(front_page_view_filters_env, 'all', user=front_page_view_filters_env.stranger)
 
         assert 'post in local_private' not in titles
 
-    def test_a_private_community_is_absent_for_an_anonymous_reader_too(self, env):
-        env.communities['local_private'].show_all = True
+    def test_a_private_community_is_absent_for_an_anonymous_reader_too(self, front_page_view_filters_env):
+        front_page_view_filters_env.communities['local_private'].show_all = True
         db.session.commit()
 
-        titles = _titles(env, 'all')
+        titles = _titles(front_page_view_filters_env, 'all')
 
         assert 'post in local_private' not in titles
 
-    def test_a_member_gets_their_private_community(self, env):
+    def test_a_member_gets_their_private_community(self, front_page_view_filters_env):
         """And the widening half of that same unconditional block:
         `c.private is false OR c.id IN :private_community_ids`."""
-        env.communities['local_private'].show_all = True
+        front_page_view_filters_env.communities['local_private'].show_all = True
         db.session.commit()
 
-        titles = _titles(env, 'all', user=env.reader)
+        titles = _titles(front_page_view_filters_env, 'all', user=front_page_view_filters_env.reader)
 
         assert 'post in local_private' in titles
 
@@ -334,32 +275,32 @@ class TestTheAllFilter:
 
 
 class TestTheSubscribedFilter:
-    def test_it_holds_only_the_communities_they_joined(self, env):
-        titles = _titles(env, 'subscribed', user=env.reader)
+    def test_it_holds_only_the_communities_they_joined(self, front_page_view_filters_env):
+        titles = _titles(front_page_view_filters_env, 'subscribed', user=front_page_view_filters_env.reader)
 
         assert titles == ['post in local_open', 'post in local_private']
 
-    def test_a_reader_who_joined_nothing_gets_nothing(self, env):
+    def test_a_reader_who_joined_nothing_gets_nothing(self, front_page_view_filters_env):
         """`community_ids` is the empty list, and `get_deduped_post_ids` answers []
         for it rather than falling through to every community."""
-        titles = _titles(env, 'subscribed', user=env.stranger)
+        titles = _titles(front_page_view_filters_env, 'subscribed', user=front_page_view_filters_env.stranger)
 
         assert titles == []
 
-    def test_a_banned_membership_does_not_count(self, env):
+    def test_a_banned_membership_does_not_count(self, front_page_view_filters_env):
         """`WHERE cm.is_banned is false`. A reader banned from a community they
         joined loses it from their own feed."""
         membership = CommunityMember.query.filter_by(
-            user_id=env.reader.id,
-            community_id=env.communities['local_open'].id).one()
+            user_id=front_page_view_filters_env.reader.id,
+            community_id=front_page_view_filters_env.communities['local_open'].id).one()
         membership.is_banned = True
         db.session.commit()
 
-        titles = _titles(env, 'subscribed', user=env.reader)
+        titles = _titles(front_page_view_filters_env, 'subscribed', user=front_page_view_filters_env.reader)
 
         assert 'post in local_open' not in titles
 
-    def test_an_anonymous_reader_asking_for_it_is_given_all(self, env):
+    def test_an_anonymous_reader_asking_for_it_is_given_all(self, front_page_view_filters_env):
         """Written expecting `popular` and corrected by the answer: it is `all`.
 
         `index` does downgrade -- `if current_user.is_anonymous and view_filter ==
@@ -376,7 +317,7 @@ class TestTheSubscribedFilter:
         `local_quiet` is what tells the two apart -- `show_popular` off, `show_all`
         on, so it appears in All and not in Popular.
         """
-        titles = _titles(env, 'subscribed')
+        titles = _titles(front_page_view_filters_env, 'subscribed')
 
         assert 'post in local_quiet' in titles
         assert 'post in remote_open' in titles
@@ -389,30 +330,30 @@ class TestTheSubscribedFilter:
 
 
 class TestTheModeratingFilter:
-    def test_it_holds_the_communities_they_moderate(self, env):
+    def test_it_holds_the_communities_they_moderate(self, front_page_view_filters_env):
         membership = CommunityMember.query.filter_by(
-            user_id=env.reader.id,
-            community_id=env.communities['local_open'].id).one()
+            user_id=front_page_view_filters_env.reader.id,
+            community_id=front_page_view_filters_env.communities['local_open'].id).one()
         membership.is_moderator = True
         db.session.commit()
 
-        titles = _titles(env, 'moderating', user=env.reader)
+        titles = _titles(front_page_view_filters_env, 'moderating', user=front_page_view_filters_env.reader)
 
         assert titles == ['post in local_open']
 
-    def test_a_reader_who_moderates_nothing_gets_nothing(self, env):
-        titles = _titles(env, 'moderating', user=env.reader)
+    def test_a_reader_who_moderates_nothing_gets_nothing(self, front_page_view_filters_env):
+        titles = _titles(front_page_view_filters_env, 'moderating', user=front_page_view_filters_env.reader)
 
         assert titles == []
 
-    def test_an_anonymous_reader_is_given_all_instead(self, env):
+    def test_an_anonymous_reader_is_given_all_instead(self, front_page_view_filters_env):
         """The arm order is behaviour: `elif view_filter == 'all' or
         current_user.is_anonymous:` comes BEFORE the `moderating` arm, so an
         anonymous reader asking to moderate gets All, not an empty page.
 
         Asserted by the remote community's post, which only All includes.
         """
-        titles = _titles(env, 'moderating')
+        titles = _titles(front_page_view_filters_env, 'moderating')
 
         assert 'post in remote_open' in titles
 
@@ -422,7 +363,7 @@ class TestTheModeratingFilter:
 # --------------------------------------------------------------------------
 
 
-def test_the_private_gate_in_each_fragment_is_belt_and_braces(app, env):
+def test_the_private_gate_in_each_fragment_is_belt_and_braces(app, front_page_view_filters_env):
     """FOUR EQUIVALENT MUTANTS, proved rather than left as survivors.
 
     The `local` and `popular` fragments each carry their own private restriction --
@@ -454,21 +395,21 @@ def test_the_private_gate_in_each_fragment_is_belt_and_braces(app, env):
     community and the SAME reader, the `all` filter -- which has no fragment gate at
     all -- reaches exactly the same answer as `local`, which has one.
     """
-    env.communities['local_private'].show_all = True
+    front_page_view_filters_env.communities['local_private'].show_all = True
     db.session.commit()
 
-    through_the_unconditional_gate_only = _titles(env, 'all', user=env.stranger)
+    through_the_unconditional_gate_only = _titles(front_page_view_filters_env, 'all', user=front_page_view_filters_env.stranger)
 
     assert 'post in local_private' not in through_the_unconditional_gate_only
 
 
-def test_the_all_filter_widens_for_a_member_with_no_fragment_gate_at_all(app, env):
+def test_the_all_filter_widens_for_a_member_with_no_fragment_gate_at_all(app, front_page_view_filters_env):
     """The other half of the same invariant, and the one that proves the
     unconditional block WIDENS as well as restricts: `all` builds no `community_sql`,
     so a member seeing their private community here can only be that block."""
-    env.communities['local_private'].show_all = True
+    front_page_view_filters_env.communities['local_private'].show_all = True
     db.session.commit()
 
-    titles = _titles(env, 'all', user=env.reader)
+    titles = _titles(front_page_view_filters_env, 'all', user=front_page_view_filters_env.reader)
 
     assert 'post in local_private' in titles

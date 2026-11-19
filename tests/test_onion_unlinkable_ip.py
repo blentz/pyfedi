@@ -32,7 +32,7 @@ from tests.factories import bearer, make_post as make_post_row, make_site, make_
 from tests.test_onion_marker import REGISTRATION, ONION, PROXY, onion_context, proxy_ip, registration_env
 from tests.test_shared_post_edit import _api_input
 from tests.test_shared_tasks_users import _lowest_randint, _no_sleep, _recording_client, _seed
-from tests.two_domains import default_request, two_domains  # noqa: F401
+from tests.two_domains import default_request
 
 CLEARNET_IP = '203.0.113.7'
 PASSWORD = 'correct horse battery'
@@ -77,29 +77,14 @@ ACTIONS = [web_login, oauth_login, api_login, a_post, a_reply]
 WORLD = {}
 
 
-@pytest.fixture
-def world(two_domains):
-    """A community and a post on the first domain, a site row, and `g.site`."""
-    first, onion = two_domains.domains
-    WORLD['community'] = two_domains.local_community('talk', first)
-    quiet = two_domains.local_community('quiet', first)
-    quiet.private = True   # stops a reply's federation tasks at their first guard
-    g.site = make_site()
-    author = two_domains.local_user('author', first)
-    WORLD['post'] = make_post_row(quiet, author, 'https://elsewhere.example/p/1')
-    db.session.add(Language(code='en', name='English'))
-    db.session.commit()
-    return two_domains
-
-
 def refreshed(user):
     db.session.expire_all()
     return db.session.get(User, user.id)
 
 
 @pytest.mark.parametrize('action', ACTIONS, ids=lambda action: action.__name__)
-def test_onion_login_keeps_a_clearnet_accounts_ip_and_country(app, world, action):
-    user = account(world, world.domains[0], 'clearuser')
+def test_onion_login_keeps_a_clearnet_accounts_ip_and_country(app, onion_unlinkable_ip_world, action):
+    user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[0], 'clearuser')
     with proxy_ip(app), onion_context(app):
         action(user)
     user = refreshed(user)
@@ -107,23 +92,23 @@ def test_onion_login_keeps_a_clearnet_accounts_ip_and_country(app, world, action
 
 
 @pytest.mark.parametrize('action', [web_login, oauth_login])
-def test_clearnet_login_still_updates_the_ip(app, world, action):
-    user = account(world, world.domains[0], 'clearuser')
+def test_clearnet_login_still_updates_the_ip(app, onion_unlinkable_ip_world, action):
+    user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[0], 'clearuser')
     with default_request(app):
         action(user)
     user = refreshed(user)
     assert (user.ip_address, user.ip_address_country) == ('198.51.100.4', 'FR')
 
 
-def test_a_clearnet_account_keeps_its_country_when_login_finds_none(app, world):
-    user = account(world, world.domains[0], 'clearuser')
+def test_a_clearnet_account_keeps_its_country_when_login_finds_none(app, onion_unlinkable_ip_world):
+    user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[0], 'clearuser')
     with default_request(app):
         update_user_session(user, FORM, '198.51.100.4', '')
     assert refreshed(user).ip_address_country == 'NZ'
 
 
-def test_clearnet_api_post_and_reply_still_update_the_ip(app, world):
-    user = account(world, world.domains[0], 'clearuser')
+def test_clearnet_api_post_and_reply_still_update_the_ip(app, onion_unlinkable_ip_world):
+    user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[0], 'clearuser')
     with default_request(app), patch('app.shared.post.ip_address', return_value='198.51.100.4'), \
             patch('app.shared.reply.ip_address', return_value='198.51.100.5'):
         a_post(user)
@@ -132,7 +117,7 @@ def test_clearnet_api_post_and_reply_still_update_the_ip(app, world):
     assert refreshed(user).ip_address == '198.51.100.5'
 
 
-def test_onion_registered_account_always_has_the_sentinel(app, world):
+def test_onion_registered_account_always_has_the_sentinel(app, onion_unlinkable_ip_world):
     registration_env()
     with proxy_ip(app), patch('app.auth.forms.captcha_enabled', return_value=False), \
             patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'), \
@@ -164,8 +149,8 @@ def test_onion_registered_account_always_has_the_sentinel(app, world):
             assert (user.ip_address, user.ip_address_country) == (ONION_ACCOUNT_IP, None), action.__name__
 
 
-def test_a_legacy_onion_account_is_overwritten_by_every_writer(app, world):
-    user = account(world, world.domains[1], 'legacy')
+def test_a_legacy_onion_account_is_overwritten_by_every_writer(app, onion_unlinkable_ip_world):
+    user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[1], 'legacy')
     for action in ACTIONS:
         user.ip_address, user.ip_address_country = CLEARNET_IP, 'NZ'
         db.session.commit()
@@ -177,21 +162,21 @@ def test_a_legacy_onion_account_is_overwritten_by_every_writer(app, world):
             assert user.ip_address_country is None, action.__name__
 
 
-def test_no_ipinfo_lookup_for_an_onion_account(app, world):
-    user = account(world, world.domains[1], 'onionuser')
+def test_no_ipinfo_lookup_for_an_onion_account(app, onion_unlinkable_ip_world):
+    user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[1], 'onionuser')
     with default_request(app), patch('app.auth.util.get_request') as fetched, \
             patch.dict(app.config, {'IPINFO_TOKEN': 'token', 'COUNTRY_SOURCE_HEADER': ''}):
         assert get_country(CLEARNET_IP, 'unknown', user=user) == 'unknown'
         fetched.assert_not_called()
-        clearnet = account(world, world.domains[0], 'clearuser')
+        clearnet = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[0], 'clearuser')
         fetched.return_value = SimpleNamespace(status_code=200, json=lambda: {'country': 'NZ'})
         assert get_country('198.51.100.40', user=clearnet) == 'NZ'
         fetched.assert_called_once()
 
 
-def test_ban_check_sends_no_ip_for_an_onion_account(app, world, monkeypatch):
+def test_ban_check_sends_no_ip_for_an_onion_account(app, onion_unlinkable_ip_world, monkeypatch):
     s = _seed(ip=ONION_ACCOUNT_IP)
-    s.user.site_domain_id = world.domains[1].id
+    s.user.site_domain_id = onion_unlinkable_ip_world.domains[1].id
     db.session.commit()
     set_setting('ban_check_servers', 'one.example')
     _no_sleep(monkeypatch)
@@ -201,9 +186,9 @@ def test_ban_check_sends_no_ip_for_an_onion_account(app, world, monkeypatch):
     assert [url for url, _ in client.posts] == ['https://one.example/api/is_email_banned']
 
 
-def test_ban_check_still_sends_a_clearnet_accounts_ip(app, world, monkeypatch):
+def test_ban_check_still_sends_a_clearnet_accounts_ip(app, onion_unlinkable_ip_world, monkeypatch):
     s = _seed()
-    s.user.site_domain_id = world.domains[0].id
+    s.user.site_domain_id = onion_unlinkable_ip_world.domains[0].id
     db.session.commit()
     set_setting('ban_check_servers', 'one.example')
     _no_sleep(monkeypatch)
@@ -230,17 +215,17 @@ def banned_login_over_the_clearnet(app, user, how):
 
 
 @pytest.mark.parametrize('how', ['web', 'api'])
-def test_banned_onion_account_clearnet_login_writes_no_ipban(app, world, how):
-    user = account(world, world.domains[1], 'onionuser', ip=ONION_ACCOUNT_IP, country=None)
+def test_banned_onion_account_clearnet_login_writes_no_ipban(app, onion_unlinkable_ip_world, how):
+    user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[1], 'onionuser', ip=ONION_ACCOUNT_IP, country=None)
     ban(user)
     banned_login_over_the_clearnet(app, user, how)
     assert IpBan.query.count() == 0
 
 
 @pytest.mark.parametrize('how', ['web', 'api'])
-def test_banned_clearnet_account_still_gets_ipban(app, world, how):
+def test_banned_clearnet_account_still_gets_ipban(app, onion_unlinkable_ip_world, how):
     make_user(None, 'burn-the-id-1-seat', local=True)
-    user = account(world, world.domains[0], 'clearuser')
+    user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[0], 'clearuser')
     ban(user)
     banned_login_over_the_clearnet(app, user, how)
     assert [(b.ip_address, b.notes) for b in IpBan.query.all()] == [(CLEARNET_IP, 'clearuser used new IP address')]
@@ -258,9 +243,9 @@ def test_instance_ip_unchanged_by_an_onion_request(app, db_session):
     assert instance.ip_address == '192.0.2.1'
 
 
-def test_the_audit_helpers_by_account_and_request(app, world):
-    onion_user = account(world, world.domains[1], 'onionuser')
-    clear_user = account(world, world.domains[0], 'clearuser')
+def test_the_audit_helpers_by_account_and_request(app, onion_unlinkable_ip_world):
+    onion_user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[1], 'onionuser')
+    clear_user = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[0], 'clearuser')
     with proxy_ip(app), onion_context(app):
         assert audit_ip(onion_user, '1.2.3.4') == ONION_ACCOUNT_IP
         assert audit_country(onion_user, 'NZ') is None
@@ -283,9 +268,9 @@ def test_the_migration_revision_chain():
     assert (migration.revision, migration.down_revision) == ('e7b3d9a4c2f8', 'c4e8a2f6d1b9')
 
 
-def test_migration_sets_existing_onion_accounts_to_the_sentinel(app, world):
-    onion = account(world, world.domains[1], 'onionuser')
-    clear = account(world, world.domains[0], 'clearuser')
+def test_migration_sets_existing_onion_accounts_to_the_sentinel(app, onion_unlinkable_ip_world):
+    onion = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[1], 'onionuser')
+    clear = account(onion_unlinkable_ip_world, onion_unlinkable_ip_world.domains[0], 'clearuser')
     remote = Instance.query.filter_by(domain='test.piefed.local').one()
     unhomed = User(user_name='unhomed', email='u@example.com', instance_id=remote.id, ip_address=CLEARNET_IP,
                    ip_address_country='NZ')

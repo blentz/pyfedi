@@ -20,7 +20,7 @@ from app.storefront import clear_domain_cache
 from app.utils import set_setting
 from tests.conftest import forget_login
 from tests.factories import make_instance, make_post, make_user
-from tests.two_domains import FIRST, ONION, default_request, onion_request, two_domains  # noqa: F401  (a fixture)
+from tests.two_domains import FIRST, ONION, default_request, onion_request
 
 pytestmark = pytest.mark.usefixtures('site')
 

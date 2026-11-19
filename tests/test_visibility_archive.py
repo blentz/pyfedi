@@ -11,16 +11,16 @@ from app.post.util import convert_archived_replies_to_tree, post_replies
 from app.utils import archive_post
 from app.visibility import RestrictedReply
 from tests.factories import bearer, make_post_reply
-from tests.test_visibility_single_object import client_as, world  # noqa: F401  (world is a fixture)
-from tests.test_visibility_reply_tree import _find, csrf_on  # noqa: F401  (csrf_on is a fixture)
+from tests.test_visibility_single_object import client_as
+from tests.test_visibility_reply_tree import _find
 
 ARCHIVED_DIR = 'app/static/media/archived'
 SECRET = 'secret reply'
 
 
 @pytest.fixture
-def archived(app, world):  # noqa: F811
-    w = world
+def archived(app, visibility_single_object_world):
+    w = visibility_single_object_world
     written = set(glob.glob(f'{ARCHIVED_DIR}/*'))
     w.reply_id, w.child_id = w.reply.id, w.public_child.id  # the rows are deleted by archiving
     # the factory leaves path empty; a real reply gets it from PostReply.new
@@ -90,7 +90,7 @@ def test_convert_returns_a_restricted_reply_for_the_stub(archived):
 
 
 @pytest.mark.parametrize('who', ['stranger', 'follower'])
-def test_archived_post_page_renders_the_placeholder(app, archived, csrf_on, who):  # noqa: F811
+def test_archived_post_page_renders_the_placeholder(app, archived, visibility_reply_tree_csrf_on, who):
     """Archives store no body, so even a follower gets the placeholder."""
     w = archived
     html = client_as(app, getattr(w, who)).get(f'/post/{w.public_post.id}').get_data(as_text=True)

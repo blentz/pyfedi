@@ -9,7 +9,7 @@ from app.constants import POST_STATUS_DRAFT, VISIBILITY_FOLLOWERS
 from app.post.util import NEEDS_LOGIN, deleted_post_state, post_refusal
 from app.utils import set_setting
 from tests.factories import make_user
-from tests.test_local_only_invisible import _post, world  # noqa: F401
+from tests.test_local_only_invisible import _post
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -28,26 +28,26 @@ def refusal(app, world, change=None, viewer=True, monkeypatch=None, **config):
         return post_refusal(post), deleted_post_state(post)
 
 
-def test_an_ordinary_post_is_not_refused(app, world):
-    assert refusal(app, world) == (None, 'live')
+def test_an_ordinary_post_is_not_refused(app, local_only_invisible_world):
+    assert refusal(app, local_only_invisible_world) == (None, 'live')
 
 
 @pytest.mark.parametrize('change', [lambda p: setattr(p, 'visibility', VISIBILITY_FOLLOWERS),
                                     lambda p: setattr(p, 'status', POST_STATUS_DRAFT),
                                     lambda p: setattr(p, 'deleted', True)])
 @pytest.mark.parametrize('viewer', [True, False])
-def test_what_the_reader_may_not_see_is_404(app, world, change, viewer):
-    assert refusal(app, world, change, viewer)[0] == 404
+def test_what_the_reader_may_not_see_is_404(app, local_only_invisible_world, change, viewer):
+    assert refusal(app, local_only_invisible_world, change, viewer)[0] == 404
 
 
-def test_a_private_community_is_403_to_a_reader_who_is_not_a_member(app, world):
-    assert refusal(app, world, lambda p: setattr(p.community, 'private', True))[0] == 403
-    assert refusal(app, world, lambda p: setattr(p.community, 'private', True), viewer=False)[0] == 403
+def test_a_private_community_is_403_to_a_reader_who_is_not_a_member(app, local_only_invisible_world):
+    assert refusal(app, local_only_invisible_world, lambda p: setattr(p.community, 'private', True))[0] == 403
+    assert refusal(app, local_only_invisible_world, lambda p: setattr(p.community, 'private', True), viewer=False)[0] == 403
 
 
-def test_a_restricted_country_is_403_to_a_reader_in_it(app, world):
+def test_a_restricted_country_is_403_to_a_reader_in_it(app, local_only_invisible_world):
     set_setting('nsfw_country_restriction', 'XX')
-    post = _post(app, world.clearnet, world.bob)
+    post = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.bob)
     post.nsfw = True
     carol = make_user(None, 'carol', local=True)
     carol.ip_address_country = 'XX'
@@ -61,7 +61,7 @@ def test_a_restricted_country_is_403_to_a_reader_in_it(app, world):
 
 @pytest.mark.parametrize('warning, kind, outcome', [(False, 'nsfw', NEEDS_LOGIN), (False, 'nsfl', NEEDS_LOGIN),
                                                     (True, 'nsfw', None), (True, 'nsfl', NEEDS_LOGIN)])
-def test_an_anonymous_reader_of_adult_content_is_sent_to_log_in(app, world, monkeypatch, warning, kind, outcome):
-    result = refusal(app, world, lambda p: setattr(p, kind, True), viewer=False, monkeypatch=monkeypatch,
+def test_an_anonymous_reader_of_adult_content_is_sent_to_log_in(app, local_only_invisible_world, monkeypatch, warning, kind, outcome):
+    result = refusal(app, local_only_invisible_world, lambda p: setattr(p, kind, True), viewer=False, monkeypatch=monkeypatch,
                      CONTENT_WARNING=warning)
     assert result[0] == outcome

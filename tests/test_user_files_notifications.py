@@ -50,23 +50,6 @@ def as_user(app, user):
     return client
 
 
-@pytest.fixture
-def env(app, db_session):
-    site = db.session.get(Site, 1)
-    site.private_instance = False
-    db.session.commit()
-    local = instance()
-    founder = make_user(local, 'founder', local=True)
-    assert founder.id == 1  # fact 347
-    owner = make_user(local, 'owner', local=True)
-    other = make_user(local, 'other', local=True)
-    db.session.commit()
-    for user in (owner, other):
-        user.ap_profile_id = f'https://test.piefed.local/u/{user.user_name}'
-    db.session.commit()
-    return as_user(app, owner), owner, other
-
-
 def a_file(user, name='mine.png', size=10):
     file = File(source_url=f'https://test.piefed.local/media/{name}',
                 file_path=f'app/static/media/{name}')
@@ -94,8 +77,8 @@ def a_notification(user, read=False, url='/somewhere'):
 # --------------------------------------------------------------------------
 
 
-def test_the_file_list_shows_your_files(app, env):
-    client, owner, other = env
+def test_the_file_list_shows_your_files(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     mine = a_file(owner, 'mine.png')
     a_file(other, 'theirs.png')
 
@@ -107,8 +90,8 @@ def test_the_file_list_shows_your_files(app, env):
     assert [f.id for f in render.call_args.kwargs['files'].items] == [mine.id]
 
 
-def test_the_file_list_totals_your_usage(app, env):
-    client, owner, other = env
+def test_the_file_list_totals_your_usage(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     a_file(owner, 'one.png', size=100)
     a_file(owner, 'two.png', size=250)
     a_file(other, 'theirs.png', size=9999)
@@ -120,8 +103,8 @@ def test_the_file_list_totals_your_usage(app, env):
     assert render.call_args.kwargs['total_size'] == 350
 
 
-def test_the_file_list_pages(app, env):
-    client, owner, other = env
+def test_the_file_list_pages(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     for number in range(120):
         a_file(owner, f'file{number}.png')
 
@@ -138,8 +121,8 @@ def test_the_file_list_pages(app, env):
 # --------------------------------------------------------------------------
 
 
-def test_deleting_your_own_file(app, env):
-    client, owner, other = env
+def test_deleting_your_own_file(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     mine = a_file(owner)
     token = csrf(app, client)
 
@@ -151,8 +134,8 @@ def test_deleting_your_own_file(app, env):
     assert deleted.call_args.args == (mine.source_url, owner.id)
 
 
-def test_the_delete_page_asks_first(app, env):
-    client, owner, other = env
+def test_the_delete_page_asks_first(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     mine = a_file(owner)
 
     with patch('app.user.routes.process_file_delete') as deleted:
@@ -165,13 +148,13 @@ def test_the_delete_page_asks_first(app, env):
     assert deleted.call_args is None
 
 
-def test_you_cannot_see_somebody_elses_file(app, env):
+def test_you_cannot_see_somebody_elses_file(app, user_files_notifications_env):
     """D1071. The page renders `<img src="{{ file.source_url }}">` for
     whatever id is in the URL, and nothing tied the file to the caller -- so
     walking the ids disclosed every uploaded file's URL on the instance,
     including ones nobody ever posted. Measured from an unrelated account:
     `PROBE aa1 status: 200 url leaked: True`."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     theirs = a_file(other, 'secret.png')
 
     with patch('app.user.routes.render_template',
@@ -182,8 +165,8 @@ def test_you_cannot_see_somebody_elses_file(app, env):
     assert render.call_args is None
 
 
-def test_you_cannot_delete_somebody_elses_file(app, env):
-    client, owner, other = env
+def test_you_cannot_delete_somebody_elses_file(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     theirs = a_file(other, 'secret.png')
     token = csrf(app, client)
 
@@ -195,16 +178,16 @@ def test_you_cannot_delete_somebody_elses_file(app, env):
     assert deleted.call_args is None
 
 
-def test_deleting_an_unknown_file_is_a_404(app, env):
-    client, owner, other = env
+def test_deleting_an_unknown_file_is_a_404(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
 
     response = client.get('/user/files/delete/9999')
 
     assert response.status_code == 404
 
 
-def test_a_file_delete_lands_back_where_it_started(app, env):
-    client, owner, other = env
+def test_a_file_delete_lands_back_where_it_started(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     mine = a_file(owner)
     token = csrf(app, client)
 
@@ -222,8 +205,8 @@ def test_a_file_delete_lands_back_where_it_started(app, env):
 # --------------------------------------------------------------------------
 
 
-def test_following_a_notification_marks_it_read(app, env):
-    client, owner, other = env
+def test_following_a_notification_marks_it_read(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     notification = a_notification(owner, url='/post/7')
     owner.unread_notifications = 1
     db.session.commit()
@@ -238,10 +221,10 @@ def test_following_a_notification_marks_it_read(app, env):
     assert owner.unread_notifications == 0
 
 
-def test_following_an_already_read_notification_does_not_go_negative(app, env):
+def test_following_an_already_read_notification_does_not_go_negative(app, user_files_notifications_env):
     """`if not notification.read:` -- the counter is maintained by hand, and
     following the same link twice would otherwise drive it below zero."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     notification = a_notification(owner, read=True)
     owner.unread_notifications = 0
     db.session.commit()
@@ -252,9 +235,9 @@ def test_following_an_already_read_notification_does_not_go_negative(app, env):
     assert owner.unread_notifications == 0
 
 
-def test_you_cannot_follow_somebody_elses_notification(app, env):
+def test_you_cannot_follow_somebody_elses_notification(app, user_files_notifications_env):
     """The url is theirs, and so is what it says about them."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     theirs = a_notification(other)
 
     response = client.get(f'/notification/{theirs.id}/goto')
@@ -262,8 +245,8 @@ def test_you_cannot_follow_somebody_elses_notification(app, env):
     assert response.status_code == 403
 
 
-def test_deleting_a_notification(app, env):
-    client, owner, other = env
+def test_deleting_a_notification(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     notification = a_notification(owner)
     owner.unread_notifications = 1
     db.session.commit()
@@ -276,10 +259,10 @@ def test_deleting_a_notification(app, env):
     assert owner.unread_notifications == 0
 
 
-def test_deleting_a_notification_from_htmx_returns_nothing(app, env):
+def test_deleting_a_notification_from_htmx_returns_nothing(app, user_files_notifications_env):
     """The htmx caller swaps the row out, so the response body is the empty
     string rather than a redirect."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     notification = a_notification(owner)
 
     response = client.get(f'/notification/{notification.id}/delete',
@@ -289,10 +272,10 @@ def test_deleting_a_notification_from_htmx_returns_nothing(app, env):
     assert response.data == b''
 
 
-def test_you_cannot_delete_somebody_elses_notification(app, env):
+def test_you_cannot_delete_somebody_elses_notification(app, user_files_notifications_env):
     """This route does not abort -- it falls through to the redirect -- so the
     row has to assert that the notification survived."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     theirs = a_notification(other)
 
     response = client.get(f'/notification/{theirs.id}/delete')
@@ -301,8 +284,8 @@ def test_you_cannot_delete_somebody_elses_notification(app, env):
     assert Notification.query.count() == 1
 
 
-def test_marking_one_notification_read(app, env):
-    client, owner, other = env
+def test_marking_one_notification_read(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     notification = a_notification(owner)
     owner.unread_notifications = 1
     db.session.commit()
@@ -321,8 +304,8 @@ def test_marking_one_notification_read(app, env):
     assert render.call_args.args[0].startswith('user/notifs/')
 
 
-def test_marking_one_notification_unread(app, env):
-    client, owner, other = env
+def test_marking_one_notification_unread(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     notification = a_notification(owner, read=True)
     owner.unread_notifications = 0
     db.session.commit()
@@ -339,8 +322,8 @@ def test_marking_one_notification_unread(app, env):
 
 
 @pytest.mark.parametrize('action', ['read', 'unread'])
-def test_you_cannot_change_somebody_elses_notification(app, env, action):
-    client, owner, other = env
+def test_you_cannot_change_somebody_elses_notification(app, user_files_notifications_env, action):
+    client, owner, other = user_files_notifications_env
     theirs = a_notification(other, read=(action == 'unread'))
     token = csrf(app, client)
 
@@ -353,8 +336,8 @@ def test_you_cannot_change_somebody_elses_notification(app, env, action):
 
 
 @pytest.mark.parametrize('action', ['read', 'unread'])
-def test_changing_an_unknown_notification_is_a_404(app, env, action):
-    client, owner, other = env
+def test_changing_an_unknown_notification_is_a_404(app, user_files_notifications_env, action):
+    client, owner, other = user_files_notifications_env
     token = csrf(app, client)
 
     response = client.post(f'/notification/9999/{action}',
@@ -363,8 +346,8 @@ def test_changing_an_unknown_notification_is_a_404(app, env, action):
     assert response.status_code == 404
 
 
-def test_marking_a_read_notification_read_again_changes_no_count(app, env):
-    client, owner, other = env
+def test_marking_a_read_notification_read_again_changes_no_count(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     notification = a_notification(owner, read=True)
     owner.unread_notifications = 5
     db.session.commit()
@@ -387,11 +370,11 @@ def test_marking_a_read_notification_read_again_changes_no_count(app, env):
     ('newsletter', 'newsletter'),
     ('email_notifs', 'email_unread'),
 ])
-def test_an_unsubscribe_link_turns_the_setting_off(app, env, path, column):
+def test_an_unsubscribe_link_turns_the_setting_off(app, user_files_notifications_env, path, column):
     """Each carries the account's verification token instead of a session. A
     GET only asks (mail scanners follow every link); the page's button POSTs,
     tests/test_email_unsubscribe_links.py has both."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     owner.verification_token = 'a-token'
     setattr(owner, column, True)
     db.session.commit()
@@ -408,12 +391,12 @@ def test_an_unsubscribe_link_turns_the_setting_off(app, env, path, column):
     ('newsletter', 'newsletter'),
     ('email_notifs', 'email_unread'),
 ])
-def test_an_unsubscribe_link_with_the_wrong_token_changes_nothing(app, env,
+def test_an_unsubscribe_link_with_the_wrong_token_changes_nothing(app, user_files_notifications_env,
                                                                   path,
                                                                   column):
     """The token is the whole authentication: without this check anyone could
     unsubscribe anyone by walking the ids."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     owner.verification_token = 'a-token'
     setattr(owner, column, True)
     db.session.commit()
@@ -431,10 +414,10 @@ def test_an_unsubscribe_link_with_the_wrong_token_changes_nothing(app, env,
 # --------------------------------------------------------------------------
 
 
-def test_the_bookmark_list(app, env):
+def test_the_bookmark_list(app, user_files_notifications_env):
     from app.constants import POST_STATUS_REVIEWING
 
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     community = make_community('general')
     db.session.commit()
     kept = make_post(community, owner, 'https://test.piefed.local/p/1',
@@ -457,8 +440,8 @@ def test_the_bookmark_list(app, env):
         'a bookmarked post']
 
 
-def test_the_bookmark_list_shows_nobody_elses(app, env):
-    client, owner, other = env
+def test_the_bookmark_list_shows_nobody_elses(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     community = make_community('general')
     db.session.commit()
     post = make_post(community, other, 'https://test.piefed.local/p/1',
@@ -473,8 +456,8 @@ def test_the_bookmark_list_shows_nobody_elses(app, env):
     assert render.call_args.kwargs['posts'].items == []
 
 
-def test_the_comment_bookmark_list(app, env):
-    client, owner, other = env
+def test_the_comment_bookmark_list(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     community = make_community('general')
     db.session.commit()
     post = make_post(community, owner, 'https://test.piefed.local/p/1',
@@ -493,8 +476,8 @@ def test_the_comment_bookmark_list(app, env):
         'a bookmarked reply']
 
 
-def test_the_comment_bookmark_list_shows_nobody_elses(app, env):
-    client, owner, other = env
+def test_the_comment_bookmark_list_shows_nobody_elses(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     community = make_community('general')
     db.session.commit()
     post = make_post(community, other, 'https://test.piefed.local/p/1',
@@ -525,8 +508,8 @@ def a_follow_request(target, follower, accepted=None):
     return request_row
 
 
-def test_the_follow_request_list(app, env):
-    client, owner, other = env
+def test_the_follow_request_list(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     a_follow_request(owner, other)
 
     with patch('app.user.routes.render_template',
@@ -537,8 +520,8 @@ def test_the_follow_request_list(app, env):
     assert [u.id for u in render.call_args.kwargs['follow_requests']] == [other.id]
 
 
-def test_an_accepted_request_is_not_in_the_list(app, env):
-    client, owner, other = env
+def test_an_accepted_request_is_not_in_the_list(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     a_follow_request(owner, other, accepted=True)
 
     with patch('app.user.routes.render_template',
@@ -548,8 +531,8 @@ def test_an_accepted_request_is_not_in_the_list(app, env):
     assert render.call_args.kwargs['follow_requests'] == []
 
 
-def test_accepting_a_follow_request(app, env):
-    client, owner, other = env
+def test_accepting_a_follow_request(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     request_row = a_follow_request(owner, other)
     token = csrf(app, client)
 
@@ -561,10 +544,10 @@ def test_accepting_a_follow_request(app, env):
     assert request_row.is_accepted is True
 
 
-def test_accepting_a_remote_follow_request_sends_an_accept(app, env):
+def test_accepting_a_remote_follow_request_sends_an_accept(app, user_files_notifications_env):
     """A remote follower is waiting on an Accept activity; a local one is
     not."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     remote = make_user(make_instance('other.example', software='piefed'),
                        'remote')
     remote.ap_inbox_url = 'https://other.example/u/remote/inbox'
@@ -581,8 +564,8 @@ def test_accepting_a_remote_follow_request_sends_an_accept(app, env):
     assert send.call_args.args[1]['type'] == 'Accept'
 
 
-def test_accepting_a_local_follow_request_sends_nothing(app, env):
-    client, owner, other = env
+def test_accepting_a_local_follow_request_sends_nothing(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     a_follow_request(owner, other)
     token = csrf(app, client)
 
@@ -593,7 +576,7 @@ def test_accepting_a_local_follow_request_sends_nothing(app, env):
     assert send.call_args is None
 
 
-def test_rejecting_a_follow_request(app, env):
+def test_rejecting_a_follow_request(app, user_files_notifications_env):
     """D1072. This route said `is_accepted = True` -- a copy of the accept
     route that was never changed -- so rejecting a follow request sent the
     remote side a Reject activity AND recorded locally that the follow had
@@ -601,7 +584,7 @@ def test_rejecting_a_follow_request(app, env):
     somebody who believed they had turned them away. The column's own comment
     gives the value: "None = request sent. True = accepted. False =
     Rejected"."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     request_row = a_follow_request(owner, other)
     token = csrf(app, client)
 
@@ -613,10 +596,10 @@ def test_rejecting_a_follow_request(app, env):
     assert request_row.is_accepted is False
 
 
-def test_a_rejected_follower_is_not_in_the_followers_list(app, env):
+def test_a_rejected_follower_is_not_in_the_followers_list(app, user_files_notifications_env):
     """What the defect cost: `show_profile` selects `is_accepted == True`, so
     a rejection recorded as an acceptance put the person in the list."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     a_follow_request(owner, other)
     token = csrf(app, client)
 
@@ -630,8 +613,8 @@ def test_a_rejected_follower_is_not_in_the_followers_list(app, env):
     assert render.call_args.kwargs['followers'] == []
 
 
-def test_rejecting_a_remote_follow_request_sends_a_reject(app, env):
-    client, owner, other = env
+def test_rejecting_a_remote_follow_request_sends_a_reject(app, user_files_notifications_env):
+    client, owner, other = user_files_notifications_env
     remote = make_user(make_instance('other.example', software='piefed'),
                        'remote')
     remote.ap_inbox_url = 'https://other.example/u/remote/inbox'
@@ -647,10 +630,10 @@ def test_rejecting_a_remote_follow_request_sends_a_reject(app, env):
     assert send.call_args.args[1]['type'] == 'Reject'
 
 
-def test_you_cannot_accept_a_request_that_is_not_yours(app, env):
+def test_you_cannot_accept_a_request_that_is_not_yours(app, user_files_notifications_env):
     """The lookup is keyed on `local_user_id == current_user.id`, so another
     account's pending request is simply not found."""
-    client, owner, other = env
+    client, owner, other = user_files_notifications_env
     third = make_user(instance(), 'third', local=True)
     db.session.commit()
     request_row = a_follow_request(other, third)

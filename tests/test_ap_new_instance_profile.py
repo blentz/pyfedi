@@ -50,22 +50,6 @@ NODEINFO = f'https://{DOMAIN}/.well-known/nodeinfo'
 NODE = f'https://{DOMAIN}/nodeinfo/2.0'
 
 
-@pytest.fixture
-def env(app, api_baseline, http_mock, monkeypatch):
-    from types import SimpleNamespace
-
-    g.admin_ids = []
-    g.site = db.session.get(Site, 1)
-    instance = make_instance(DOMAIN, software='')
-    instance.inbox = None
-    instance.outbox = None
-    db.session.commit()
-    monkeypatch.setattr('app.activitypub.util.time.sleep',
-                        lambda seconds: None)
-    return SimpleNamespace(instance=instance, http=http_mock,
-                           baseline=api_baseline)
-
-
 def answer(env, actor=None, site=None, nodeinfo=None, node=None):
     """Mock the three (or four) requests the task makes, in order."""
     env.http.get(ACTOR).mock(return_value=actor if actor is not None
@@ -108,31 +92,31 @@ def software(name='Lemmy', version='0.19.5'):
 
 
 class TestLookingAnInstanceUpByName:
-    def test_by_its_domain(self, env):
-        assert find_instance_by_domain(DOMAIN) == env.instance
+    def test_by_its_domain(self, ap_new_instance_profile_env):
+        assert find_instance_by_domain(DOMAIN) == ap_new_instance_profile_env.instance
 
-    def test_in_any_case_and_with_space_around_it(self, env):
-        assert find_instance_by_domain(f'  {DOMAIN.upper()} ') == env.instance
+    def test_in_any_case_and_with_space_around_it(self, ap_new_instance_profile_env):
+        assert find_instance_by_domain(f'  {DOMAIN.upper()} ') == ap_new_instance_profile_env.instance
 
-    def test_a_domain_nobody_here_knows(self, env):
+    def test_a_domain_nobody_here_knows(self, ap_new_instance_profile_env):
         assert find_instance_by_domain('nowhere.test') is None
 
 
 class TestHowTheLookupIsDispatched:
-    def test_in_debug_it_runs_here_and_now(self, env, monkeypatch):
+    def test_in_debug_it_runs_here_and_now(self, ap_new_instance_profile_env, monkeypatch):
         monkeypatch.setitem(current_app.config, 'DEBUG', True)
         with patch('app.activitypub.util.new_instance_profile_task') as task:
-            new_instance_profile(env.instance.id)
-        task.assert_called_once_with(env.instance.id)
+            new_instance_profile(ap_new_instance_profile_env.instance.id)
+        task.assert_called_once_with(ap_new_instance_profile_env.instance.id)
 
-    def test_otherwise_it_is_queued_with_a_delay(self, env, monkeypatch):
+    def test_otherwise_it_is_queued_with_a_delay(self, ap_new_instance_profile_env, monkeypatch):
         monkeypatch.setitem(current_app.config, 'DEBUG', False)
         with patch('app.activitypub.util.new_instance_profile_task') as task:
-            new_instance_profile(env.instance.id)
-        assert task.apply_async.call_args.kwargs['args'] == (env.instance.id,)
+            new_instance_profile(ap_new_instance_profile_env.instance.id)
+        assert task.apply_async.call_args.kwargs['args'] == (ap_new_instance_profile_env.instance.id,)
         assert 1 <= task.apply_async.call_args.kwargs['countdown'] <= 10
 
-    def test_no_instance_named_at_all(self, env):
+    def test_no_instance_named_at_all(self, ap_new_instance_profile_env):
         with patch('app.activitypub.util.new_instance_profile_task') as task:
             new_instance_profile(None)
         assert task.call_count == 0
@@ -140,29 +124,29 @@ class TestHowTheLookupIsDispatched:
 
 
 class TestWhatTheActorDocumentSays:
-    def test_an_application_names_both_its_boxes(self, env):
-        answer(env, actor=an_application())
-        new_instance_profile_task(env.instance.id)
-        instance = reload(env)
+    def test_an_application_names_both_its_boxes(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application())
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        instance = reload(ap_new_instance_profile_env)
         assert instance.inbox == f'https://{DOMAIN}/inbox'
         assert instance.outbox == f'https://{DOMAIN}/outbox'
         assert instance.updated_at is not None
 
-    def test_one_that_names_no_inbox(self, env):
+    def test_one_that_names_no_inbox(self, ap_new_instance_profile_env):
         an_application()
-        answer(env, actor=httpx.Response(200, json={
+        answer(ap_new_instance_profile_env, actor=httpx.Response(200, json={
             'type': 'Application', 'outbox': f'https://{DOMAIN}/outbox'}))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox == f'https://{DOMAIN}/inbox'
 
-    def test_one_that_names_no_outbox(self, env):
+    def test_one_that_names_no_outbox(self, ap_new_instance_profile_env):
         """D1290. This was `KeyError: 'outbox'`, and it killed the task before
         the software was ever asked for."""
-        answer(env, actor=httpx.Response(200, json={
+        answer(ap_new_instance_profile_env, actor=httpx.Response(200, json={
             'type': 'Application', 'inbox': f'https://{DOMAIN}/inbox'}),
                nodeinfo=nodeinfo_links(), node=software())
-        new_instance_profile_task(env.instance.id)
-        instance = reload(env)
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        instance = reload(ap_new_instance_profile_env)
         assert instance.inbox == f'https://{DOMAIN}/inbox'
         assert instance.outbox is None
         assert instance.software == 'lemmy'
@@ -172,76 +156,76 @@ class TestWhatTheActorDocumentSays:
         f'https://{DOMAIN}@elsewhere.test/inbox',
         f'https://{DOMAIN}./inbox',
     ], ids=['other-host', 'userinfo', 'trailing-dot'])
-    def test_an_inbox_on_another_host_is_not_taken(self, env, inbox):
+    def test_an_inbox_on_another_host_is_not_taken(self, ap_new_instance_profile_env, inbox):
         """The owner ruling of 2026-10-11 (interop C1): a remote actor's inbox is trusted only on its own host. An
         instance's announces are delivered to this inbox, so a peer naming another host's would have them posted
         there; the instance's /inbox is assumed instead, as for a document that names none."""
-        answer(env, actor=an_application(inbox=inbox))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+        answer(ap_new_instance_profile_env, actor=an_application(inbox=inbox))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox == f'https://{DOMAIN}/inbox'
 
     @pytest.mark.parametrize('inbox', [['https://elsewhere.test/inbox'], {'id': 'x'}, 7, None, ''],
                              ids=['list', 'dict', 'number', 'null', 'empty'])
-    def test_an_inbox_that_is_not_a_string_is_not_taken(self, env, inbox):
-        answer(env, actor=an_application(inbox=inbox))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+    def test_an_inbox_that_is_not_a_string_is_not_taken(self, ap_new_instance_profile_env, inbox):
+        answer(ap_new_instance_profile_env, actor=an_application(inbox=inbox))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox == f'https://{DOMAIN}/inbox'
 
-    def test_an_inbox_on_its_own_host_written_differently_is_taken(self, env):
-        answer(env, actor=an_application(inbox=f'https://{DOMAIN.upper()}:8443/shared'))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox == f'https://{DOMAIN.upper()}:8443/shared'
+    def test_an_inbox_on_its_own_host_written_differently_is_taken(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(inbox=f'https://{DOMAIN.upper()}:8443/shared'))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox == f'https://{DOMAIN.upper()}:8443/shared'
 
-    def test_something_that_is_not_an_application(self, env):
+    def test_something_that_is_not_an_application(self, ap_new_instance_profile_env):
         """Most software answers with something else, and its inbox is at
         /inbox regardless."""
-        answer(env, actor=httpx.Response(200, json={'type': 'Service'}))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+        answer(ap_new_instance_profile_env, actor=httpx.Response(200, json={'type': 'Service'}))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox == f'https://{DOMAIN}/inbox'
 
-    def test_an_answer_that_is_not_json(self, env):
-        answer(env, actor=httpx.Response(200, text='<html>hello</html>'))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+    def test_an_answer_that_is_not_json(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=httpx.Response(200, text='<html>hello</html>'))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox == f'https://{DOMAIN}/inbox'
 
-    def test_a_homepage_over_the_default_cap_is_read_as_not_json(self, env):
+    def test_a_homepage_over_the_default_cap_is_read_as_not_json(self, ap_new_instance_profile_env):
         """The root page with an AP Accept header is often an HTML homepage, which can pass get_request's default
         1 MiB: it is fetched under PAGE_MAX_BYTES, so it is read (and is not JSON) rather than refused, and the
         refresh goes on."""
-        answer(env, actor=httpx.Response(200, text='<html>' + 'x' * FETCH_MAX_BYTES + '</html>'))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+        answer(ap_new_instance_profile_env, actor=httpx.Response(200, text='<html>' + 'x' * FETCH_MAX_BYTES + '</html>'))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox == f'https://{DOMAIN}/inbox'
 
     @pytest.mark.parametrize('status', [404, 406])
     def test_the_two_statuses_that_still_mean_inbox_is_at_slash_inbox(
-            self, env, status):
-        only_the_actor(env, httpx.Response(status))
-        env.http.get(NODEINFO).mock(return_value=httpx.Response(404))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+            self, ap_new_instance_profile_env, status):
+        only_the_actor(ap_new_instance_profile_env, httpx.Response(status))
+        ap_new_instance_profile_env.http.get(NODEINFO).mock(return_value=httpx.Response(404))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox == f'https://{DOMAIN}/inbox'
 
-    def test_a_status_that_means_nothing_is_learned(self, env):
-        only_the_actor(env, httpx.Response(500))
-        env.http.get(NODEINFO).mock(return_value=httpx.Response(404))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox is None
+    def test_a_status_that_means_nothing_is_learned(self, ap_new_instance_profile_env):
+        only_the_actor(ap_new_instance_profile_env, httpx.Response(500))
+        ap_new_instance_profile_env.http.get(NODEINFO).mock(return_value=httpx.Response(404))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox is None
 
-    def test_a_domain_that_only_answers_over_http(self, env):
-        env.http.get(ACTOR).mock(side_effect=httpx.ConnectError('no tls'))
-        env.http.get(f'http://{DOMAIN}/').mock(return_value=an_application())
-        env.http.get(f'http://{DOMAIN}/api/v3/site').mock(
+    def test_a_domain_that_only_answers_over_http(self, ap_new_instance_profile_env):
+        ap_new_instance_profile_env.http.get(ACTOR).mock(side_effect=httpx.ConnectError('no tls'))
+        ap_new_instance_profile_env.http.get(f'http://{DOMAIN}/').mock(return_value=an_application())
+        ap_new_instance_profile_env.http.get(f'http://{DOMAIN}/api/v3/site').mock(
             return_value=httpx.Response(404))
-        env.http.get(f'http://{DOMAIN}/.well-known/nodeinfo').mock(
+        ap_new_instance_profile_env.http.get(f'http://{DOMAIN}/.well-known/nodeinfo').mock(
             return_value=httpx.Response(404))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox == f'https://{DOMAIN}/inbox'
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox == f'https://{DOMAIN}/inbox'
 
-    def test_a_domain_that_answers_neither_way(self, env):
-        env.http.get(ACTOR).mock(side_effect=httpx.ConnectError('no route'))
-        env.http.get(f'http://{DOMAIN}/').mock(
+    def test_a_domain_that_answers_neither_way(self, ap_new_instance_profile_env):
+        ap_new_instance_profile_env.http.get(ACTOR).mock(side_effect=httpx.ConnectError('no route'))
+        ap_new_instance_profile_env.http.get(f'http://{DOMAIN}/').mock(
             side_effect=httpx.ConnectError('no route'))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).inbox is None
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).inbox is None
 
 
 class TestWhoTheInstanceSaysItsAdminsAre:
@@ -249,104 +233,104 @@ class TestWhoTheInstanceSaysItsAdminsAre:
         return {'person': {'actor_id': actor_id}}
 
     @pytest.fixture
-    def their_admin(self, env):
-        admin = make_user(env.instance, 'boss')
+    def their_admin(self, ap_new_instance_profile_env):
+        admin = make_user(ap_new_instance_profile_env.instance, 'boss')
         admin.ap_id = f'boss@{DOMAIN}'
         admin.ap_profile_id = f'https://{DOMAIN}/u/boss'
         admin.ap_public_url = f'https://{DOMAIN}/u/boss'
         db.session.commit()
         return admin
 
-    def roles(self, env):
-        return InstanceRole.query.filter_by(instance_id=env.instance.id).all()
+    def roles(self, ap_new_instance_profile_env):
+        return InstanceRole.query.filter_by(instance_id=ap_new_instance_profile_env.instance.id).all()
 
-    def test_one_they_name_is_recorded(self, env, their_admin):
-        answer(env, actor=an_application(), site=httpx.Response(200, json={
+    def test_one_they_name_is_recorded(self, ap_new_instance_profile_env, their_admin):
+        answer(ap_new_instance_profile_env, actor=an_application(), site=httpx.Response(200, json={
             'admins': [self.an_admin(their_admin.ap_profile_id)]}))
-        new_instance_profile_task(env.instance.id)
-        assert [role.user_id for role in self.roles(env)] == [their_admin.id]
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert [role.user_id for role in self.roles(ap_new_instance_profile_env)] == [their_admin.id]
 
-    def test_naming_the_same_one_twice_records_one_role(self, env,
+    def test_naming_the_same_one_twice_records_one_role(self, ap_new_instance_profile_env,
                                                        their_admin):
         site = httpx.Response(200, json={
             'admins': [self.an_admin(their_admin.ap_profile_id)]})
-        answer(env, actor=an_application(), site=site)
-        new_instance_profile_task(env.instance.id)
-        answer(env, actor=an_application(), site=httpx.Response(200, json={
+        answer(ap_new_instance_profile_env, actor=an_application(), site=site)
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        answer(ap_new_instance_profile_env, actor=an_application(), site=httpx.Response(200, json={
             'admins': [self.an_admin(their_admin.ap_profile_id)]}))
-        new_instance_profile_task(env.instance.id)
-        assert len(self.roles(env)) == 1
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert len(self.roles(ap_new_instance_profile_env)) == 1
 
-    def test_one_they_have_stopped_naming_loses_the_role(self, env,
+    def test_one_they_have_stopped_naming_loses_the_role(self, ap_new_instance_profile_env,
                                                         their_admin):
-        db.session.add(InstanceRole(instance_id=env.instance.id,
+        db.session.add(InstanceRole(instance_id=ap_new_instance_profile_env.instance.id,
                                     user_id=their_admin.id, role='admin'))
         db.session.commit()
-        answer(env, actor=an_application(),
+        answer(ap_new_instance_profile_env, actor=an_application(),
                site=httpx.Response(200, json={'admins': []}))
-        new_instance_profile_task(env.instance.id)
-        assert self.roles(env) == []
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert self.roles(ap_new_instance_profile_env) == []
 
-    def test_an_entry_with_no_person(self, env, their_admin):
+    def test_an_entry_with_no_person(self, ap_new_instance_profile_env, their_admin):
         """D1290. This was `KeyError: 'person'`."""
-        answer(env, actor=an_application(), site=httpx.Response(200, json={
+        answer(ap_new_instance_profile_env, actor=an_application(), site=httpx.Response(200, json={
             'admins': [{'name': 'nobody'},
                        self.an_admin(their_admin.ap_profile_id)]}),
                nodeinfo=nodeinfo_links(), node=software())
-        new_instance_profile_task(env.instance.id)
-        assert [role.user_id for role in self.roles(env)] == [their_admin.id]
-        assert reload(env).software == 'lemmy'
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert [role.user_id for role in self.roles(ap_new_instance_profile_env)] == [their_admin.id]
+        assert reload(ap_new_instance_profile_env).software == 'lemmy'
 
     @pytest.mark.parametrize('entry', [
         'a string', None, {'person': 'a string'}, {'person': {}},
         {'person': {'actor_id': ''}}, {'person': {'actor_id': None}},
     ])
-    def test_every_other_shape_an_entry_can_take(self, env, entry):
-        answer(env, actor=an_application(),
+    def test_every_other_shape_an_entry_can_take(self, ap_new_instance_profile_env, entry):
+        answer(ap_new_instance_profile_env, actor=an_application(),
                site=httpx.Response(200, json={'admins': [entry]}))
-        new_instance_profile_task(env.instance.id)
-        assert self.roles(env) == []
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert self.roles(ap_new_instance_profile_env) == []
 
-    def test_an_actor_this_instance_cannot_resolve(self, env):
+    def test_an_actor_this_instance_cannot_resolve(self, ap_new_instance_profile_env):
         with patch('app.activitypub.util.find_actor_or_create',
                    return_value=None):
-            answer(env, actor=an_application(),
+            answer(ap_new_instance_profile_env, actor=an_application(),
                    site=httpx.Response(200, json={
                        'admins': [self.an_admin(f'https://{DOMAIN}/u/ghost')]}))
-            new_instance_profile_task(env.instance.id)
-        assert self.roles(env) == []
+            new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert self.roles(ap_new_instance_profile_env) == []
 
-    def test_a_site_endpoint_that_names_no_admins_at_all(self, env):
-        answer(env, actor=an_application(),
+    def test_a_site_endpoint_that_names_no_admins_at_all(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(),
                site=httpx.Response(200, json={'site_view': {}}))
-        new_instance_profile_task(env.instance.id)
-        assert self.roles(env) == []
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert self.roles(ap_new_instance_profile_env) == []
 
-    def test_one_that_answers_something_that_is_not_json(self, env):
-        answer(env, actor=an_application(),
+    def test_one_that_answers_something_that_is_not_json(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(),
                site=httpx.Response(200, text='<html>no api here</html>'))
-        new_instance_profile_task(env.instance.id)
-        assert self.roles(env) == []
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert self.roles(ap_new_instance_profile_env) == []
 
-    def test_one_that_is_not_there(self, env):
-        answer(env, actor=an_application(), site=httpx.Response(404))
-        new_instance_profile_task(env.instance.id)
-        assert self.roles(env) == []
+    def test_one_that_is_not_there(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(), site=httpx.Response(404))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert self.roles(ap_new_instance_profile_env) == []
 
-    def test_one_that_cannot_be_reached(self, env):
-        env.http.get(ACTOR).mock(return_value=an_application())
-        env.http.get(SITE).mock(side_effect=httpx.ConnectError('no route'))
-        env.http.get(NODEINFO).mock(return_value=httpx.Response(404))
-        new_instance_profile_task(env.instance.id)
-        assert self.roles(env) == []
+    def test_one_that_cannot_be_reached(self, ap_new_instance_profile_env):
+        ap_new_instance_profile_env.http.get(ACTOR).mock(return_value=an_application())
+        ap_new_instance_profile_env.http.get(SITE).mock(side_effect=httpx.ConnectError('no route'))
+        ap_new_instance_profile_env.http.get(NODEINFO).mock(return_value=httpx.Response(404))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert self.roles(ap_new_instance_profile_env) == []
 
 
 class TestWhatSoftwareTheInstanceRuns:
-    def test_it_is_read_from_nodeinfo(self, env):
-        answer(env, actor=an_application(), nodeinfo=nodeinfo_links(),
+    def test_it_is_read_from_nodeinfo(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(), nodeinfo=nodeinfo_links(),
                node=software('Lemmy', '0.19.5'))
-        new_instance_profile_task(env.instance.id)
-        instance = reload(env)
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        instance = reload(ap_new_instance_profile_env)
         assert instance.software == 'lemmy'
         assert instance.version == '0.19.5'
         assert instance.nodeinfo_href == NODE
@@ -356,13 +340,13 @@ class TestWhatSoftwareTheInstanceRuns:
         'https://nodeinfo.diaspora.software/ns/schema/2.0',
         'http://nodeinfo.diaspora.software/ns/schema/2.1',
     ])
-    def test_each_schema_this_instance_accepts(self, env, rel):
-        answer(env, actor=an_application(), nodeinfo=nodeinfo_links(rel=rel),
+    def test_each_schema_this_instance_accepts(self, ap_new_instance_profile_env, rel):
+        answer(ap_new_instance_profile_env, actor=an_application(), nodeinfo=nodeinfo_links(rel=rel),
                node=software())
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).software == 'lemmy'
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).software == 'lemmy'
 
-    def test_a_schema_it_does_not_know_is_not_even_fetched(self, env):
+    def test_a_schema_it_does_not_know_is_not_even_fetched(self, ap_new_instance_profile_env):
         """Driven through `get_request` rather than respx, because what is
         asserted is that a request is NOT made -- and `http_mock` fails a
         route it registered and nobody called."""
@@ -380,51 +364,51 @@ class TestWhatSoftwareTheInstanceRuns:
             return software()
 
         with patch('app.activitypub.util.get_request', side_effect=record):
-            new_instance_profile_task(env.instance.id)
+            new_instance_profile_task(ap_new_instance_profile_env.instance.id)
         assert NODE not in asked
-        assert reload(env).software == ''
+        assert reload(ap_new_instance_profile_env).software == ''
 
-    def test_a_link_that_is_not_an_object(self, env):
-        answer(env, actor=an_application(),
+    def test_a_link_that_is_not_an_object(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(),
                nodeinfo=httpx.Response(200, json={'links': ['a string']}))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).software == ''
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).software == ''
 
-    def test_nodeinfo_that_names_no_software(self, env):
-        answer(env, actor=an_application(), nodeinfo=nodeinfo_links(),
+    def test_nodeinfo_that_names_no_software(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(), nodeinfo=nodeinfo_links(),
                node=httpx.Response(200, json={'version': '2.0'}))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).software == ''
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).software == ''
 
-    def test_nodeinfo_that_is_not_there(self, env):
-        answer(env, actor=an_application(), nodeinfo=httpx.Response(404))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).software == ''
+    def test_nodeinfo_that_is_not_there(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(), nodeinfo=httpx.Response(404))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).software == ''
 
-    def test_the_second_document_that_is_not_there(self, env):
-        answer(env, actor=an_application(), nodeinfo=nodeinfo_links(),
+    def test_the_second_document_that_is_not_there(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(), nodeinfo=nodeinfo_links(),
                node=httpx.Response(404))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).software == ''
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).software == ''
 
-    def test_nodeinfo_that_cannot_be_reached(self, env):
-        env.http.get(ACTOR).mock(return_value=an_application())
-        env.http.get(SITE).mock(return_value=httpx.Response(404))
-        env.http.get(NODEINFO).mock(
+    def test_nodeinfo_that_cannot_be_reached(self, ap_new_instance_profile_env):
+        ap_new_instance_profile_env.http.get(ACTOR).mock(return_value=an_application())
+        ap_new_instance_profile_env.http.get(SITE).mock(return_value=httpx.Response(404))
+        ap_new_instance_profile_env.http.get(NODEINFO).mock(
             side_effect=httpx.ConnectError('no route'))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).software == ''
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).software == ''
 
-    def test_the_second_document_being_unreachable(self, env):
-        env.http.get(ACTOR).mock(return_value=an_application())
-        env.http.get(SITE).mock(return_value=httpx.Response(404))
-        env.http.get(NODEINFO).mock(return_value=nodeinfo_links())
-        env.http.get(NODE).mock(side_effect=httpx.ConnectError('no route'))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).software == ''
+    def test_the_second_document_being_unreachable(self, ap_new_instance_profile_env):
+        ap_new_instance_profile_env.http.get(ACTOR).mock(return_value=an_application())
+        ap_new_instance_profile_env.http.get(SITE).mock(return_value=httpx.Response(404))
+        ap_new_instance_profile_env.http.get(NODEINFO).mock(return_value=nodeinfo_links())
+        ap_new_instance_profile_env.http.get(NODE).mock(side_effect=httpx.ConnectError('no route'))
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).software == ''
 
-    def test_nodeinfo_with_no_links_at_all(self, env):
-        answer(env, actor=an_application(),
+    def test_nodeinfo_with_no_links_at_all(self, ap_new_instance_profile_env):
+        answer(ap_new_instance_profile_env, actor=an_application(),
                nodeinfo=httpx.Response(200, json={}))
-        new_instance_profile_task(env.instance.id)
-        assert reload(env).software == ''
+        new_instance_profile_task(ap_new_instance_profile_env.instance.id)
+        assert reload(ap_new_instance_profile_env).software == ''

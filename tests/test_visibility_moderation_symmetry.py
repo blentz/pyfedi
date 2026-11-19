@@ -11,7 +11,6 @@ from app import db
 from app.constants import POST_TYPE_IMAGE
 from app.models import BlockedImage, File, Post, PostReply
 from tests.factories import bearer, grant_permission
-from tests.test_visibility_moderation import world  # noqa: F401 -- the fixture
 from tests.test_visibility_single_object import client_as
 
 SECRET = 'SECRET-TITLE'
@@ -35,8 +34,8 @@ def _send(app, user, url, data=None):
 
 
 @pytest.fixture
-def hidden(world):
-    w = world
+def hidden(visibility_moderation_world):
+    w = visibility_moderation_world
     w.post.title = SECRET
     w.post.body = 'secret body'
     db.session.commit()

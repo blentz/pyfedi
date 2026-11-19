@@ -13,7 +13,6 @@ from tests import lemmy_app_contract as contract
 from tests import test_onion_guard_limits as limit_tests
 from tests.factories import make_community, make_post, make_post_reply, make_user
 
-limited_app = limit_tests.limited_app   # an app whose limiter counts
 
 
 @pytest.fixture
@@ -98,15 +97,15 @@ def test_a_private_message_is_sent_listed_and_marked_read(world):
     assert read['private_message_view']['private_message']['read'] and db.session.get(ChatMessage, message['id']).read
 
 
-def test_sending_messages_shares_alphas_limit(limited_app, api_baseline, monkeypatch):
-    monkeypatch.setitem(limited_app.config, 'ENABLE_ALPHA_API', 'true')
-    with limited_app.app_context():
+def test_sending_messages_shares_alphas_limit(onion_guard_limits_limited_app, api_baseline, monkeypatch):
+    monkeypatch.setitem(onion_guard_limits_limited_app.config, 'ENABLE_ALPHA_API', 'true')
+    with onion_guard_limits_limited_app.app_context():
         sender, recipient = make_user(None, 'lemmypmlimit', local=True), make_user(None, 'lemmypmto', local=True)
         for account in (sender, recipient):
             account.verified, account.created = True, utcnow() - timedelta(days=60)
         db.session.commit()
         headers, away = {'Authorization': f'Bearer {sender.encode_jwt_token()}'}, {'REMOTE_ADDR': '203.0.113.6'}
-        client = limited_app.test_client()
+        client = onion_guard_limits_limited_app.test_client()
         limiter.reset()
         limiter.enabled = True
         try:

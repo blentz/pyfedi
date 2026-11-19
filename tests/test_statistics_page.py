@@ -17,10 +17,10 @@ import pytest
 from app import db
 from app.models import Instance, Site, utcnow
 from tests.factories import make_instance, make_user
-from tests.test_instance_visible_here import get, scene  # noqa: F401 -- scene is a fixture
-from tests.test_per_domain_ap_routes import onion_proxy, twins  # noqa: F401
+from tests.test_instance_visible_here import get
+from tests.test_per_domain_ap_routes import onion_proxy
 from tests.test_per_domain_html_routes import Visitor
-from tests.two_domains import FIRST, ONION, two_domains  # noqa: F401
+from tests.two_domains import FIRST, ONION
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -100,8 +100,8 @@ def test_an_anonymous_page_is_cached_publicly_and_a_signed_in_one_privately(app,
     assert 'private' in signed_in.headers['Cache-Control']
 
 
-def test_the_onions_row_is_listed_on_the_onion_only(app, scene):  # noqa: F811
-    scene.onion_row.active_1mo = scene.peer.active_1mo = 7
+def test_the_onions_row_is_listed_on_the_onion_only(app, instance_visible_here_scene):
+    instance_visible_here_scene.onion_row.active_1mo = instance_visible_here_scene.peer.active_1mo = 7
     db.session.commit()
 
     on_first, on_onion = get(app, '/statistics').data, get(app, '/statistics', host=ONION).data

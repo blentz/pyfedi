@@ -15,7 +15,7 @@ from app.models import BannedInstances, Tag
 from app.utils import utcnow
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance, make_post, make_user
-from tests.test_microblog_live import client, live, login, teaser_ids  # noqa: F401
+from tests.test_microblog_live import login, teaser_ids
 
 pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 
@@ -97,134 +97,134 @@ class TestResolution:
 
 class TestServerViewPage:
 
-    def test_it_lists_only_that_servers_posts(self, client, live):
+    def test_it_lists_only_that_servers_posts(self, microblog_live_client, live):
         mine = live.toot()
         other_toot(live)
 
-        html = client.get(f'{VIEW}?sort=new').get_data(as_text=True)
+        html = microblog_live_client.get(f'{VIEW}?sort=new').get_data(as_text=True)
 
         assert set(teaser_ids(html)) == {mine.id}
 
-    def test_the_title_and_heading_name_the_view(self, client, live):
-        with_instance_details(client, live)
+    def test_the_title_and_heading_name_the_view(self, microblog_live_client, live):
+        with_instance_details(microblog_live_client, live)
 
-        html = client.get(VIEW).get_data(as_text=True)
+        html = microblog_live_client.get(VIEW).get_data(as_text=True)
 
         assert 'microblogs@mastodon.example' in re.search(r'<title>([^<]*)</title>', html).group(1)
         assert re.search(r'<h1[^>]*>\s*microblogs@mastodon.example', html)
 
-    def test_without_instance_details_the_heading_has_no_host(self, client, live):
-        html = client.get(VIEW).get_data(as_text=True)   # plain community names (spec 2026-11-19)
+    def test_without_instance_details_the_heading_has_no_host(self, microblog_live_client, live):
+        html = microblog_live_client.get(VIEW).get_data(as_text=True)   # plain community names (spec 2026-11-19)
 
         assert not re.search(r'<h1[^>]*>\s*microblogs@mastodon.example', html)
 
-    def test_case_is_ignored(self, client, live):
-        assert client.get('/c/Microblogs@Mastodon.Example').status_code == 200
+    def test_case_is_ignored(self, microblog_live_client, live):
+        assert microblog_live_client.get('/c/Microblogs@Mastodon.Example').status_code == 200
 
     @pytest.mark.parametrize('path', ['/c/microblogs@nowhere.example'])
-    def test_no_view_is_404_for_a_visitor(self, client, live, path):
-        assert client.get(path).status_code == 404
+    def test_no_view_is_404_for_a_visitor(self, microblog_live_client, live, path):
+        assert microblog_live_client.get(path).status_code == 404
 
-    def test_a_signed_in_user_with_no_view_gets_the_existing_lookup(self, client, live):
-        login(client, live.viewer)
+    def test_a_signed_in_user_with_no_view_gets_the_existing_lookup(self, microblog_live_client, live):
+        login(microblog_live_client, live.viewer)
 
-        response = client.get('/c/microblogs@nowhere.example')
+        response = microblog_live_client.get('/c/microblogs@nowhere.example')
 
         assert response.status_code == 302 and 'lookup' in response.headers['Location']
 
-    def test_a_banned_server_is_404(self, client, live):
+    def test_a_banned_server_is_404(self, microblog_live_client, live):
         live.toot()
         db.session.add(BannedInstances(domain='mastodon.example'))
         db.session.commit()
 
-        assert client.get(VIEW).status_code == 404
+        assert microblog_live_client.get(VIEW).status_code == 404
 
-    def test_a_real_community_wins(self, client, live):
+    def test_a_real_community_wins(self, microblog_live_client, live):
         real = real_microblogs(live)
         theirs = make_post(real, live.author, 'https://mastodon.example/statuses/real', microblog=True)
         live.toot()
 
-        html = client.get(f'{VIEW}?sort=new').get_data(as_text=True)
+        html = microblog_live_client.get(f'{VIEW}?sort=new').get_data(as_text=True)
 
         assert set(teaser_ids(html)) == {theirs.id}
 
-    def test_an_activitypub_request_is_400(self, client, live):
-        response = client.get(VIEW, headers={'Accept': 'application/activity+json'})
+    def test_an_activitypub_request_is_400(self, microblog_live_client, live):
+        response = microblog_live_client.get(VIEW, headers={'Accept': 'application/activity+json'})
 
         assert response.status_code == 400
 
-    def test_a_server_with_no_posts_is_an_empty_page(self, client, live):
-        response = client.get(VIEW)
+    def test_a_server_with_no_posts_is_an_empty_page(self, microblog_live_client, live):
+        response = microblog_live_client.get(VIEW)
 
         assert response.status_code == 200 and teaser_ids(response.get_data(as_text=True)) == []
 
-    def test_pagination_stays_on_the_view(self, client, live):
+    def test_pagination_stays_on_the_view(self, microblog_live_client, live):
         for _ in range(3):
             live.toot()
         live.viewer.page_length = 2
         db.session.commit()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get(f'{VIEW}?sort=new').get_data(as_text=True)
+        html = microblog_live_client.get(f'{VIEW}?sort=new').get_data(as_text=True)
 
         assert re.search(r'href="/c/microblogs(@|%40)mastodon.example\?[^"]*page=2', html)
 
-    def test_join_and_post_controls_are_hidden(self, client, live):
-        login(client, live.viewer)
-        plain = client.get('/c/microblogs').get_data(as_text=True)
+    def test_join_and_post_controls_are_hidden(self, microblog_live_client, live):
+        login(microblog_live_client, live.viewer)
+        plain = microblog_live_client.get('/c/microblogs').get_data(as_text=True)
         assert '/community/microblogs/submit' in plain
         assert '-notification-toggle' in plain
 
-        html = client.get(VIEW).get_data(as_text=True)
+        html = microblog_live_client.get(VIEW).get_data(as_text=True)
 
         assert '/community/microblogs/submit' not in html
         assert '/community/microblogs/subscribe' not in html
         assert '-notification-toggle' not in html
 
-    def test_the_community_rss_is_not_advertised(self, client, live):
+    def test_the_community_rss_is_not_advertised(self, microblog_live_client, live):
         live.toot()
-        assert '/community/microblogs/feed' in client.get('/c/microblogs').get_data(as_text=True)
+        assert '/community/microblogs/feed' in microblog_live_client.get('/c/microblogs').get_data(as_text=True)
 
-        html = client.get(VIEW).get_data(as_text=True)
+        html = microblog_live_client.get(VIEW).get_data(as_text=True)
 
         assert '/community/microblogs/feed' not in html
 
-    def test_the_flair_controls_are_hidden(self, client, live):
-        login(client, live.viewer)
-        plain = client.get('/c/microblogs').get_data(as_text=True)
+    def test_the_flair_controls_are_hidden(self, microblog_live_client, live):
+        login(microblog_live_client, live.viewer)
+        plain = microblog_live_client.get('/c/microblogs').get_data(as_text=True)
         assert 'Set my flair' in plain
 
-        html = client.get(VIEW).get_data(as_text=True)
+        html = microblog_live_client.get(VIEW).get_data(as_text=True)
 
         assert 'Set my flair' not in html
         assert '<h3>Flair</h3>' not in html
 
-    def test_the_dillo_theme_hides_join_and_post_controls(self, client, live):
+    def test_the_dillo_theme_hides_join_and_post_controls(self, microblog_live_client, live):
         live.viewer.theme = 'dillo'
         db.session.commit()
-        login(client, live.viewer)
-        plain = client.get('/c/microblogs').get_data(as_text=True)
+        login(microblog_live_client, live.viewer)
+        plain = microblog_live_client.get('/c/microblogs').get_data(as_text=True)
         assert '/community/microblogs/subscribe' in plain
 
-        html = client.get(VIEW).get_data(as_text=True)
+        html = microblog_live_client.get(VIEW).get_data(as_text=True)
 
         assert '/community/microblogs/submit' not in html
         assert '/community/microblogs/subscribe' not in html
 
-    def test_a_tag_filter_is_not_applied(self, client, live):
+    def test_a_tag_filter_is_not_applied(self, microblog_live_client, live):
         mine = live.toot()
         db.session.add(Tag(name='x'))
         db.session.commit()
 
-        html = client.get(f'{VIEW}?sort=new&tag=x').get_data(as_text=True)
+        html = microblog_live_client.get(f'{VIEW}?sort=new&tag=x').get_data(as_text=True)
 
         assert set(teaser_ids(html)) == {mine.id}
 
-    def test_the_etag_differs_from_the_community(self, client, live):
+    def test_the_etag_differs_from_the_community(self, microblog_live_client, live):
         live.toot()
 
-        view = client.get(f'{VIEW}?sort=new').headers['ETag']
-        plain = client.get('/c/microblogs?sort=new').headers['ETag']
+        view = microblog_live_client.get(f'{VIEW}?sort=new').headers['ETag']
+        plain = microblog_live_client.get('/c/microblogs?sort=new').headers['ETag']
 
         assert view != plain
 
@@ -256,33 +256,33 @@ class TestServerViewLive:
 
         assert not any(key.startswith('instance:') for key in self.keys(app, post, general))
 
-    def test_the_fragment_serves_only_that_servers_new_posts(self, client, live):
+    def test_the_fragment_serves_only_that_servers_new_posts(self, microblog_live_client, live):
         mine = live.toot()
         other_toot(live)
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        response = client.get(f'{FRAGMENT}?after=0')
+        response = microblog_live_client.get(f'{FRAGMENT}?after=0')
 
         assert response.status_code == 200
         assert teaser_ids(response.get_data(as_text=True)) == [mine.id]
 
-    def test_the_fragment_is_204_when_only_other_servers_posted(self, client, live):
+    def test_the_fragment_is_204_when_only_other_servers_posted(self, microblog_live_client, live):
         other_toot(live)
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        assert client.get(f'{FRAGMENT}?after=0').status_code == 204
+        assert microblog_live_client.get(f'{FRAGMENT}?after=0').status_code == 204
 
-    def test_no_view_has_no_fragment(self, client, live):
-        login(client, live.viewer)
+    def test_no_view_has_no_fragment(self, microblog_live_client, live):
+        login(microblog_live_client, live.viewer)
 
-        assert client.get('/community/microblogs@nowhere.example/live/posts?after=0').status_code == 404
+        assert microblog_live_client.get('/community/microblogs@nowhere.example/live/posts?after=0').status_code == 404
 
-    def test_the_live_page_wires_the_view(self, app, client, live, monkeypatch):
+    def test_the_live_page_wires_the_view(self, app, microblog_live_client, live, monkeypatch):
         monkeypatch.setitem(app.config, 'NOTIF_SERVER', 'https://notifs.example')
         live.toot()
-        login(client, live.viewer)
+        login(microblog_live_client, live.viewer)
 
-        html = client.get(f'{VIEW}?sort=live').get_data(as_text=True)
+        html = microblog_live_client.get(f'{VIEW}?sort=live').get_data(as_text=True)
 
         assert 'id="live_feed"' in html
         assert re.search(r'data-posts-url="/community/microblogs(@|%40)mastodon.example/live/posts"', html)
@@ -322,12 +322,12 @@ class TestPostLinks:
 
         assert server_view_actor.cache_timeout == 300
 
-    def test_the_post_page_breadcrumb_names_the_view(self, app, client, live, monkeypatch):
+    def test_the_post_page_breadcrumb_names_the_view(self, app, microblog_live_client, live, monkeypatch):
         monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # a signed-in post page renders the reply form
-        with_instance_details(client, live)
+        with_instance_details(microblog_live_client, live)
         post = live.toot()
 
-        html = client.get(f'/post/{post.id}').get_data(as_text=True)
+        html = microblog_live_client.get(f'/post/{post.id}').get_data(as_text=True)
 
         assert re.search(r'<a href="/c/microblogs@mastodon.example">microblogs@mastodon.example</a>', html)
 
@@ -399,20 +399,20 @@ class TestServersSidebar:
 
         assert busiest_microblog_servers.cache_timeout == 300
 
-    def test_the_sidebar_lists_them_on_the_community(self, client, live):
+    def test_the_sidebar_lists_them_on_the_community(self, microblog_live_client, live):
         live.toot()
 
-        html = client.get('/c/microblogs').get_data(as_text=True)
+        html = microblog_live_client.get('/c/microblogs').get_data(as_text=True)
 
         assert 'id="microblog_servers"' in html
         assert 'href="/c/microblogs@mastodon.example"' in html
 
-    def test_not_on_a_server_view(self, client, live):
+    def test_not_on_a_server_view(self, microblog_live_client, live):
         live.toot()
 
-        assert 'id="microblog_servers"' not in client.get(VIEW).get_data(as_text=True)
+        assert 'id="microblog_servers"' not in microblog_live_client.get(VIEW).get_data(as_text=True)
 
-    def test_not_on_another_community(self, client, live):
+    def test_not_on_another_community(self, microblog_live_client, live):
         make_community('general')
 
-        assert 'id="microblog_servers"' not in client.get('/c/general').get_data(as_text=True)
+        assert 'id="microblog_servers"' not in microblog_live_client.get('/c/general').get_data(as_text=True)

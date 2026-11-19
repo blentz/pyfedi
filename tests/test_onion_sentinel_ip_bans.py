@@ -12,7 +12,7 @@ from app.shared.user import ban_user
 from app.user.utils import _get_user_same_ip
 from tests.factories import bearer, make_user
 from tests.test_shared_user_bans import _recording_task_selector, _seed_ban_scenario
-from tests.test_user_moderation import env, moderator_of_users  # noqa: F401
+from tests.test_user_moderation import moderator_of_users
 
 REAL_IP = '203.0.113.7'
 
@@ -43,8 +43,8 @@ def test_ban_ip_never_bans_the_sentinel(app, db_session):
     assert IpBan.query.count() == 0
 
 
-def test_ban_form_hides_ip_option_without_a_real_ip(app, site, env):
-    client, founder, viewer, target = env
+def test_ban_form_hides_ip_option_without_a_real_ip(app, site, user_moderation_env):
+    client, founder, viewer, target = user_moderation_env
     moderator_of_users(viewer)
     target.ip_address = ONION_ACCOUNT_IP
     db.session.commit()

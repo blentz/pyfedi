@@ -1,6 +1,6 @@
 import pytest
 
-from interop.clients import Loops, Mastodon, PeerTube, PieFed, Pixelfed, tokens, wait_for
+from interop.clients import Loops, Mastodon, PeerTube, PieFed, PieFedWeb, Pixelfed, tokens, wait_for
 
 
 @pytest.fixture(scope='session')
@@ -34,3 +34,9 @@ def bob_follows_alice(mastodon):
     mastodon.follow(account['id'])
     wait_for(lambda: mastodon.relationship(account['id'])['following'])
     return account
+
+
+@pytest.fixture(scope='module')
+def alice_web():
+    """alice's web session, one per test module (the media pipeline, podcast and video channel tests)."""
+    return PieFedWeb('alice', 'interop-alice-pw')

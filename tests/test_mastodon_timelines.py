@@ -13,7 +13,6 @@ from app.models import Tag
 from app.oauth_server import tokens
 from tests.factories import make_community, make_community_member, make_file, make_follow, make_post, \
     make_post_reply, make_user
-from tests.test_login_gate import private  # noqa: F401  the private-instance fixture
 
 _SERIAL = count()
 START = datetime(2030, 1, 1, 12, 0, 0)   # newer than anything the shared baseline seeds

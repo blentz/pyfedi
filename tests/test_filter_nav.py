@@ -43,7 +43,6 @@ def test_nothing_in_it_needs_javascript(app):
 
 # --- the home page's view filter ---
 
-from tests.test_front_page_view_filters import env  # noqa: E402,F401
 
 
 def home_nav(client, path):
@@ -51,8 +50,8 @@ def home_nav(client, path):
     return page, page.find('nav', class_='view_filter')
 
 
-def test_the_home_filter_is_one_icon_nav_for_every_screen(env):
-    page, nav = home_nav(env.app.test_client(), '/home/new/media')
+def test_the_home_filter_is_one_icon_nav_for_every_screen(front_page_view_filters_env):
+    page, nav = home_nav(front_page_view_filters_env.app.test_client(), '/home/new/media')
 
     assert [a['href'] for a in nav.find_all('a')] == ['/home/new/local', '/home/new/popular', '/home/new/media',
                                                      '/home/new/all']
@@ -62,10 +61,10 @@ def test_the_home_filter_is_one_icon_nav_for_every_screen(env):
     assert page.find('select', attrs={'name': 'filter_by'}) is None           # the select that needed JavaScript
 
 
-def test_a_signed_in_reader_also_gets_subscribed(env):
-    client = env.app.test_client()
+def test_a_signed_in_reader_also_gets_subscribed(front_page_view_filters_env):
+    client = front_page_view_filters_env.app.test_client()
     with client.session_transaction() as session:
-        session['_user_id'] = str(env.reader.id)
+        session['_user_id'] = str(front_page_view_filters_env.reader.id)
         session['_fresh'] = True
 
     _, nav = home_nav(client, '/home/new/subscribed')
@@ -76,7 +75,7 @@ def test_a_signed_in_reader_also_gets_subscribed(env):
 
 # --- the community navs (shared with topics) ---
 
-from tests.test_community_show import env as community_env, url  # noqa: E402,F401
+from tests.test_community_show import url
 
 
 def community_page(app, client, community, query=''):
@@ -84,8 +83,8 @@ def community_page(app, client, community, query=''):
     return BeautifulSoup(html, 'html.parser')
 
 
-def test_the_community_sort_nav_is_icons_with_top_as_a_details_menu(app, community_env):
-    client, community, _author = community_env
+def test_the_community_sort_nav_is_icons_with_top_as_a_details_menu(app, community_show_env):
+    client, community, _author = community_show_env
     page = community_page(app, client, community, '?sort=top_1w')
 
     sort = page.find('nav', attrs={'aria-label': 'Sort posts'})
@@ -98,8 +97,8 @@ def test_the_community_sort_nav_is_icons_with_top_as_a_details_menu(app, communi
     assert sort.find(attrs={'data-bs-toggle': True}) is None   # the Top dropdown that needed JavaScript
 
 
-def test_the_community_content_nav_is_icons_and_events_only_where_there_are_events(app, community_env):
-    client, community, _author = community_env
+def test_the_community_content_nav_is_icons_and_events_only_where_there_are_events(app, community_show_env):
+    client, community, _author = community_show_env
     page = community_page(app, client, community, '?content_type=comments')
 
     show = page.find('nav', attrs={'aria-label': 'Show'})

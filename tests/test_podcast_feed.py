@@ -13,7 +13,6 @@ from app.shared.media import with_episode, with_media
 from app.shared.tasks import media as media_tasks
 from app.shared.tasks.media import publish_ready_post
 from tests.factories import make_community, make_community_flair, make_file, make_post, make_site
-from tests.podcast_fixtures import episode_post  # noqa: F401  (a fixture)
 
 NS = {'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd', 'podcast': 'https://podcastindex.org/namespace/1.0'}
 SERVER = 'https://test.piefed.local'

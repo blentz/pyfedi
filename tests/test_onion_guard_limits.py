@@ -69,18 +69,6 @@ def cheap_hashes(monkeypatch):
     models.dummy_password_hash.cache_clear()
 
 
-@pytest.fixture
-def onion(app, site, monkeypatch):
-    monkeypatch.setitem(app.config, 'ONION_PROXY_IP', PROXY)
-    if not SiteDomain.query.filter_by(domain='test.piefed.local').first():
-        db.session.add(SiteDomain(domain='test.piefed.local', scheme='https', is_default=True))
-    db.session.add(SiteDomain(domain='abc.onion', scheme='http', federates=False))
-    db.session.commit()
-    clear_domain_cache()
-    yield
-    clear_domain_cache()
-
-
 @pytest.fixture(autouse=True)
 def login_form(monkeypatch):
     """The login page, without its template: the suite turns CSRF off, and auth/login.html needs form.csrf_token."""
@@ -108,26 +96,6 @@ def typed_failures(typed: str, count: int) -> None:
 
 def account_failures(account_id: int, count: int) -> None:
     _seed_failures(ACCOUNT_FAILURE_KEY.format(account_id), count)
-
-
-@pytest.fixture
-def clock(monkeypatch):
-    now = SimpleNamespace(t=1_800_000_000.0)
-    monkeypatch.setattr('app.onion_guard._now', lambda: now.t)
-    return now
-
-
-@pytest.fixture
-def alice(onion):
-    local = make_instance('test.piefed.local', software='piefed')
-    make_user(local, 'founder', local=True)   # id 1 is exempt from every ban check
-    user = make_user(local, 'alice', local=True)
-    user.site_domain_id = SiteDomain.query.filter_by(domain='abc.onion').first().id   # her login name is the onion's
-    user.email = 'alice@example.com'
-    user.verified = True
-    user.set_password(PASSWORD)
-    db.session.commit()
-    return user
 
 
 def onion_get(client, path, headers=None, **kwargs):
@@ -170,7 +138,7 @@ def a_session(client):
 # Session first (3.7a C)
 # --------------------------------------------------------------------------
 
-def test_cookieless_get_redirects(app, onion):
+def test_cookieless_get_redirects(app, onion_guard_limits_onion):
     client = app.test_client(use_cookies=False)
     response = onion_get(client, '/auth/login?next=%2Fc%2Fnews&x=%C3%A9')
     assert response.status_code == 303
@@ -178,7 +146,7 @@ def test_cookieless_get_redirects(app, onion):
     assert any(h.startswith(app.config['SESSION_COOKIE_NAME'] + '=') for h in response.headers.getlist('Set-Cookie'))
 
 
-def test_the_cookie_round_trip_lands_on_the_same_url(app, onion):
+def test_the_cookie_round_trip_lands_on_the_same_url(app, onion_guard_limits_onion):
     client = app.test_client()
     first = onion_get(client, '/auth/login?next=%2Fc%2Fnews')
     back = onion_get(client, first.headers['Location'])
@@ -189,7 +157,7 @@ def test_the_cookie_round_trip_lands_on_the_same_url(app, onion):
     assert page.get_data(as_text=True) == 'the login form'
 
 
-def test_cookieless_post_refused_softly(app, onion):
+def test_cookieless_post_refused_softly(app, onion_guard_limits_onion):
     client = app.test_client()
     with patch('app.auth.routes.process_login') as process_login:
         response = onion_post(client, '/auth/login', data={'user_name': 'alice', 'password': PASSWORD, **LOGIN})
@@ -201,7 +169,7 @@ def test_cookieless_post_refused_softly(app, onion):
     assert 'Please try again' in flashes(client)
 
 
-def test_a_client_that_refuses_the_cookie_gets_a_page_not_a_loop(app, onion):
+def test_a_client_that_refuses_the_cookie_gets_a_page_not_a_loop(app, onion_guard_limits_onion):
     client = app.test_client(use_cookies=False)
     first = onion_get(client, '/auth/login?next=%2Fx')
     again = onion_get(client, first.headers['Location'])
@@ -214,7 +182,7 @@ def test_a_client_that_refuses_the_cookie_gets_a_page_not_a_loop(app, onion):
     assert posted.status_code == 400
 
 
-def test_the_marker_is_only_stripped_from_a_get(app, onion):
+def test_the_marker_is_only_stripped_from_a_get(app, onion_guard_limits_onion):
     client = app.test_client()
     a_session(client)
     with patch('app.auth.routes.process_login', return_value='processed') as process_login:
@@ -237,7 +205,7 @@ def test_the_redirect_target_is_a_path_on_this_storefront(app, url, path_info, l
         assert same_url([b'a=1', COOKIE_CHECK.encode()]) == f'{location}?a=1&{COOKIE_CHECK}'
 
 
-def test_a_session_cookie_without_a_sid_is_let_through(app, onion):
+def test_a_session_cookie_without_a_sid_is_let_through(app, onion_guard_limits_onion):
     """A client that kept a session cookie (from any page) is not cookieless. It gets a sid now; this request is
     still in the shared bucket because the sid has not come back yet."""
     client = app.test_client(use_cookies=False)
@@ -247,18 +215,18 @@ def test_a_session_cookie_without_a_sid_is_let_through(app, onion):
     assert response.headers.getlist('Set-Cookie')
 
 
-def test_api_requests_are_never_sent_round(app, onion):
+def test_api_requests_are_never_sent_round(app, onion_guard_limits_onion):
     client = app.test_client(use_cookies=False)
     response = onion_post(client, '/api/alpha/user/login', json={'username': 'alice', 'password': PASSWORD})
     assert response.status_code != 303
 
 
-def test_a_route_without_a_limit_is_not_sent_round(app, onion):
+def test_a_route_without_a_limit_is_not_sent_round(app, onion_guard_limits_onion):
     client = app.test_client(use_cookies=False)
     assert onion_get(client, '/robots.txt').status_code == 200
 
 
-def test_clearnet_cookieless_unchanged(app, onion):
+def test_clearnet_cookieless_unchanged(app, onion_guard_limits_onion):
     client = app.test_client(use_cookies=False)
     assert client.get('/auth/login', base_url=CLEARNET_URL).status_code == 200
     assert client.get('/auth/login?' + COOKIE_CHECK, base_url=CLEARNET_URL).status_code == 200
@@ -272,7 +240,7 @@ def test_clearnet_cookieless_unchanged(app, onion):
     assert spoofed.status_code == 200
 
 
-def test_onion_session_missing(app, onion):
+def test_onion_session_missing(app, onion_guard_limits_onion):
     with onion_context(app, '/auth/login'):
         assert onion_session_missing()
     with onion_context(app, '/auth/login', cookie={'x': 1}):
@@ -347,21 +315,21 @@ def test_every_limited_endpoint_is_session_first_or_exempt(app):
 # The rate-limit key
 # --------------------------------------------------------------------------
 
-def test_a_minted_sid_is_the_shared_key(app, onion):
+def test_a_minted_sid_is_the_shared_key(app, onion_guard_limits_onion):
     with onion_context(app, '/auth/login'):
         assert rate_limit_key() == ONION_ANON_KEY
         assert session['onion_sid']                       # minted, so the response sends it
         assert rate_limit_key() == ONION_ANON_KEY         # and it stays shared for the rest of this request
 
 
-def test_a_round_tripped_sid_is_its_own_key(app, onion):
+def test_a_round_tripped_sid_is_its_own_key(app, onion_guard_limits_onion):
     with onion_context(app, '/auth/login', cookie={'onion_sid': 'sid-a'}):
         assert rate_limit_key() == 'onion-session:sid-a'
     with onion_context(app, '/auth/login', cookie={'onion_sid': 'sid-b'}):
         assert rate_limit_key() == 'onion-session:sid-b'
 
 
-def test_the_arrived_sid_is_read_before_any_mint(app, onion):
+def test_the_arrived_sid_is_read_before_any_mint(app, onion_guard_limits_onion):
     with onion_context(app, '/auth/login'):
         mint_onion_sid()
         assert arrived_onion_sid() is None
@@ -371,7 +339,7 @@ def test_the_arrived_sid_is_read_before_any_mint(app, onion):
         assert session['onion_sid'] == 'sid-a'
 
 
-def test_clearnet_key_is_still_the_ip(app, onion):
+def test_clearnet_key_is_still_the_ip(app, onion_guard_limits_onion):
     with app.test_request_context('/auth/login', environ_base={'REMOTE_ADDR': '9.9.9.9'}):
         assert rate_limit_key() == '9.9.9.9'
         assert 'onion_sid' not in session
@@ -385,8 +353,8 @@ def api_user(onion):
     return user
 
 
-def test_an_onion_api_request_is_keyed_by_its_account(app, onion):
-    user = api_user(onion)
+def test_an_onion_api_request_is_keyed_by_its_account(app, onion_guard_limits_onion):
+    user = api_user(onion_guard_limits_onion)
     with onion_context(app, '/api/alpha/site', {'Authorization': f'Bearer {user.encode_jwt_token()}'}):
         resolve_onion_api_rate_key()
         assert rate_limit_key() == f'onion-user:{user.id}'
@@ -394,27 +362,27 @@ def test_an_onion_api_request_is_keyed_by_its_account(app, onion):
 
 
 @pytest.mark.parametrize('headers', [{}, {'Authorization': 'Bearer not-a-token'}, {'Authorization': 'Basic x'}])
-def test_an_unauthenticated_onion_api_request_is_shared(app, onion, headers):
+def test_an_unauthenticated_onion_api_request_is_shared(app, onion_guard_limits_onion, headers):
     with onion_context(app, '/api/alpha/site', headers):
         resolve_onion_api_rate_key()
         assert rate_limit_key() == ONION_ANON_KEY
         assert 'onion_sid' not in session
 
 
-def test_an_api_session_cookie_does_not_make_a_session_key(app, onion):
+def test_an_api_session_cookie_does_not_make_a_session_key(app, onion_guard_limits_onion):
     with onion_context(app, '/api/alpha/site', cookie={'onion_sid': 'sid-a'}):
         resolve_onion_api_rate_key()
         assert rate_limit_key() == ONION_ANON_KEY
 
 
-def test_an_application_error_while_authorising_is_not_swallowed(app, onion):
+def test_an_application_error_while_authorising_is_not_swallowed(app, onion_guard_limits_onion):
     with onion_context(app, '/api/alpha/site', {'Authorization': 'Bearer x'}), \
             patch('app.onion_guard.authorise_api_user', side_effect=RuntimeError('storage down')):
         with pytest.raises(RuntimeError):
             resolve_onion_api_rate_key()
 
 
-def test_the_api_hook_leaves_clearnet_and_web_alone(app, onion):
+def test_the_api_hook_leaves_clearnet_and_web_alone(app, onion_guard_limits_onion):
     with patch('app.onion_guard.authorise_api_user') as authorise:
         with app.test_request_context('/api/alpha/site', headers={'Authorization': 'Bearer x'}):
             resolve_onion_api_rate_key()
@@ -432,27 +400,12 @@ class LimitedConfig(TestConfig):
     ONION_PROXY_IP = PROXY
 
 
-@pytest.fixture(scope='module')
-def limited_app():
-    limited = create_app(LimitedConfig)
-
-    @limited.route('/api/alpha/onion_probe')
-    def onion_probe():
-        with limiter.limit('2/minute'):
-            return 'ok'
-    onion_probe.has_own_login_gate = True   # the site row here says private, and this asks only about the limit
-
-    limiter.enabled = False
-    yield limited
-    limiter.enabled = False
-
-
 @pytest.fixture
-def limits(limited_app, onion):
+def limits(onion_guard_limits_limited_app, onion_guard_limits_onion):
     limiter.reset()
     limiter.enabled = True
     try:
-        yield limited_app
+        yield onion_guard_limits_limited_app
     finally:
         limiter.reset()
         limiter.enabled = False
@@ -528,15 +481,15 @@ def test_onion_api_buckets_are_per_account(limits):
 # The per-account login delay (3.7)
 # --------------------------------------------------------------------------
 
-def test_login_delay_formula(app, onion_redis, clock):
+def test_login_delay_formula(app, onion_redis, onion_guard_limits_clock):
     """None for the first 5 failures, then doubling from 2 s, capped at 300 s, counted from the latest failure."""
     typed_failures('alice', 5)
     assert reserve_onion_login_attempt('alice').wait == 0   # the 6th goes ahead, and is counted
     assert reserve_onion_login_attempt('alice').wait == 2
-    clock.t += 2
+    onion_guard_limits_clock.t += 2
     assert reserve_onion_login_attempt('alice').wait == 0   # the 7th
     assert reserve_onion_login_attempt('alice').wait == 4
-    clock.t += 1.5
+    onion_guard_limits_clock.t += 1.5
     assert reserve_onion_login_attempt('alice').wait == 3
     typed_failures('alice', 36)
     assert reserve_onion_login_attempt('alice').wait == 300
@@ -548,7 +501,7 @@ def test_the_clock_is_the_wall_clock():
     assert abs(onion_guard._now() - time.time()) < 60
 
 
-def test_the_key_is_the_lower_case_name(app, onion_redis, clock):
+def test_the_key_is_the_lower_case_name(app, onion_redis, onion_guard_limits_clock):
     assert [reserve_onion_login_attempt(' Alice ').wait for _ in range(6)] == [0] * 6
     assert reserve_onion_login_attempt('ALICE').wait == 2
     assert onion_redis.exists('onion_login_fail:typed:alice')
@@ -557,7 +510,7 @@ def test_the_key_is_the_lower_case_name(app, onion_redis, clock):
     assert reserve_onion_login_attempt('alice').wait == 0
 
 
-def test_reserving_is_the_failure(app, onion_redis, clock):
+def test_reserving_is_the_failure(app, onion_redis, onion_guard_limits_clock):
     """An attempt is counted when it is let through, before its password is checked. A failure needs nothing more;
     a success clears the counter. So the first 5 attempts are free, the 6th still goes ahead, and then the wait is
     2 s from the 6th."""
@@ -570,18 +523,18 @@ def test_reserving_is_the_failure(app, onion_redis, clock):
     assert reserve_onion_login_attempt('alice').wait == 0
 
 
-def test_parallel_attempts_get_one_per_wait_window(app, onion_redis, clock):
+def test_parallel_attempts_get_one_per_wait_window(app, onion_redis, onion_guard_limits_clock):
     """N attempts arriving together, none of them finished yet: only one goes ahead per window."""
     typed_failures('alice', 5)
     assert [reserve_onion_login_attempt('alice').wait for _ in range(10)] == [0] + [2] * 9
-    clock.t += 2
+    onion_guard_limits_clock.t += 2
     assert [reserve_onion_login_attempt('alice').wait for _ in range(10)] == [0] + [4] * 9
-    clock.t += 4
+    onion_guard_limits_clock.t += 4
     assert [reserve_onion_login_attempt('alice').wait for _ in range(3)] == [0, 8, 8]
     assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '8'
 
 
-def test_an_account_in_backoff_is_refused_silently(app, onion_redis, clock):
+def test_an_account_in_backoff_is_refused_silently(app, onion_redis, onion_guard_limits_clock):
     """A typed identifier that is free, naming an account in backoff, is refused without a wait to show (`hidden`),
     and counted on both counters like a wrong password. The typed counter's own backoff is the visible one."""
     account_failures(42, 6)
@@ -592,48 +545,48 @@ def test_an_account_in_backoff_is_refused_silently(app, onion_redis, clock):
     # The account's name typed is a typed counter of its own, free here: hidden too, never a visible wait
     assert reserve_onion_login_attempt('alice', 42) == OnionLoginGate(hidden=True)
     assert onion_redis.hget('onion_login_fail:acct:42', 'count') == '8'   # 8 failures: an 8 s hidden wait
-    clock.t += 8
+    onion_guard_limits_clock.t += 8
     assert reserve_onion_login_attempt('alice@example.com', 42).proceed
     assert reserve_onion_login_attempt('nobody').proceed
 
 
-def test_a_concurrent_change_is_retried(app, onion_redis, clock, monkeypatch):
+def test_a_concurrent_change_is_retried(app, onion_redis, onion_guard_limits_clock, monkeypatch):
     """Another attempt reserving between the read and the write aborts this transaction (WATCH); it is decided
     again on the new state, so the two are never both let through."""
     typed_failures('alice', 6)
-    clock.t += 2
+    onion_guard_limits_clock.t += 2
     raced = []
 
     def racing_now():
         if not raced:
             raced.append(1)
             onion_redis.hincrby('onion_login_fail:typed:alice', 'count', 1)   # another attempt was let through meanwhile
-            onion_redis.hset('onion_login_fail:typed:alice', 'last', clock.t)
-        return clock.t
+            onion_redis.hset('onion_login_fail:typed:alice', 'last', onion_guard_limits_clock.t)
+        return onion_guard_limits_clock.t
     monkeypatch.setattr('app.onion_guard._now', racing_now)
     assert reserve_onion_login_attempt('alice').wait == 4
     assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '7'
 
 
-def test_a_one_second_wait_is_singular(app, alice, onion_redis, clock, ldap_off):
+def test_a_one_second_wait_is_singular(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for _ in range(6):
         web_login(client, 'alice', 'wrong password')
-    clock.t += 1.5
+    onion_guard_limits_clock.t += 1.5
     web_login(client, 'alice', PASSWORD)
     assert 'Please try again in 1 second.' in flashes(client)
     assert onion_guard.onion_wait_message(1).endswith('in 1 second.')
     assert onion_guard.onion_wait_message(300).endswith('in 300 seconds.')
 
 
-def test_endless_contention_is_a_short_wait(app, onion_redis, clock, monkeypatch):
+def test_endless_contention_is_a_short_wait(app, onion_redis, onion_guard_limits_clock, monkeypatch):
     typed_failures('alice', 6)
-    clock.t += 2
+    onion_guard_limits_clock.t += 2
 
     def always_racing():
-        onion_redis.hset('onion_login_fail:typed:alice', 'other', clock.t)
-        return clock.t
+        onion_redis.hset('onion_login_fail:typed:alice', 'other', onion_guard_limits_clock.t)
+        return onion_guard_limits_clock.t
     monkeypatch.setattr('app.onion_guard._now', always_racing)
     assert reserve_onion_login_attempt('alice').wait == 2   # a wait a real backoff can show, not a tell
     assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '6'
@@ -650,17 +603,11 @@ def logged_in(response):
 
 
 @pytest.fixture
-def ldap_off():
-    with patch('app.auth.util.sync_user_to_ldap'), patch('app.shared.auth.sync_user_to_ldap'):
-        yield
-
-
-@pytest.fixture
 def alpha_api(app, monkeypatch):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
 
 
-def test_login_delay_grows(app, alice, onion_redis, clock, ldap_off):
+def test_login_delay_grows(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for _ in range(6):
@@ -669,7 +616,7 @@ def test_login_delay_grows(app, alice, onion_redis, clock, ldap_off):
     assert not logged_in(refused)
     assert 'try again in 2 seconds' in flashes(client)
     assert onion_redis.hget('onion_login_fail:typed:alice', 'count') == '6'   # a refused attempt is not a failure
-    clock.t += 2
+    onion_guard_limits_clock.t += 2
     assert not logged_in(web_login(client, 'alice', 'wrong password'))
     assert not logged_in(web_login(client, 'alice', PASSWORD))
     assert 'try again in 4 seconds' in flashes(client)
@@ -683,7 +630,7 @@ def answer(client, response):
             [tuple(item) for item in flashed], response.get_data())
 
 
-def test_an_account_in_backoff_answers_like_a_wrong_password(app, alice, onion_redis, clock, ldap_off):
+def test_an_account_in_backoff_answers_like_a_wrong_password(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off):
     """After 6 failures typed as 'alice', alice's email with the CORRECT password gets exactly the answer an unknown
     email with a wrong password gets: no wait message, nothing linking the email to the account. 'alice' itself
     still shows the wait."""
@@ -700,7 +647,7 @@ def test_an_account_in_backoff_answers_like_a_wrong_password(app, alice, onion_r
     assert onion_redis.hget('onion_login_fail:typed:alice@example.com', 'count') == '1'   # counted like a failure
 
 
-def test_failures_as_an_email_never_show_through_the_accounts_name(app, alice, onion_redis, clock, ldap_off,
+def test_failures_as_an_email_never_show_through_the_accounts_name(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off,
                                                                    alpha_api):
     """The re-review's linkage attack: a baseline attempt typed as the name U, 6 wrong ones typed as an email E, then U
     again. If E's attempts filled a counter U's attempts show a wait from, U's answer would say E is U's email. U's
@@ -719,22 +666,22 @@ def test_failures_as_an_email_never_show_through_the_accounts_name(app, alice, o
     assert (hidden.status_code, hidden.get_data()) == (wrong.status_code, wrong.get_data())
 
 
-def test_rotating_variants_does_not_reset_the_delay(app, alice, onion_redis, clock, ldap_off):
+def test_rotating_variants_does_not_reset_the_delay(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off):
     client = app.test_client()
     a_session(client)
     variants = ['alice', 'ALICE@example.com', ' aLiCe ', 'alice@EXAMPLE.com', 'ALICE', 'Alice@example.com ']
     for typed in variants:
         assert not logged_in(web_login(client, typed, 'wrong password'))
-    assert onion_redis.hget(f'onion_login_fail:acct:{alice.id}', 'count') == '6'
+    assert onion_redis.hget(f'onion_login_fail:acct:{onion_guard_limits_alice.id}', 'count') == '6'
     assert not logged_in(web_login(client, 'aLICE@example.COM', PASSWORD))   # a variant whose own counter is free
-    assert onion_redis.hget(f'onion_login_fail:acct:{alice.id}', 'count') == '7'
-    clock.t += 4
+    assert onion_redis.hget(f'onion_login_fail:acct:{onion_guard_limits_alice.id}', 'count') == '7'
+    onion_guard_limits_clock.t += 4
     assert logged_in(web_login(client, 'alice@example.com', PASSWORD))
-    assert not onion_redis.exists(f'onion_login_fail:acct:{alice.id}')   # a success clears the account's counter
+    assert not onion_redis.exists(f'onion_login_fail:acct:{onion_guard_limits_alice.id}')   # a success clears the account's counter
     assert not onion_redis.exists('onion_login_fail:typed:alice@example.com')   # and the one it was typed as
 
 
-def test_unknown_identifiers_behave_like_known_ones(app, alice, onion_redis, clock, ldap_off):
+def test_unknown_identifiers_behave_like_known_ones(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for typed in ('Nobody ', 'alice'):
@@ -749,7 +696,7 @@ def test_unknown_identifiers_behave_like_known_ones(app, alice, onion_redis, clo
     assert messages[0] == messages[1] and 'Please try again in 2 seconds' in messages[0]
 
 
-def test_api_login_counts_the_account_too(app, alice, onion_redis, clock, ldap_off, alpha_api):
+def test_api_login_counts_the_account_too(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off, alpha_api):
     client = app.test_client(use_cookies=False)
     for _ in range(6):
         onion_post(client, '/api/alpha/user/login', json={'username': 'Alice', 'password': 'wrong one'})
@@ -761,12 +708,12 @@ def test_api_login_counts_the_account_too(app, alice, onion_redis, clock, ldap_o
         .status_code == 429
 
 
-def test_success_clears(app, alice, onion_redis, clock, ldap_off):
+def test_success_clears(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for _ in range(6):
         web_login(client, 'alice', 'wrong password')
-    clock.t += 2
+    onion_guard_limits_clock.t += 2
     assert logged_in(web_login(client, 'alice', PASSWORD))
     assert not onion_redis.exists('onion_login_fail:typed:alice')
 
@@ -779,7 +726,7 @@ FIRST_HANDLE = 'dora@test.piefed.local'
 
 
 @pytest.fixture
-def dora(onion):
+def dora(onion_guard_limits_onion):
     """An account of the DEFAULT domain: on the onion she is reached as dora@test.piefed.local."""
     local = make_instance('test.piefed.local', software='piefed')
     make_user(local, 'founder', local=True)   # id 1 is exempt from every ban check
@@ -792,19 +739,19 @@ def dora(onion):
     return user
 
 
-def test_a_default_domain_account_logs_in_on_the_onion_by_its_handle(app, dora, onion_redis, clock, ldap_off):
+def test_a_default_domain_account_logs_in_on_the_onion_by_its_handle(app, dora, onion_redis, onion_guard_limits_clock, ldap_off):
     client = app.test_client()
     a_session(client)
     assert logged_in(web_login(client, FIRST_HANDLE, PASSWORD))
 
 
-def test_a_bare_default_domain_name_is_nobody_on_the_onion(app, dora, onion_redis, clock, ldap_off):
+def test_a_bare_default_domain_name_is_nobody_on_the_onion(app, dora, onion_redis, onion_guard_limits_clock, ldap_off):
     client = app.test_client()
     a_session(client)
     assert not logged_in(web_login(client, 'dora', PASSWORD))
 
 
-def test_failures_typed_as_a_handle_make_the_next_attempt_wait(app, dora, onion_redis, clock, ldap_off):
+def test_failures_typed_as_a_handle_make_the_next_attempt_wait(app, dora, onion_redis, onion_guard_limits_clock, ldap_off):
     client = app.test_client()
     a_session(client)
     for _ in range(6):
@@ -815,7 +762,7 @@ def test_failures_typed_as_a_handle_make_the_next_attempt_wait(app, dora, onion_
     assert 'Please try again in 2 seconds' in flashes(client)
 
 
-def test_a_hot_default_domain_account_answers_like_a_wrong_password(app, dora, onion_redis, clock, ldap_off):
+def test_a_hot_default_domain_account_answers_like_a_wrong_password(app, dora, onion_redis, onion_guard_limits_clock, ldap_off):
     """The account is in backoff and her email is typed with the CORRECT password: no wait message, nothing linking
     the email to the account, the same answer as an unknown email."""
     account_failures(dora.id, 6)
@@ -829,7 +776,7 @@ def test_a_hot_default_domain_account_answers_like_a_wrong_password(app, dora, o
     assert 'Please try again' in answer(client, web_login(client, FIRST_HANDLE, PASSWORD))[2]
 
 
-def test_a_success_clears_both_counters_of_a_default_domain_account(app, dora, onion_redis, clock, ldap_off):
+def test_a_success_clears_both_counters_of_a_default_domain_account(app, dora, onion_redis, onion_guard_limits_clock, ldap_off):
     typed_failures(FIRST_HANDLE, 2)
     account_failures(dora.id, 2)
     client = app.test_client()
@@ -839,19 +786,19 @@ def test_a_success_clears_both_counters_of_a_default_domain_account(app, dora, o
     assert not onion_redis.exists(f'onion_login_fail:acct:{dora.id}')
 
 
-def test_api_login_of_a_default_domain_account_over_the_onion(app, dora, onion_redis, clock, ldap_off, alpha_api):
+def test_api_login_of_a_default_domain_account_over_the_onion(app, dora, onion_redis, onion_guard_limits_clock, ldap_off, alpha_api):
     client = app.test_client(use_cookies=False)
     for _ in range(6):
         onion_post(client, '/api/alpha/user/login', json={'username': FIRST_HANDLE, 'password': 'wrong one'})
     assert onion_post(client, '/api/alpha/user/login', json={'username': FIRST_HANDLE, 'password': PASSWORD}) \
         .status_code == 429
-    clock.t += 2
+    onion_guard_limits_clock.t += 2
     assert onion_post(client, '/api/alpha/user/login', json={'username': FIRST_HANDLE, 'password': PASSWORD}) \
         .status_code == 200
     assert not onion_redis.exists(f'onion_login_fail:acct:{dora.id}')
 
 
-def test_delay_onion_only(app, alice, onion_redis, clock, ldap_off, alpha_api):
+def test_delay_onion_only(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off, alpha_api):
     typed_failures('alice', 10)
     client = app.test_client()
     response = client.post('/auth/login', base_url=CLEARNET_URL,
@@ -866,7 +813,7 @@ def test_delay_onion_only(app, alice, onion_redis, clock, ldap_off, alpha_api):
     assert api.status_code == 200
 
 
-def test_delay_covers_api(app, alice, onion_redis, clock, ldap_off, alpha_api):
+def test_delay_covers_api(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off, alpha_api):
     client = app.test_client(use_cookies=False)
     for _ in range(6):
         response = onion_post(client, '/api/alpha/user/login', json={'username': 'Alice', 'password': 'wrong one'})
@@ -877,7 +824,7 @@ def test_delay_covers_api(app, alice, onion_redis, clock, ldap_off, alpha_api):
     assert refused.is_json
     assert re.search(r'in \d+ seconds?\.?$', refused.get_json()['message'])
     assert 'jwt' not in refused.get_data(as_text=True)
-    clock.t += 2
+    onion_guard_limits_clock.t += 2
     assert onion_post(client, '/api/alpha/user/login', json={'username': 'nobody', 'password': 'x' * 8}) \
         .status_code == 400
     accepted = onion_post(client, '/api/alpha/user/login', json={'username': 'alice', 'password': PASSWORD})
@@ -891,14 +838,14 @@ def test_delay_covers_api(app, alice, onion_redis, clock, ldap_off, alpha_api):
 # --------------------------------------------------------------------------
 
 @pytest.fixture
-def profiled(alice):
+def profiled(onion_guard_limits_alice):
     """Local accounts carry their actor URL. carol was renamed, so only her profile URL still says 'carol'."""
-    alice.ap_profile_id = 'http://abc.onion/u/alice'
+    onion_guard_limits_alice.ap_profile_id = 'http://abc.onion/u/alice'
     carol = make_user(None, 'carol2', local=True)
     carol.ap_profile_id = 'http://abc.onion/u/carol'
-    carol.site_domain_id = alice.site_domain_id
+    carol.site_domain_id = onion_guard_limits_alice.site_domain_id
     db.session.commit()
-    return SimpleNamespace(alice=alice, carol=carol)
+    return SimpleNamespace(alice=onion_guard_limits_alice, carol=carol)
 
 
 @pytest.mark.parametrize('typed', ['%', 'alic_', 'a%', '_lice', 'alic\\e', 'alic%', 'carol%', '___'])
@@ -970,17 +917,17 @@ def verify(client, username, password, onion=True):
     return post(client, '/api/alpha/user/verify_credentials', json={'username': username, 'password': password})
 
 
-def test_verify_credentials_honours_the_delay(app, alice, onion_redis, clock, alpha_api):
+def test_verify_credentials_honours_the_delay(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, alpha_api):
     client = app.test_client(use_cookies=False)
     assert [verify(client, 'alice', 'wrong one').status_code for _ in range(6)] == [400] * 6
     assert verify(client, 'alice', PASSWORD).status_code == 429
     assert verify(client, 'alice@abc.onion', PASSWORD, onion=False).status_code == 200   # clearnet is not delayed
-    clock.t += 2
+    onion_guard_limits_clock.t += 2
     assert verify(client, 'alice', PASSWORD).status_code == 200
     assert not onion_redis.exists('onion_login_fail:typed:alice')
 
 
-def test_verify_credentials_counts_with_login(app, alice, onion_redis, clock, ldap_off, alpha_api):
+def test_verify_credentials_counts_with_login(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off, alpha_api):
     """Guesses here slow down /user/login and the other way round, and an account in backoff answers as a wrong
     password does."""
     client = app.test_client(use_cookies=False)
@@ -993,9 +940,9 @@ def test_verify_credentials_counts_with_login(app, alice, onion_redis, clock, ld
     hidden = verify(client, 'alice@example.com', PASSWORD)
     assert (hidden.status_code, hidden.get_data()) == (unknown.status_code, unknown.get_data()) == \
         (400, unknown.get_data())
-    clock.t += 300
+    onion_guard_limits_clock.t += 300
     assert verify(client, 'alice@example.com', PASSWORD).status_code == 200
-    assert not onion_redis.exists(f'onion_login_fail:acct:{alice.id}')
+    assert not onion_redis.exists(f'onion_login_fail:acct:{onion_guard_limits_alice.id}')
     assert not onion_redis.exists('onion_login_fail:typed:alice@example.com')
 
 
@@ -1018,41 +965,41 @@ def hidden_verify(app, client):
 
 
 @pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
-def test_a_hidden_refusal_hashes_the_password_once(app, alice, onion_redis, clock, ldap_off, alpha_api, attempt):
+def test_a_hidden_refusal_hashes_the_password_once(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off, alpha_api, attempt):
     """The account is in backoff: the correct password is refused, but only after the same hash verification a wrong
     password gets, because it goes through the same check_password, told to refuse."""
-    account_failures(alice.id, 6)
+    account_failures(onion_guard_limits_alice.id, 6)
     with patch('app.models.check_password_hash', wraps=models.check_password_hash) as verified:
         assert not attempt(app, app.test_client())
     verified.assert_called_once()
-    assert verified.call_args.args == (alice.password_hash, PASSWORD)
+    assert verified.call_args.args == (onion_guard_limits_alice.password_hash, PASSWORD)
 
 
 @pytest.mark.parametrize('attempt', [hidden_web, hidden_api, hidden_verify])
-def test_a_legacy_bcrypt_hash_costs_its_bcrypt_check(app, alice, onion_redis, clock, ldap_off, alpha_api, attempt):
+def test_a_legacy_bcrypt_hash_costs_its_bcrypt_check(app, onion_guard_limits_alice, onion_redis, onion_guard_limits_clock, ldap_off, alpha_api, attempt):
     """check_password falls back to bcrypt for a legacy hash, so the hidden refusal does too; and a refused match is
     not re-saved, as an accepted one would be."""
     legacy = app_bcrypt.generate_password_hash(PASSWORD, rounds=4).decode()   # bcrypt's cheapest cost: still bcrypt
-    alice.password_hash = legacy
+    onion_guard_limits_alice.password_hash = legacy
     db.session.commit()
-    account_failures(alice.id, 6)
+    account_failures(onion_guard_limits_alice.id, 6)
     with patch('app.models.app_bcrypt.check_password_hash', wraps=app_bcrypt.check_password_hash) as bcrypt_verified:
         assert not attempt(app, app.test_client())
     bcrypt_verified.assert_called_once_with(legacy, PASSWORD)
-    db.session.refresh(alice)
-    assert alice.password_hash == legacy
+    db.session.refresh(onion_guard_limits_alice)
+    assert onion_guard_limits_alice.password_hash == legacy
 
 
-def test_check_password_refuse_still_verifies(app, alice):
-    assert alice.check_password(PASSWORD) is True
+def test_check_password_refuse_still_verifies(app, onion_guard_limits_alice):
+    assert onion_guard_limits_alice.check_password(PASSWORD) is True
     with patch('app.models.check_password_hash', wraps=models.check_password_hash) as verified:
-        assert alice.check_password(PASSWORD, refuse=True) is False
+        assert onion_guard_limits_alice.check_password(PASSWORD, refuse=True) is False
     verified.assert_called_once()
 
 
 @pytest.fixture
-def bob(alice):
-    user = make_user(db.session.get(User, alice.id).instance, 'bob', local=True)
+def bob(onion_guard_limits_alice):
+    user = make_user(db.session.get(User, onion_guard_limits_alice.id).instance, 'bob', local=True)
     user.email = 'bob@example.com'
     user.verified = True
     user.set_password('bob has his own password')
@@ -1060,18 +1007,8 @@ def bob(alice):
     return user
 
 
-@pytest.fixture
-def directory(app, monkeypatch):
-    """LDAP on, as tests/test_ldap.py runs it: the bind succeeds only for alice's real password."""
-    monkeypatch.setitem(app.config, 'LDAP_READ_ENABLE', True)
-    with patch('app.auth.util.login_with_ldap',
-               side_effect=lambda name, password: 'alice@example.com' if password == PASSWORD else False) as bind, \
-            patch('app.auth.util.sync_user_to_ldap'), patch('app.shared.auth.sync_user_to_ldap'):
-        yield bind
-
-
 @pytest.mark.parametrize('ldap', [True, False], ids=['ldap', 'no-ldap'])
-def test_a_hidden_refusal_runs_the_whole_wrong_password_flow(app, alice, bob, onion_redis, clock, monkeypatch,
+def test_a_hidden_refusal_runs_the_whole_wrong_password_flow(app, onion_guard_limits_alice, bob, onion_redis, onion_guard_limits_clock, monkeypatch,
                                                              request, ldap):
     """alice's account is in backoff and her email is typed with her CORRECT password; bob's email is typed with a
     wrong one. The two answers are the same in every part (status, Location, each flash with its category, body),
@@ -1079,7 +1016,7 @@ def test_a_hidden_refusal_runs_the_whole_wrong_password_flow(app, alice, bob, on
     bind = request.getfixturevalue('directory') if ldap else None
     if not ldap:
         request.getfixturevalue('ldap_off')
-    account_failures(alice.id, 6)
+    account_failures(onion_guard_limits_alice.id, 6)
     client = app.test_client()
     a_session(client)
     calls = []

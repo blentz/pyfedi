@@ -19,7 +19,7 @@ from app.shared.feed import form_communities_to_ids
 from app.storefront import acting_for, clear_domain_cache, domain_for_host
 from app.utils import set_setting
 from tests.test_actor_handles import auth
-from tests.test_hosted_url_lookup import SERVER, SHOP, env, wire  # noqa: F401 (fixtures)
+from tests.test_hosted_url_lookup import SERVER, SHOP
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -30,63 +30,63 @@ def _site_in_g(app):
 
 
 @pytest.mark.parametrize('suffix', ['', '/', '/?x=1'])
-def test_resolving_a_sisters_community_url_finds_the_sisters_den(env, wire, suffix):
-    found = get_resolve_object(None, {'q': f'https://{SHOP}/c/den{suffix}'}, user_id=env.first_alice.id)
-    assert found['community']['community']['id'] == env.shop_den.id
-    found = get_resolve_object(None, {'q': f'https://{SERVER}/c/den{suffix}'}, user_id=env.first_alice.id)
-    assert found['community']['community']['id'] == env.first_den.id
-    assert wire.calls.call_count == 0
+def test_resolving_a_sisters_community_url_finds_the_sisters_den(hosted_url_lookup_env, hosted_url_lookup_wire, suffix):
+    found = get_resolve_object(None, {'q': f'https://{SHOP}/c/den{suffix}'}, user_id=hosted_url_lookup_env.first_alice.id)
+    assert found['community']['community']['id'] == hosted_url_lookup_env.shop_den.id
+    found = get_resolve_object(None, {'q': f'https://{SERVER}/c/den{suffix}'}, user_id=hosted_url_lookup_env.first_alice.id)
+    assert found['community']['community']['id'] == hosted_url_lookup_env.first_den.id
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('query', ['https://[shop.example/c/den/', 'https://[shop.example/c/den', 'http://[::1/c/x'])
-def test_resolving_a_malformed_url_is_a_400_never_a_500(env, wire, app, monkeypatch, query):
+def test_resolving_a_malformed_url_is_a_400_never_a_500(hosted_url_lookup_env, hosted_url_lookup_wire, app, monkeypatch, query):
     monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
     response = app.test_client().get('/api/alpha/resolve_object', query_string={'q': query},
-                                     headers=auth(env.first_alice))
+                                     headers=auth(hosted_url_lookup_env.first_alice))
     assert response.status_code == 400
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_bare_community_name_means_the_acting_domain(env, wire):
+def test_a_bare_community_name_means_the_acting_domain(hosted_url_lookup_env, hosted_url_lookup_wire):
     with acting_for(domain_for_host(SHOP)):
-        assert get_community(None, {'name': 'den'})['community_view']['community']['id'] == env.shop_den.id
-        assert form_communities_to_ids('den') == {env.shop_den.id}
-    assert get_community(None, {'name': 'den'})['community_view']['community']['id'] == env.first_den.id
-    assert form_communities_to_ids('!den') == {env.first_den.id}
-    assert wire.calls.call_count == 0
+        assert get_community(None, {'name': 'den'})['community_view']['community']['id'] == hosted_url_lookup_env.shop_den.id
+        assert form_communities_to_ids('den') == {hosted_url_lookup_env.shop_den.id}
+    assert get_community(None, {'name': 'den'})['community_view']['community']['id'] == hosted_url_lookup_env.first_den.id
+    assert form_communities_to_ids('!den') == {hosted_url_lookup_env.first_den.id}
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_our_own_domains_pass_a_closed_allowlist(env, wire):
+def test_our_own_domains_pass_a_closed_allowlist(hosted_url_lookup_env, hosted_url_lookup_wire):
     set_setting('use_allowlist', True)
     assert AllowedInstances.query.count() == 0
     assert validate_remote_actor(f'https://{SHOP}/u/alice') is True
-    env.shop_alice.ap_profile_id = f'https://{SHOP}/u/alice'   # the fixture's accounts carry none
-    env.first_alice.ap_profile_id = f'https://{SERVER}/u/alice'
+    hosted_url_lookup_env.shop_alice.ap_profile_id = f'https://{SHOP}/u/alice'   # the fixture's accounts carry none
+    hosted_url_lookup_env.first_alice.ap_profile_id = f'https://{SERVER}/u/alice'
     db.session.commit()
-    assert find_actor_or_create(f'https://{SHOP}/u/alice') is env.shop_alice
-    assert find_actor_or_create(f'https://{SERVER}/u/alice') is env.first_alice
+    assert find_actor_or_create(f'https://{SHOP}/u/alice') is hosted_url_lookup_env.shop_alice
+    assert find_actor_or_create(f'https://{SERVER}/u/alice') is hosted_url_lookup_env.first_alice
     assert validate_remote_actor(f'https://{SHOP}/u/alice') is True
-    assert search_for_community(f'!den@{SHOP}') is env.shop_den
-    assert search_for_community(f'!den@{SERVER}') is env.first_den
-    assert wire.calls.call_count == 0
+    assert search_for_community(f'!den@{SHOP}') is hosted_url_lookup_env.shop_den
+    assert search_for_community(f'!den@{SERVER}') is hosted_url_lookup_env.first_den
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_remote_host_off_the_allowlist_is_still_refused(env, wire):
+def test_a_remote_host_off_the_allowlist_is_still_refused(hosted_url_lookup_env, hosted_url_lookup_wire):
     set_setting('use_allowlist', True)
     assert validate_remote_actor('https://peer.example/u/bob') is False
     assert search_for_community('!x@peer.example') is None
     db.session.add(AllowedInstances(domain='peer.example'))
     db.session.commit()
     assert validate_remote_actor('https://peer.example/u/bob') is True
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_our_own_domains_pass_the_ban_list_check(env, wire):
+def test_our_own_domains_pass_the_ban_list_check(hosted_url_lookup_env, hosted_url_lookup_wire):
     """An instance row for our own host on the ban list (a mistake, or a stale import) never cuts us off from ourselves."""
     db.session.add(BannedInstances(domain=SHOP))
     db.session.commit()
     assert validate_remote_actor(f'https://{SHOP}/u/alice') is True
-    assert search_for_community(f'!den@{SHOP}') is env.shop_den
+    assert search_for_community(f'!den@{SHOP}') is hosted_url_lookup_env.shop_den
     db.session.add(BannedInstances(domain='peer.example'))
     db.session.commit()
     assert validate_remote_actor('https://peer.example/u/bob') is False
@@ -97,91 +97,91 @@ def test_our_own_domains_pass_the_ban_list_check(env, wire):
 
 @pytest.mark.parametrize('url', [f'https://evil.example@{SHOP}/u/alice', f'https://x:y@{SHOP}/u/alice',
                                  f'https://evil.example@{SERVER}/u/alice'])
-def test_a_url_with_userinfo_gets_no_exemption_from_the_allowlist(env, wire, url):
+def test_a_url_with_userinfo_gets_no_exemption_from_the_allowlist(hosted_url_lookup_env, hosted_url_lookup_wire, url):
     """The exemption reads the authority as named, not the host httpx would connect to: userinfo never counts, so a
     closed allowlist refuses the authority as it refuses any other it does not list."""
     set_setting('use_allowlist', True)
     assert validate_remote_actor(url) is False
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('server', [f'{SHOP}#x', f'{SHOP}/x', f'{SHOP}\\x'])
-def test_a_community_server_that_is_no_authority_gets_no_exemption(env, wire, server):
+def test_a_community_server_that_is_no_authority_gets_no_exemption(hosted_url_lookup_env, hosted_url_lookup_wire, server):
     set_setting('use_allowlist', True)
     assert search_for_community(f'!den@{server}') is None
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('server', [SHOP, f'{SHOP}:443', f'{SHOP}:80', SHOP.upper()])
-def test_our_host_on_a_port_it_answers_is_exempt(env, wire, server):
+def test_our_host_on_a_port_it_answers_is_exempt(hosted_url_lookup_env, hosted_url_lookup_wire, server):
     """The egress port rule: a domain naming no port is ours with none, 80 or 443."""
     set_setting('use_allowlist', True)
     assert validate_remote_actor(f'https://{server}/u/alice') is True
-    assert search_for_community(f'!den@{server}') is env.shop_den
-    assert wire.calls.call_count == 0
+    assert search_for_community(f'!den@{server}') is hosted_url_lookup_env.shop_den
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_port_none_of_our_domains_names_is_not_ours_to_the_allowlist(env, wire):
+def test_a_port_none_of_our_domains_names_is_not_ours_to_the_allowlist(hosted_url_lookup_env, hosted_url_lookup_wire):
     """Controller ruling: shop.example:8443 is not exempt, so a closed allowlist refuses it like any remote server,
     and nothing is fetched (a hostile handle cannot make us fetch our own host on a port it chose)."""
     set_setting('use_allowlist', True)
     assert validate_remote_actor(f'https://{SHOP}:8443/u/alice') is False
     assert search_for_community(f'!den@{SHOP}:8443') is None
     assert validate_remote_actor('https://peer.example:8443/u/bob') is False
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_port_none_of_our_domains_names_is_on_the_ban_list_like_any_server(env, wire):
+def test_a_port_none_of_our_domains_names_is_on_the_ban_list_like_any_server(hosted_url_lookup_env, hosted_url_lookup_wire):
     db.session.add(BannedInstances(domain=f'{SHOP}:8443'))
     db.session.commit()
     assert validate_remote_actor(f'https://{SHOP}:8443/u/alice') is False
     assert search_for_community(f'!den@{SHOP}:8443') is None
     with pytest.raises(Exception, match='blocked'):
         search_for_feed(f'~reads@{SHOP}:8443', signed_in=True)
-    assert search_for_feed(f'~reads@{SHOP}', signed_in=True) is env.shop_feed
-    assert wire.calls.call_count == 0
+    assert search_for_feed(f'~reads@{SHOP}', signed_in=True) is hosted_url_lookup_env.shop_feed
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_domain_with_an_explicit_port_is_exempt_only_on_that_port(env, wire, app, monkeypatch):
+def test_a_domain_with_an_explicit_port_is_exempt_only_on_that_port(hosted_url_lookup_env, hosted_url_lookup_wire, app, monkeypatch):
     """SERVER_NAME is the one authority that may carry a port (a dev install on host:port)."""
     monkeypatch.setitem(app.config, 'SERVER_NAME', f'{SERVER}:8443')
     clear_domain_cache()
     set_setting('use_allowlist', True)
     try:
         assert validate_remote_actor(f'https://{SERVER}:8443/u/alice') is True
-        assert search_for_community(f'!den@{SERVER}:8443') is env.first_den
+        assert search_for_community(f'!den@{SERVER}:8443') is hosted_url_lookup_env.first_den
         for other in (SERVER, f'{SERVER}:443', f'{SERVER}:9000'):
             assert validate_remote_actor(f'https://{other}/u/alice') is False, other
             assert search_for_community(f'!den@{other}') is None, other
-        assert wire.calls.call_count == 0
+        assert hosted_url_lookup_wire.calls.call_count == 0
     finally:
         clear_domain_cache()
 
 
 @pytest.mark.parametrize('host', [SHOP, SERVER])
-def test_a_banned_own_host_still_resolves_in_every_gate(env, wire, host):
+def test_a_banned_own_host_still_resolves_in_every_gate(hosted_url_lookup_env, hosted_url_lookup_wire, host):
     db.session.add(BannedInstances(domain=host))
     db.session.commit()
-    den = env.shop_den if host == SHOP else env.first_den
+    den = hosted_url_lookup_env.shop_den if host == SHOP else hosted_url_lookup_env.first_den
     assert validate_remote_actor(f'https://{host}/u/alice') is True
     assert search_for_community(f'!den@{host}') is den
-    assert search_for_feed(f'~reads@{host}', signed_in=True) is (env.shop_feed if host == SHOP else env.feed)
-    assert wire.calls.call_count == 0
+    assert search_for_feed(f'~reads@{host}', signed_in=True) is (hosted_url_lookup_env.shop_feed if host == SHOP else hosted_url_lookup_env.feed)
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
-def test_a_banned_remote_feed_host_is_still_refused(env, wire):
+def test_a_banned_remote_feed_host_is_still_refused(hosted_url_lookup_env, hosted_url_lookup_wire):
     db.session.add(BannedInstances(domain='peer.example', reason='spam'))
     db.session.commit()
     with pytest.raises(Exception, match='peer.example is blocked. Reason: spam'):
         search_for_feed('~x@peer.example', signed_in=True)
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0
 
 
 @pytest.mark.parametrize('server', [f'{SHOP}#x', f'{SHOP}/x', f'{SHOP}?x', f'{SHOP}\\x', f'{SERVER}#x'])
-def test_a_handle_whose_server_is_no_authority_is_never_fetched(env, wire, server):
+def test_a_handle_whose_server_is_no_authority_is_never_fetched(hosted_url_lookup_env, hosted_url_lookup_wire, server):
     """httpx reads https://shop.example#x/.well-known/webfinger as a GET of shop.example's root, which no discovery
     guard knows as WebFinger: a server with a path, query or fragment character names no host, and is not looked up."""
     assert search_for_community(f'!den@{server}') is None
     assert search_for_feed(f'~reads@{server}', signed_in=True) is None
     assert find_actor_or_create(f'@alice@{server}') is None
-    assert wire.calls.call_count == 0
+    assert hosted_url_lookup_wire.calls.call_count == 0

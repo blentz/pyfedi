@@ -18,7 +18,7 @@ from app.activitypub.util import actor_json_to_model, find_instance_id, new_inst
 from app.models import Community, Instance, User
 from tests.factories import make_instance, peer_actor_json
 from tests.test_ap_actor_json_feed import _owned_feed, _peer_with_one_owner
-from tests.test_ap_new_instance_profile import DOMAIN, NODEINFO, answer, env, only_the_actor, reload  # noqa: F401 (env)
+from tests.test_ap_new_instance_profile import DOMAIN, NODEINFO, answer, only_the_actor, reload
 from tests.test_ap_refresh_profiles import PEER, _feed_document, _group_document, _person_document, \
     _remote_community, _remote_feed, _remote_user
 
@@ -176,21 +176,21 @@ LEARNED = f'https://{DOMAIN}/f/inbox'
     httpx.Response(200, html='<html>Pixelfed</html>'),
     httpx.Response(200, json={'type': 'Application', 'inbox': f'https://{DOMAIN}/i/actor/inbox'}),
 ], ids=['html-homepage', 'application-actor'])
-def test_the_instance_profile_lookup_keeps_a_learned_shared_inbox(env, root):
-    _learned(env)
-    answer(env, actor=root)
+def test_the_instance_profile_lookup_keeps_a_learned_shared_inbox(ap_new_instance_profile_env, root):
+    _learned(ap_new_instance_profile_env)
+    answer(ap_new_instance_profile_env, actor=root)
 
-    new_instance_profile_task(env.instance.id)
+    new_instance_profile_task(ap_new_instance_profile_env.instance.id)
 
-    assert reload(env).inbox == LEARNED
+    assert reload(ap_new_instance_profile_env).inbox == LEARNED
 
 
 @pytest.mark.parametrize('status', [404, 406])
-def test_the_instance_profile_lookup_keeps_it_when_the_root_says_nothing(env, status):
-    _learned(env)
-    only_the_actor(env, httpx.Response(status))
-    env.http.get(NODEINFO).mock(return_value=httpx.Response(404))
+def test_the_instance_profile_lookup_keeps_it_when_the_root_says_nothing(ap_new_instance_profile_env, status):
+    _learned(ap_new_instance_profile_env)
+    only_the_actor(ap_new_instance_profile_env, httpx.Response(status))
+    ap_new_instance_profile_env.http.get(NODEINFO).mock(return_value=httpx.Response(404))
 
-    new_instance_profile_task(env.instance.id)
+    new_instance_profile_task(ap_new_instance_profile_env.instance.id)
 
-    assert reload(env).inbox == LEARNED
+    assert reload(ap_new_instance_profile_env).inbox == LEARNED
