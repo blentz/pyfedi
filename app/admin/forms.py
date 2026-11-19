@@ -7,10 +7,10 @@ from flask_wtf.file import FileAllowed
 from slugify import slugify
 from sqlalchemy import func
 from wtforms import StringField, PasswordField, SubmitField, EmailField, BooleanField, TextAreaField, \
-    SelectField, FileField, IntegerField, RadioField, DateField, DecimalField
+    SelectField, FileField, IntegerField, RadioField, DateField, DecimalField, HiddenField
 from wtforms.fields.choices import SelectMultipleField
 from wtforms.validators import ValidationError, DataRequired, EqualTo, InputRequired, Length, \
-    NumberRange, Optional, Regexp
+    NumberRange, Optional, Regexp, AnyOf
 from flask_babel import _, lazy_gettext as _l
 
 from app.project_links import MAX_LENGTH, UPSTREAM_BUG_REPORT, UPSTREAM_GET_INVOLVED, UPSTREAM_SOURCE, is_web_url
@@ -776,7 +776,9 @@ _DOMAIN_CHARS = re.compile(r'[a-z0-9.-]+')
 class SiteDomainForm(FlaskForm):
     domain = StringField(_l('Domain'), validators=[DataRequired(), Length(max=255)],
                          description=_l('A host name only: no scheme, no port.'))
-    scheme = SelectField(_l('Scheme'), choices=select_choices([('https', 'https'), ('http', 'http')]), default='https')
+    # https only, not a choice: the web is https-only. An onion host is stored as http whatever this says (Tor
+    # encrypts it, and onion services have no public certificates), by the route that adds the row.
+    scheme = HiddenField(default='https', validators=[AnyOf(['https'])])
     federates = BooleanField(_l('Federates'), default=False,
                              description=_l('Fixed once the domain has accounts or communities.'))
     registration = SelectField(_l('Who may register'),

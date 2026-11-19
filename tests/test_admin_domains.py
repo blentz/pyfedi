@@ -1,4 +1,5 @@
 """Admin "Domains" section (spec 2026-10-17 §3.1, §3.2)."""
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -32,7 +33,7 @@ def _default_row():
 
 
 def _form(token, **overrides):
-    data = {'domain': 'abc.onion', 'scheme': 'http', 'federates': '', 'registration': 'closed',
+    data = {'domain': 'abc.onion', 'scheme': 'https', 'federates': '', 'registration': 'closed',
             'csrf_token': token, 'submit': 'Add'}
     data.update(overrides)
     return data
@@ -64,6 +65,32 @@ def test_add_domain(app):
     assert (row.is_onion, row.is_default, row.scheme, row.federates, row.registration) == \
            (True, False, 'http', False, 'closed')
     assert domain_for_host('abc.onion') is not None
+
+
+def test_the_form_offers_no_scheme_choice(app):
+    """https is the only scheme the form sends, as a hidden field: the web is https-only."""
+    client = app.test_client()
+    login(client, _admin())
+    page = client.get('/admin/domains').get_data(as_text=True)
+    assert not re.search(r'<select[^>]*name="scheme"', page)
+    tags = re.findall(r'<input[^>]*name="scheme"[^>]*>', page)
+    assert len(tags) == 1 and 'type="hidden"' in tags[0] and 'value="https"' in tags[0]
+
+
+def test_a_clearnet_domain_is_https(app):
+    client = app.test_client()
+    login(client, _admin())
+    client.post('/admin/domains', data=_form(csrf(app, client), domain='shop.example'))
+    assert db.session.query(SiteDomain).filter_by(domain='shop.example').one().scheme == 'https'
+
+
+def test_a_posted_http_scheme_is_refused(app):
+    """The hidden field cannot be edited back to http."""
+    client = app.test_client()
+    login(client, _admin())
+    response = client.post('/admin/domains', data=_form(csrf(app, client), domain='shop.example', scheme='http'))
+    assert response.status_code == 200
+    assert 'shop.example' not in _domains()
 
 
 def test_the_form_adds_a_second_federating_domain_with_its_keys_and_instance_row(app):

@@ -524,7 +524,8 @@ def admin_domains():
             implicit = default_domain()
             db.session.add(SiteDomain(domain=implicit.domain, scheme=implicit.scheme, federates=True,
                                       registration='anyone', is_default=True))
-        db.session.add(SiteDomain(domain=form.domain.data, scheme=form.scheme.data,
+        scheme = 'http' if form.domain.data.endswith('.onion') else form.scheme.data
+        db.session.add(SiteDomain(domain=form.domain.data, scheme=scheme,
                                   federates=form.federates.data, registration=form.registration.data,
                                   is_default=False))
         db.session.commit()

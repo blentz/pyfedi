@@ -1949,6 +1949,7 @@ is described in 2.3 to 2.5:
 | gpodder (W4) | `2026-11-12-gpodder-sync-design.md` | App passwords, devices, subscriptions that join communities, episode actions that mark posts read |
 | Sidebar | | Box order and hiding per site and domain (`5c424327`) |
 | Custom themes | `2026-11-18-custom-themes-design.md` | A domain's theme holders copy a shipped theme, rename it, edit its CSS, add images and fonts, preview it and retire it; it is offered in every theme picker on that domain only. Shipped themes stay read-only (`cfa0caf5`..`1d59b744`) |
+| Domain scheme | | Admin → Domains no longer offers http: a new domain is https (a hidden field, and nothing else is accepted); an onion host is stored as http, since Tor encrypts it |
 | Project links | | Source, bug-report and get-involved URLs; nodeinfo and Mastodon source (`b65b4fd6`) |
 | HLS | | Optional HLS copies, backfill and delete, PeerTube streaming playlists (`8e94a322`) |
 | PeerTube for P2Play | | My videos, video reports (`c9683362`) |
