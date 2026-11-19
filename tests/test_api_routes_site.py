@@ -140,6 +140,12 @@ class TestSearch:
         assert response.status_code == 200
         assert response.get_json() == {'result': []}
 
+    def test_suggesting_completions_without_a_query_is_refused_not_an_error(self, env):
+        # q was optional in the schema, so a request without it raised KeyError: an internal 500
+        response = env.client.get('/api/alpha/suggest_completion', headers=auth(env.reader))
+        assert response.status_code == 400
+        assert 'q' in str(response.get_json())
+
     def test_the_modlog(self, env):
         response = env.client.get('/api/alpha/modlog')
         assert response.status_code == 200

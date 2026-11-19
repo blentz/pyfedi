@@ -802,7 +802,7 @@ class GetFeedRequest(DefaultSchema):
 
 
 class GetSuggestCompletionRequest(DefaultSchema):
-    q = fields.String()
+    q = fields.String(required=True)   # fork: without it, get_suggestion raised KeyError (a 500)
 
 
 class GetSuggestCompletionResponse(DefaultSchema):
