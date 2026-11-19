@@ -6,6 +6,7 @@ Spec: docs/superpowers/specs/2026-11-19-plain-community-names-design.md
 import inspect
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 from flask import render_template_string
 from flask_login import login_user
 
@@ -59,9 +60,26 @@ def world(app):
     return reader
 
 
+class _Request:
+    """A request in its own app context, so the login it holds (flask_login keeps it on `g`) ends with it rather than
+    staying on the session-wide app context for later tests."""
+
+    def __init__(self, app):
+        self.app_ctx = app.app_context()
+        self.request_ctx = app.test_request_context('/')
+
+    def push(self):
+        self.app_ctx.push()
+        self.request_ctx.push()
+
+    def pop(self):
+        self.request_ctx.pop()
+        self.app_ctx.pop()
+
+
 def as_user(app, user):
     """A request context signed in as `user` (None: signed out)."""
-    ctx = app.test_request_context('/')
+    ctx = _Request(app)
     ctx.push()
     if user is not None:
         login_user(user)
@@ -325,6 +343,20 @@ class TestMentions:
         assert self.mentions(app, '<p>!ghosts@nowhere.example</p>') == \
             '<p><a href="/community/lookup/ghosts/nowhere.example">!ghosts</a></p>'
 
+    def test_lookups_stop_at_the_budget_and_repeats_are_free(self, app, world, monkeypatch):
+        """A comment full of distinct names costs at most MENTION_LOOKUPS lookups; a name seen before costs none."""
+        monkeypatch.setattr('app.plain_names.MENTION_LOOKUPS', 2)
+        make_community('memes')
+        remote_community('cats', 'lemmy.example')
+        ctx = as_user(app, None)
+        try:
+            html = plain_community_mentions('<p>!memes !memes !cats@lemmy.example !dogs !memes !birds@nowhere.example</p>')
+        finally:
+            ctx.pop()
+        assert html == ('<p><a href="/c/memes">!memes</a> <a href="/c/memes">!memes</a> '
+                        '<a href="/c/cats@lemmy.example">!cats</a> !dogs <a href="/c/memes">!memes</a> '
+                        '<a href="/community/lookup/birds/nowhere.example">!birds</a></p>')
+
     def test_code_is_left_alone(self, app, world):
         remote_community('memes', 'lemmy.example')
         html = '<code>!memes@lemmy.example</code>'
@@ -363,3 +395,17 @@ class TestCommunityPage:
 def test_community_display_name_reads_the_flag_plain_names_sets():
     """models.py cannot import app.plain_names (a cycle), so it names the flag itself: the two must agree."""
     assert f"'{HIDE_DOMAINS_FLAG}'" in inspect.getsource(Community.display_name)
+
+
+def test_a_page_renders_in_todays_view_when_the_reader_cannot_be_read(app, world, monkeypatch):
+    """An error page after a failed transaction: reading the reader's setting fails, and the page still renders."""
+    def broken():
+        raise SQLAlchemyError('the transaction is gone')
+
+    remote = remote_community('memes', 'lemmy.example')
+    monkeypatch.setattr('app.plain_names.instance_details_shown', broken)
+    ctx = as_user(app, None)
+    try:
+        assert render_template_string('{{ c.display_name() }}', c=remote) == 'Memes@lemmy.example'
+    finally:
+        ctx.pop()

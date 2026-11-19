@@ -337,7 +337,7 @@ class TestPostLinks:
 
         live.viewer.show_instance_details = True
         db.session.commit()
-        with app.test_request_context():
+        with app.app_context(), app.test_request_context():   # its own app context: the login ends with it
             login_user(live.viewer)
             rendered = render_template_string(
                 "{% from 'post/post_teaser/_macros.html' import render_title %}"

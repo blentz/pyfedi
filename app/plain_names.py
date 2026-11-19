@@ -14,6 +14,7 @@ from flask import before_render_template, g, has_request_context, template_rende
 from flask_login import current_user
 from markupsafe import escape
 from sqlalchemy import desc, func
+from sqlalchemy.exc import SQLAlchemyError
 
 from app import utils   # its names are read at call time: it imports this module too
 from app.local_names import local_clause, named_by_actor
@@ -24,6 +25,9 @@ from app.models import Community, CommunityMember
 _NOT_WEB_VIEW_TEMPLATES = ('email/',)
 # How many same-named remote communities `resolve_community_name` looks through for one the reader may see.
 _ANY_CANDIDATES = 20
+# How many names and handles mentions in one request may look up beyond those already looked up: a comment full of
+# distinct `!names` must not cost a query each. Past it a handle links to the lookup page and a bare name stays text.
+MENTION_LOOKUPS = 100
 
 
 def instance_details_shown() -> bool:
@@ -51,7 +55,12 @@ def _count(template, step: int) -> None:
     counter = '_plain_render_paused' if (template.name or '').startswith(_NOT_WEB_VIEW_TEMPLATES) \
         else '_plain_render_depth'
     setattr(g, counter, max(g.get(counter, 0) + step, 0))
-    hide = bool(g.get('_plain_render_depth')) and not g.get('_plain_render_paused') and not instance_details_shown()
+    hide = bool(g.get('_plain_render_depth')) and not g.get('_plain_render_paused')
+    if hide:
+        try:
+            hide = not instance_details_shown()
+        except SQLAlchemyError:   # an error page after a failed transaction still renders, in today's view
+            hide = False
     setattr(g, HIDE_DOMAINS_FLAG, hide)
 
 
@@ -255,8 +264,8 @@ def _text_mention(match) -> str:
         known = _known_handle(name, domain[1:])
         href = f'/c/{known}' if known else f'/community/lookup/{name}/{domain[1:]}'
         return f'<a href="{escape(href)}">{escape("!" + name)}</a>'
-    if resolve_community_name(name) is None:
-        return match.group(0)   # an exclamation, not a mention
+    if not _mention_lookup_allowed(name.lower()) or resolve_community_name(name) is None:
+        return match.group(0)   # an exclamation, not a mention (or past the lookup budget)
     return f'<a href="/c/{escape(name.lower())}">{escape("!" + name)}</a>'
 
 
@@ -270,12 +279,28 @@ def _link_mention(match) -> str:
 
 def _known_handle(name: str, host: str) -> str | None:
     """The /c/ path of the community `name@host` names exactly (a hosted domain's own, or the remote one), else
-    None. Never resolved by name alone: a handle means that community."""
-    community = Community.query.filter(named_by_actor(Community, f'{name}@{host}'.lower()),
-                                       Community.banned.is_(False)).first()
-    if community is None or hidden_here(community):
-        return None
-    return community.link()
+    None. Never resolved by name alone: a handle means that community. Memoized for the request, and None without a
+    query once the request's mention lookups are spent."""
+    handle = f'{name}@{host}'.lower()
+    memo = g.setdefault('_plain_handles', {})
+    if handle not in memo:
+        if not _mention_lookup_allowed(handle):
+            return None
+        community = Community.query.filter(named_by_actor(Community, handle), Community.banned.is_(False)).first()
+        memo[handle] = None if community is None or hidden_here(community) else community.link()
+    return memo[handle]
+
+
+def _mention_lookup_allowed(key: str) -> bool:
+    """Whether a mention may look up `key` (a bare name or a handle): always if it was looked up already this request,
+    else while MENTION_LOOKUPS lasts."""
+    if key in g.get('_plain_resolved', {}) or key in g.get('_plain_handles', {}):
+        return True
+    spent = g.get('_plain_mention_lookups', 0)
+    if spent >= MENTION_LOOKUPS:
+        return False
+    g._plain_mention_lookups = spent + 1
+    return True
 
 
 def community_links(html: str, server_name_override: str | None = None) -> str:
