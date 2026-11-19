@@ -1,6 +1,6 @@
 # Custom themes, phase 6: import, export and theme code: design
 
-Status: APPROVED 2026-11-18 (TC1-TC4 below; CT1-CT9 of the phase 1-5 spec still hold, except where TC rulings extend
+Status: BUILT 2026-11-18 (TC1-TC4 below; CT1-CT9 of the phase 1-5 spec still hold, except where TC rulings extend
 CT2).
 
 Date: 2026-11-18. Builds on `2026-11-18-custom-themes-design.md` (its §3.10 outlined this phase) and RBAC
@@ -69,14 +69,16 @@ Overrides are loaded through a database loader registered on the app's Jinja loa
 A changed theme gets new template names, so no worker can serve a stale compiled template, and old entries age out of
 Jinja's cache.
 
-Inside an override, `{% extends %}`, `{% include %}` and `{% import %}` of a template name resolve the same way:
-the same theme's override if it has one, else the base theme's, else the app's. (An environment `join_path` that maps
-names from a `custom_theme/…` parent; names from any other parent are untouched.)
+`{% extends %}`, `{% include %}` and `{% import %}` of a plain template name resolve the same way, in an override
+or in any app template the page renders: the code theme's override if it has one, else (inside an override) the base
+theme's, else the app's. So an override of a partial such as `_home_nav.html` reaches every page that includes it.
+(An environment `join_path`, consulting the request's code theme; names starting `themes/` are never changed.)
 
-**A broken override does not take the domain down.** If rendering an override raises, the request renders with
-step 2/3 instead, the exception is logged with the theme id and template name, and the theme holders see a flash on
-the theme's admin page the next time they open it ("Template X failed: …"). A preview (phase 1-5 §3.5) is the way to
-try a code theme before it is the default.
+**A broken override does not take the domain down.** If a page in a code theme raises, it is rendered again without
+theme code. Only when that second render succeeds is the failure the theme's: it is logged with the theme id and the
+page's template, and kept on the theme's row (in a transaction of its own, at most once a minute) for a week, shown
+on the theme's admin page. An error that happens without theme code too is the app's, raised as usual. A preview
+(phase 1-5 §3.5) is the way to try a code theme before it is the default.
 
 **Script.** `base.html` includes, with the page's nonce, the custom theme's script when it has one
 (`/theme/<id>/scripts.js?v=<version>`, served like the stylesheet: long-cached with a matching `v`, open through the

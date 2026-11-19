@@ -336,6 +336,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 47 | `f2b6d8a4c9e1` project_links | Adds `source_url`, `bug_report_url` and `get_involved_url` to `site`, each empty by default, which means upstream PieFed's. (`b65b4fd6`) | No |
 | 48 | `d7a2c5e9f3b1` user_also_known_as | Adds `also_known_as` (account aliases, NULL by default) to `user`. | No |
 | 49 | `e8b3d6a1f4c7` custom_themes | Creates `custom_theme` (a domain's own copy of a theme: name, base theme, CSS, retired) and `custom_theme_file` (its images and fonts). Both go with their domain. (`cfa0caf5`) | No |
+| 50 | `f1c7a3e9d2b4` theme_code | Creates `custom_theme_template` (a custom theme's override of one app template) and adds `script`, `code_failed_template`, `code_failure` and `code_failed_at` to `custom_theme`. (`a21ccbca`) | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -360,6 +361,7 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `cross_origin_delete_delay` (admin Federation page) | 90 seconds | How long a moderator's Announced Delete of a post from another server waits before it is applied, unless the origin confirms the deletion first (`59a6cbec`). |
 | `relay_retention_days` (admin Relays page) | 7 | Relayed posts that nobody here engaged with are purged after this many days (`18ee6657`). |
 | `CUSTOM_THEME_MAX_FILE_BYTES`, `CUSTOM_THEME_MAX_BYTES`, `CUSTOM_THEME_MAX_FILES`, `CUSTOM_THEME_MAX_CSS_BYTES` | 2 MB, 10 MB, 50, 512 KB | Limits on a custom theme: each uploaded file, all of a theme's files together, how many files, and its stylesheet. Theme files are stored under `app/static/media/themes/`, with the other local media, so a backup of the media directory covers them. (`92f08764`, `b2d6c651`) |
+| `CUSTOM_THEME_MAX_TEMPLATES`, `CUSTOM_THEME_MAX_TEMPLATE_BYTES`, `CUSTOM_THEME_MAX_SCRIPT_BYTES`, `CUSTOM_THEME_MAX_ARCHIVE_BYTES` | 100, 256 KB, 512 KB, 12 MB | Limits on theme code and archives: how many templates a theme overrides, each template, its script, and an uploaded archive. |
 | `discovery_sync_per_host` (admin Discovery tab) | 0 (off) | How many of each host's top PeerTube channels and Castopod podcasts the instance actor follows and polls. Proactive sync does nothing until it is set (`cdc0ab1c`, `819fb1b4`). |
 | `discovery_external_search` (admin Discovery tab) | on | Lets search include PeerTube videos from the wider network through SepiaSearch. Each viewer must still tick the option (`35b61d6c`). |
 | `remote_image_cache_days` (admin Misc page) | 30 | **Now enforced.** Local copies of a remote post's images are deleted once the post arrived this many days ago, and pages load the image from its origin instead. 0 or empty keeps them forever. The column existed before but nothing read it, so an instance holding the old default of 30 starts evicting once `expire_old_media.sh` runs (see 2.2.1). (`f2182a54`) |
@@ -1949,6 +1951,7 @@ is described in 2.3 to 2.5:
 | gpodder (W4) | `2026-11-12-gpodder-sync-design.md` | App passwords, devices, subscriptions that join communities, episode actions that mark posts read |
 | Sidebar | | Box order and hiding per site and domain (`5c424327`) |
 | Custom themes | `2026-11-18-custom-themes-design.md` | A domain's theme holders copy a shipped theme, rename it, edit its CSS, add images and fonts, preview it and retire it; it is offered in every theme picker on that domain only. Shipped themes stay read-only (`cfa0caf5`..`1d59b744`) |
+| Theme code | `2026-11-18-theme-code-import-export-design.md` | Export a custom theme as one zip and import one; holders of the new `manage theme code` permission (domain-scoped, admin-equivalent) give a theme Jinja template overrides of any app template and its own `scripts.js`. A page that fails in theme code renders again without it. Archives are checked whole before anything is stored, and fuzzed (`theme_archive`) (`a21ccbca`..`e553d453`) |
 | Domain scheme | | Admin → Domains no longer offers http: a new domain is https (a hidden field, and nothing else is accepted); an onion host is stored as http, since Tor encrypts it |
 | Project links | | Source, bug-report and get-involved URLs; nodeinfo and Mastodon source (`b65b4fd6`) |
 | HLS | | Optional HLS copies, backfill and delete, PeerTube streaming playlists (`8e94a322`) |
