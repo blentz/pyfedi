@@ -9,7 +9,7 @@ from app import db
 from app.models import Instance, Referral, Role, Site, SiteDomain, User, UserRegistration, role_grant
 from app.oauth_server import admin_scopes
 from app.referral import (REFERRAL_MODE, derive_code, generate_code, may_generate, open_registrations, record_referral,
-                          referral_link, referral_namespace, referral_qr_svg, referrer_for, remaining_signups)
+                          referral_domain, referral_link, referral_namespace, referral_qr_svg, referrer_for, remaining_signups)
 from app.storefront import clear_domain_cache, default_domain, domain_by_id, registration_mode_on
 from app.utils import get_setting, set_setting
 from tests.factories import staff_role, make_instance, make_user
@@ -248,7 +248,7 @@ def test_record_referral_stores_the_code_used(people):
 
 
 # --------------------------------------------------------------------------
-# RC9 / RC10: the referrer's home domain
+# RC9 / RC10 (2026-11-19): the domain the code is used on
 # --------------------------------------------------------------------------
 
 def _shop(registration='anyone'):
@@ -259,22 +259,71 @@ def _shop(registration='anyone'):
     return row
 
 
-def test_the_link_uses_the_referrers_home_domain(people):
+def test_the_link_uses_the_domain_it_is_made_on(people):
+    """RC9: the link registers people where the member is browsing, not only on the member's home domain."""
     shop = _shop()
-    admin = people['admin']
-    admin.site_domain_id = shop.id
+    admin = people['admin']   # a default-domain member
     code = _code(admin)
-    with patch('app.referral.url_for', return_value=f'/auth/register?ref={code}'):
+    with patch('app.referral.url_for', return_value=f'/auth/register?ref={code}'), \
+            patch('app.referral.current_storefront', return_value=domain_by_id(shop.id)):
         assert referral_link(admin) == f'https://shop.example/auth/register?ref={code}'
+    with patch('app.referral.url_for', return_value=f'/auth/register?ref={code}'):
+        assert referral_link(admin) == f'https://{SERVER}/auth/register?ref={code}'
 
 
-def test_a_code_works_only_on_its_referrers_domain(people):
+def test_the_link_falls_back_to_home_where_codes_are_not_taken(people):
+    """A domain that refuses codes (RC11a) links the member's home domain instead."""
+    shop = _shop('closed')
+    shop.referral_codes = False
+    db.session.commit()
+    clear_domain_cache()
+    admin = people['admin']
+    code = _code(admin)
+    with patch('app.referral.url_for', return_value=f'/auth/register?ref={code}'), \
+            patch('app.referral.current_storefront', return_value=domain_by_id(shop.id)):
+        assert referral_domain(admin) == default_domain()
+        assert referral_link(admin) == f'https://{SERVER}/auth/register?ref={code}'
+
+
+def test_a_code_works_on_any_domain(people):
+    """RC10: a code is not tied to its referrer's home domain."""
     shop = _shop()
     admin = people['admin']
     admin.site_domain_id = shop.id
     code = _code(admin)
-    assert referrer_for(code, default_domain()) is None
+    assert referrer_for(code, default_domain()).id == admin.id
     assert referrer_for(code, domain_by_id(shop.id)).id == admin.id
+
+
+def test_a_default_domain_code_registers_on_the_domain_used(app, people, no_captcha):
+    """RC10: the account belongs to the domain the code was used on, wherever its referrer lives."""
+    shop = _shop('closed')
+    admin = people['admin']   # home: the default domain
+    code = _code(admin)
+    data = {'user_name': 'shopper', 'hp_field': '', 'real_email': 'shopper@example.com',
+            'password': 'a-good-password', 'password2': 'a-good-password', 'timezone': 'UTC', 'question': code,
+            'submit': 'Register'}
+    with patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'):
+        app.test_client().post('/auth/register', data=data, base_url='https://shop.example')
+    user = User.query.filter_by(user_name='shopper').one()
+    assert user.site_domain_id == shop.id
+    assert Referral.query.filter_by(referred_id=user.id).one().referrer_id == admin.id
+
+
+def test_the_settings_page_names_the_domain_it_registers_on(app, people):
+    _shop()
+    admin = people['admin']
+    code = _code(admin)
+    client = app.test_client()
+    login(client, admin)
+    with client.session_transaction(base_url='https://shop.example') as sess:   # signed in there as well (name@host)
+        sess['_user_id'], sess['_fresh'] = str(admin.id), True
+    text = ' '.join(client.get('/user/settings/referrals', base_url='https://shop.example').get_data(
+        as_text=True).split())
+    assert 'get an account on shop.example.' in text
+    assert f'https://shop.example/auth/register?ref={code}' in text
+    text = ' '.join(client.get('/user/settings/referrals').get_data(as_text=True).split())
+    assert f'get an account on {SERVER}.' in text
 
 
 def test_the_qr_is_an_svg_of_the_link():

@@ -15,8 +15,10 @@ from sqlalchemy import func
 
 from app import db
 from app.models import PromoCode, PromoCodeUse, Referral, User, utcnow
-from app.payments.gifts import GiftUnavailable, referral_benefit, referral_gift_code, start_gift, usable
-from app.storefront import REFERRAL_MODE, DomainInfo, domain_base_url, open_registrations, paid_registration  # noqa: F401 (re-exported)
+from app.payments.gifts import GiftUnavailable, default_referral_benefit, referral_benefit, referral_gift_code, \
+    start_gift, usable
+from app.storefront import REFERRAL_MODE, DomainInfo, current_storefront, domain_base_url, open_registrations, \
+    paid_registration, signup_open_to  # noqa: F401 (re-exported)
 from app.utils import get_setting
 
 from app.permissions import user_access
@@ -112,9 +114,18 @@ def referrer_for(text: str | None, storefront: DomainInfo) -> User | None:
     user = User.query.filter(User.referral_code == code).with_for_update(of=User).first()
     if user is None or not may_generate(user):
         return None
-    if user.home_domain().id != storefront.id:   # RC10: a code works on its referrer's home storefront only
-        return None
+    # RC10 (2026-11-19): a code works on any storefront that takes one, and the account is made there. Whether this
+    # one takes codes at all (RC11a, a paid domain other than the default) is the caller's gate, as it is for the form.
     return user if under_caps(user) else None
+
+
+def benefit_on(referrer: User, code: PromoCode, domain: DomainInfo):
+    """What `referrer`'s code row gives someone joining `domain` (RC10, 2026-11-19): its own gift or discount on the
+    referrer's home domain, where it was chosen from that domain's tiers; on any other, the site's default there,
+    worked out without being kept, so the code's own choice survives a use elsewhere."""
+    if domain.id == referrer.home_domain().id:
+        return referral_benefit(code, domain)
+    return default_referral_benefit(domain)
 
 
 def record_referral(referrer: User, referred: User) -> Referral:
@@ -126,7 +137,7 @@ def record_referral(referrer: User, referred: User) -> Referral:
     code = referral_gift_code(referrer)
     if code is None or not paid_registration(referred.home_domain()):
         return row
-    benefit = referral_benefit(code, referrer.home_domain())
+    benefit = benefit_on(referrer, code, referred.home_domain())
     # Nothing to give (X2), or a gift or a discount it can no longer give, refuses the account rather than letting it
     # in for free, which complimentary membership would then make free for good (R5, X2; audit
     # 2026-11-16): the caller rolls back, as for a gift code typed at registration
@@ -141,25 +152,40 @@ def record_referral(referrer: User, referred: User) -> Referral:
     return row
 
 
-def referral_discount(referrer: User) -> PromoCode | None:
+def referral_discount(referrer: User, domain: DomainInfo) -> PromoCode | None:
     """The discount code `referrer`'s referral code gives, if it gives one (R1, R4). The discount's own limits are the
     caller's to ask, since one past them refuses the registration rather than admitting for free (R5). The referral
     code's own (its switch, last day and uses) are asked here: past them it gives no discount, as it would give no
     gift, and the caller refuses. Under referrer_for's lock on the referrer, so its uses can't be overtaken."""
     code = referral_gift_code(referrer)
-    benefit = referral_benefit(code, referrer.home_domain()) if code is not None else None
+    benefit = benefit_on(referrer, code, domain) if code is not None else None
     return benefit.discount if benefit is not None else None
 
 
-def referral_discount_refused(referrer: User) -> bool:
-    """Whether `referrer`'s referral code gives a discount but is past its own limits (security review 2026-11-16)."""
+def referral_discount_refused(referrer: User, domain: DomainInfo) -> bool:
+    """Whether `referrer`'s referral code gives a discount on `domain` but is past its own limits (security review
+    2026-11-16)."""
     code = referral_gift_code(referrer)
-    return code is not None and referral_discount(referrer) is not None and not usable(code)
+    return code is not None and referral_discount(referrer, domain) is not None and not usable(code)
 
 
-def referral_link(user: User) -> str:
-    """RC9: the registration URL on the referrer's own home storefront."""
-    return domain_base_url(user.home_domain()) + url_for('auth.register', ref=user.referral_code)
+def takes_referral_codes(storefront: DomainInfo) -> bool:
+    """Whether a referral code can be used to join on `storefront`: one whose signup a code opens (RC11, RC11a), and
+    of the paid domains only the default, the one whose /register takes a code (G4)."""
+    return signup_open_to(storefront, True) and (storefront.is_default or not paid_registration(storefront))
+
+
+def referral_domain(user: User) -> DomainInfo:
+    """RC9 (2026-11-19): the storefront `user`'s link registers people on: the one this request came in on, which is
+    where a code makes the account (RC10), when it takes codes; else the referrer's home storefront."""
+    here = current_storefront()
+    return here if takes_referral_codes(here) else user.home_domain()
+
+
+def referral_link(user: User, domain: DomainInfo | None = None) -> str:
+    """RC9: the registration URL on `domain` (by default `referral_domain(user)`)."""
+    domain = domain or referral_domain(user)
+    return domain_base_url(domain) + url_for('auth.register', ref=user.referral_code)
 
 
 def referral_qr_svg(link: str) -> str:

@@ -19,7 +19,7 @@ from app.storefront import clear_domain_cache, default_domain, open_registration
     public_registration_open, registration_mode_on
 from app.payments.adapters.base import ProviderError
 from app.payments.registration import registration_checkout, remove_unpaid_registrations
-from app.referral import GENERATORS_SETTING, generate_code
+from app.referral import GENERATORS_SETTING, benefit_on, generate_code
 from app.utils import get_setting, set_setting
 from tests.factories import grant_permission, make_user, pay_link
 
@@ -867,6 +867,32 @@ class TestReferralDefault:
         assert referral_benefit(fresh_row(referrer), env.home) is None
 
 
+class TestReferralBenefitAwayFromHome:
+    """RC10 (2026-11-19): a code is used on any domain. Its own gift or discount was chosen from its home domain's
+    tiers, so elsewhere it gives the site's default for that domain, and keeps its own."""
+
+    def test_another_domains_member_gives_the_default_here_and_keeps_its_own(self, env, referrer):
+        shop = SiteDomain(domain='shop.example', is_default=False, registration='anyone')
+        db.session.add(shop)
+        db.session.commit()
+        clear_domain_cache()
+        referrer.site_domain_id = shop.id
+        row = row_of(referrer)
+        row.benefit, row.offer_id, row.periods = 'gift', env.duke.id, 12
+        db.session.commit()
+        benefit = benefit_on(referrer, row, default_domain())
+        assert (benefit.offer.id, benefit.periods) == (env.knight.id, 1)   # the default here
+        db.session.refresh(row)
+        assert (row.benefit, row.offer_id, row.periods) == ('gift', env.duke.id, 12)   # its own, untouched
+
+    def test_at_home_it_gives_its_own(self, env, referrer):
+        row = row_of(referrer)
+        row.benefit, row.offer_id, row.periods = 'gift', env.duke.id, 12
+        db.session.commit()
+        benefit = benefit_on(referrer, row, default_domain())
+        assert (benefit.offer.id, benefit.periods) == (env.duke.id, 12)
+
+
 class TestReferralCodesOwn:
     def test_a_gift_of_its_own(self, env, referrer):
         row = row_of(referrer)
@@ -1195,7 +1221,7 @@ class TestTheReferralPageSaysWhatTheCodeGives:
         assert '1 month of Furcas, free' in self.page(env, referrer)
 
     def test_nothing_to_give_says_it_cannot_be_used(self, env, referrer):
-        with patch('app.user.referrals.referral_benefit', return_value=None):
+        with patch('app.user.referrals.benefit_on', return_value=None):
             body = self.page(env, referrer)
         assert 'Your code cannot be used to join at the moment' in body
 

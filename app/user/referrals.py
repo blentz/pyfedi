@@ -6,12 +6,12 @@ from flask_login import current_user
 from app import db
 from app.models import Offer, PromoCode, PromoCodeUse
 from app.payments.discounts import DISCOUNT_KINDS, usable as discount_usable
-from app.payments.gifts import Benefit, default_referral_benefit, referral_benefit, referral_gift_code, \
+from app.payments.gifts import Benefit, default_referral_benefit, referral_gift_code, \
     usable as gift_usable
 from app.payments.offers import money, period_text
 from app.permissions import user_access
-from app.referral import (assigned_codes, caps, generate_code, lifetime_referrals, referral_link,
-                          referral_page_available, referral_qr_png, referral_qr_svg, referrals_available,
+from app.referral import (assigned_codes, benefit_on, caps, generate_code, lifetime_referrals, referral_domain,
+                          referral_link, referral_page_available, referral_qr_png, referral_qr_svg, referrals_available,
                           remaining_signups, uses_of_current_code)
 from app.storefront import default_domain, domain_base_url, paid_registration
 from app.user import bp
@@ -33,17 +33,19 @@ def user_referrals():
         db.session.commit()
         return render_template('user/referrals.html', title=_('Referral code'), user=current_user, own=False,
                                assigned=assigned)
-    link = referral_link(current_user) if current_user.referral_code else None
-    home = current_user.home_domain()
-    charges = paid_registration(home)
+    # The domain the link registers people on: this one, where a code makes the account (RC9, RC10 2026-11-19)
+    domain = referral_domain(current_user)
+    link = referral_link(current_user, domain) if current_user.referral_code else None
+    charges = paid_registration(domain)
     benefit = None
-    if charges:   # what joining with it gives: its own gift or discount, or a new code's (plan 2026-11-16 X1)
+    if charges:   # what joining there with it gives: its own gift or discount, or a new code's (plan 2026-11-16 X1)
         row = referral_gift_code(current_user)
-        benefit = referral_benefit(row, home) if row is not None else default_referral_benefit(home)
+        benefit = benefit_on(current_user, row, domain) if row is not None else default_referral_benefit(domain)
         db.session.commit()
     per_code, per_user = caps()
     code_left, lifetime_left = remaining_signups(current_user)
     return render_template('user/referrals.html', title=_('Referral code'), user=current_user, own=True, link=link,
+                           domain=domain.domain,
                            assigned=assigned,
                            qr_svg=referral_qr_svg(link) if link else None,
                            uses=uses_of_current_code(current_user), lifetime=lifetime_referrals(current_user),

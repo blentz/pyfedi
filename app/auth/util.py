@@ -272,12 +272,14 @@ def register_on_paid_domain(form):
                 if referral:
                     # A referral code that gives a discount admits a paying account with it held (plan 2026-11-16 R4,
                     # R5); any other goes the referral path: free, with its gift, or refused if the code is wrong
-                    referrer = referrer_for(form.question.data, current_storefront())
-                    discount = referral_discount(referrer) if referrer is not None else None
+                    here = current_storefront()
+                    referrer = referrer_for(form.question.data, here)
+                    discount = referral_discount(referrer, here) if referrer is not None else None
                     if discount is not None:
                         chosen = registration_offer(form.tier.data) if form.tier.data else offer
                         if chosen.id == (form.tier.data or offer.id) and discount_usable(discount) \
-                                and not referral_discount_refused(referrer) and discounted(discount, chosen) is not None:
+                                and not referral_discount_refused(referrer, here) \
+                                and discounted(discount, chosen) is not None:
                             return process_registration_form(form, paid=True, tier=chosen, discount=discount,
                                                              referrer=referrer)
                         db.session.rollback()   # referrer_for's row lock
