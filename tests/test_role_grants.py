@@ -20,7 +20,7 @@ from app.roles import STAFF_PERMISSIONS, seed_default_roles
 from app.utils import roles_with, user_access
 from tests.factories import (admin_role, grant_permission, grant_role, make_community, make_instance, make_post,
                              make_user)
-from tests.test_branding import load_migration
+from tests.test_branding import load_migration, restore_registration_check
 from tests.test_role_permissions import csrf
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -66,6 +66,7 @@ def _migrate(old_shape):
         old_shape()
         migration.upgrade()
         later.upgrade()
+        restore_registration_check()
         tiers.upgrade()
 
 
@@ -166,6 +167,7 @@ def test_the_downgrade_keeps_instance_wide_grants_and_gives_admin_its_rows_back(
             assert 'change user roles' in admin_rows and 'ban users' in admin_rows
             migration.upgrade()
             later.upgrade()
+            restore_registration_check()
             tiers.upgrade()
         db.session.commit()
     finally:

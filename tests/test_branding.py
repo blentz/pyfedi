@@ -143,6 +143,15 @@ def load_migration(pattern):
     return migration
 
 
+def restore_registration_check():
+    """Put back site_domain's registration check as the current schema has it. Replaying d6a1f4c8e2b3's upgrade (as
+    the role tests do) remakes it as it was then, without 'paid', which a later revision added: left so, a later test
+    on the same database that makes a paid domain fails on the constraint. Call inside the replay's Operations context."""
+    from alembic import op
+    op.drop_constraint('ck_site_domain_registration', 'site_domain', type_='check')
+    op.create_check_constraint('ck_site_domain_registration', 'site_domain', "registration IN ('anyone','closed','paid')")
+
+
 def test_migration_creates_and_drops_the_table(db_session):
     """The table, then its icon columns (Task 5), then its dark logo and sidebar order columns, each dropped and made again in revision
     order: the database is left as `flask db upgrade` made it."""

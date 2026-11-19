@@ -14,7 +14,7 @@ from app.permissions import (BY_NAME, CATALOGUE, INSTANCE_ONLY_PERMISSIONS, ROLE
 from app.roles import seed_default_roles
 from app.utils import roles_with
 from tests.factories import grant_role, make_instance, make_user
-from tests.test_branding import load_migration
+from tests.test_branding import load_migration, restore_registration_check
 from tests.test_role_permissions import login
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -95,6 +95,7 @@ def _migrate(old_shape):
         ids = old_shape()
         migration.upgrade()
         later.upgrade()
+        restore_registration_check()
         latest.upgrade()
         tiers.upgrade()
     return ids
@@ -166,6 +167,7 @@ def test_the_downgrade_gives_back_administer_all_communities_and_drops_the_rest(
             assert _held(helpers_id) == set()
             migration.upgrade()
             later.upgrade()
+            restore_registration_check()
             tiers.upgrade()
         db.session.commit()
     finally:
@@ -218,6 +220,7 @@ def _downgrade_to_grant_scope(fill):
         migration.downgrade()
         fill()
         migration.upgrade()
+        restore_registration_check()
 
 
 def _limits(role_id, permission):
