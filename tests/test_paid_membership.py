@@ -893,6 +893,26 @@ class TestReferralBenefitAwayFromHome:
         assert (benefit.offer.id, benefit.periods) == (env.duke.id, 12)
 
 
+class TestTheApiCannotTakeADiscount:
+    """Security review 2026-11-19: the API's signup has no checkout, so a referral code that gives a discount, which
+    the web form sends to payment, must not make a free account there."""
+
+    def test_a_discount_code_is_refused(self, env, referrer, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
+        discount = a_discount(env)
+        row = row_of(referrer)
+        row.benefit, row.discount_code_id = 'discount', discount.id
+        db.session.commit()
+        body = {'username': 'freeloader', 'email': 'f@example.com', 'password': 'a-good-password',
+                'password_verify': 'a-good-password', 'answer': referrer.referral_code}
+        with patch('app.auth.util.send_email_verification'), patch('app.auth.util.sync_user_with_ldap'), \
+                patch('app.auth.util.captcha_enabled', return_value=False):
+            response = env.client.post('/api/alpha/user/register', json=body, base_url=env.base)
+        assert response.status_code == 400 and 'invalid_referral_code' in response.get_data(as_text=True)
+        assert User.query.filter_by(user_name='freeloader').count() == 0
+        assert PromoCodeUse.query.filter_by(promo_code_id=row.id).count() == 0
+
+
 class TestReferralCodesOwn:
     def test_a_gift_of_its_own(self, env, referrer):
         row = row_of(referrer)

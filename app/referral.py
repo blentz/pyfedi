@@ -146,6 +146,10 @@ def record_referral(referrer: User, referred: User) -> Referral:
     # 2026-11-16): the caller rolls back, as for a gift code typed at registration
     if benefit is None or not usable(code):
         raise GiftUnavailable()
+    # A discount is held for a paying account's first payment (R4): an account made without going to payment (the API's
+    # signup, which has no checkout) cannot take one, or it would be in for free (security review 2026-11-19)
+    if benefit.discount is not None and referred.registration_pending_since is None:
+        raise GiftUnavailable()
     db.session.flush()   # the gift's subscription, or the use, names the new account
     if benefit.offer is not None:
         if start_gift(referred, code, commit=False, offer=benefit.offer, periods=benefit.periods) is None:

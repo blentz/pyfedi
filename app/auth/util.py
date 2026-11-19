@@ -612,7 +612,10 @@ def register_from_api(data: dict) -> dict:
         if referrer is None:
             raise Exception('invalid_referral_code')
 
-    user = create_new_user(form, ip, country, random_token(16), referrer)
+    try:
+        user = create_new_user(form, ip, country, random_token(16), referrer)
+    except GiftUnavailable:   # the code has nothing it can give a free signup here (rolled back already)
+        raise Exception('invalid_referral_code')
     verify_email_sent = bool(requires_email_verification(user))
     if verify_email_sent:
         send_email_verification(user)
