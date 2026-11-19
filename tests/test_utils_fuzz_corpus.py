@@ -42,6 +42,7 @@ app.utils.is_valid_xml_utf8's character table disagree with XML 1.0 -- or that
 makes a budgeted target's input exceed its budget.
 """
 
+import contextlib
 import gc
 import pathlib
 import time
@@ -80,6 +81,15 @@ CORPUS_ROOT = pathlib.Path(__file__).parent / 'fuzz' / 'corpus'
 # become. The strict xfails XPASSed the moment the fix landed, which is what
 # prompted deleting these entries rather than relaxing them.
 KNOWN_UNFIXED = {}
+
+# Cases whose input makes a library warn on the way to the property holding: a corrupt EXIF block, which Pillow
+# reads past. The warning is asserted, so a library that stops warning, or a case that starts warning, is noticed
+# here rather than in the run's warning count.
+EXPECTED_WARNINGS = {
+    'upload_decode/jpeg_exif_garbage': (UserWarning, 'Corrupt EXIF data'),
+    'icon_banner_decode/icon_jpeg_exif_garbage': (UserWarning, 'Corrupt EXIF data'),
+    'remote_thumbnail_decode/jpeg_exif_garbage': (UserWarning, 'Corrupt EXIF data'),
+}
 
 
 def corpus_cases():
@@ -144,12 +154,21 @@ def test_corpus_input_still_satisfies_its_property(target, path, request):
         # requested only here, so the sanitizer cases do not need a database.
         request.getfixturevalue('app')
         rows_before = _row_counts(db)
-    run_case(target, path.read_bytes())
+    expected = EXPECTED_WARNINGS.get(f'{target.name}/{path.name}')
+    with pytest.warns(expected[0], match=expected[1]) if expected else contextlib.nullcontext():
+        run_case(target, path.read_bytes())
     if target.needs_app:   # the suite-wide gate cannot see a fixture requested here, so the case checks itself
         db.session.rollback()
         rows_after = _row_counts(db)
         assert rows_after == rows_before, {name: count - rows_before.get(name, 0)
                                            for name, count in rows_after.items() if count != rows_before.get(name, 0)}
+
+
+@pytest.mark.parametrize('case_id', sorted(EXPECTED_WARNINGS))
+def test_every_case_expected_to_warn_is_present(case_id):
+    """As for KNOWN_UNFIXED below: a deleted corpus file would take its expectation with it, silently."""
+    name, _, filename = case_id.partition('/')
+    assert (CORPUS_ROOT / name / filename).is_file(), f'{case_id} is named in EXPECTED_WARNINGS but no longer exists'
 
 
 @pytest.mark.parametrize('case_id', sorted(KNOWN_UNFIXED))

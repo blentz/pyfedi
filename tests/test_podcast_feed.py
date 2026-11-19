@@ -301,8 +301,10 @@ def test_an_owner_name_and_community_title_that_are_not_xml_text_fall_back_to_th
 
 
 def test_a_flair_or_tag_that_is_not_xml_text_is_left_out_of_the_items(app, pod, episode_post):
-    episode_post.flair.append(make_community_flair(pod, 'bad\x13flair'))
-    episode_post.flair.append(make_community_flair(pod, 'good flair'))
+    # Both made before either is appended: make_community_flair commits, which would invalidate a collection being
+    # appended to (SAWarning)
+    flairs = [make_community_flair(pod, 'bad\x13flair'), make_community_flair(pod, 'good flair')]
+    episode_post.flair.extend(flairs)
     episode_post.tags.append(Tag(name='bad', display_as='bad\x13tag'))
     db.session.commit()
 
