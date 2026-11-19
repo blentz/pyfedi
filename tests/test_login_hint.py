@@ -1,6 +1,9 @@
-"""On a storefront that is not the default domain, the login form says how an account from the default domain logs
-in (final fix F3). A bare name there means that storefront's own account, so a first-domain member typing their bare
-name on the onion gets "Login failed" with no clue why. The passkey button reads the same user name field."""
+"""On a storefront that is not the default domain, the login form says how an account from another domain logs in
+(final fix F3). A bare name there means that storefront's own account, so a first-domain member typing their bare
+name on the onion gets "Login failed" with no clue why. The passkey button reads the same user name field.
+
+The hint names only the domain being visited: it never names another of the site's domains, so one storefront's
+login page does not say which others belong with it."""
 from html import unescape
 
 import pytest
@@ -12,7 +15,8 @@ from tests.test_onion_guard_limits import PROXY, a_session, onion_get
 
 pytestmark = pytest.mark.usefixtures('site')
 
-HINT = 'Account from another of our sites? Log in as name@test.piefed.local.'
+HINT = ('A bare user name logs in to an account on abc.onion. Account from another of our sites? Log in as '
+        'name@its-domain.')
 
 
 @pytest.fixture
@@ -36,9 +40,10 @@ def test_the_onion_login_form_says_how_a_default_domain_account_logs_in(app, oni
     page = unescape(response.get_data(as_text=True))
     assert HINT in page
     assert page.index('name="user_name"') < page.index(HINT) < page.index('log_in_with_passkey')
+    assert app.config['SERVER_NAME'] not in page[page.index('name="user_name"'):page.index('log_in_with_passkey')]
 
 
 def test_the_default_domain_login_form_has_no_hint(app, onion):
     response = app.test_client().get('/auth/login')
     assert response.status_code == 200
-    assert HINT not in unescape(response.get_data(as_text=True))
+    assert 'user_name_hint' not in response.get_data(as_text=True)

@@ -915,9 +915,11 @@ def configure_bandwidth_cookies(response, low_bandwidth_mode):
 
 
 def render_login_form(form):
-    # A bare name means this storefront's own account, so off the default domain say how one from there logs in
+    # A bare name means this storefront's own account, so off the default domain say how one from elsewhere logs in.
+    # Only this domain is named: one storefront's login page does not say which other domains belong with it.
     login_hint = None if current_storefront().is_default else \
-        _('Account from another of our sites? Log in as name@%(domain)s.', domain=default_domain().domain)
+        _('A bare user name logs in to an account on %(domain)s. Account from another of our sites? Log in as '
+          'name@its-domain.', domain=current_storefront().domain)
     return render_template("auth/login.html", title=_("Login"), form=form, login_hint=login_hint,
                            onion_proof=prepare_onion_proof(form, 'login'),
                            google_oauth=oauth_client_id("google"),
