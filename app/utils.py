@@ -7200,7 +7200,9 @@ def post_destination_sections():
             ('joined', _('Joined communities'), joined)]
 
 
-def possible_communities():
+def possible_communities(plain: bool = True):
+    """The communities a user may post to, by section. `plain` lists each name once for a reader without instance
+    details (plain_names.plain_choices); False keeps every one, for checking a pick made from another list."""
     which_community = {}
     favorites = favorite_communities(current_user.get_id())
     if len(favorites):
@@ -7259,7 +7261,7 @@ def possible_communities():
             facts[c.id] = (c.name, c.title, c.ap_id is None, plain_names.subscribers(c))
     if len(comms) > 0:
         which_community['Others'] = comms
-    return plain_names.plain_choices(which_community, facts)   # one per name for a reader without instance details
+    return plain_names.plain_choices(which_community, facts) if plain else which_community
 
 
 @cache.memoize(timeout=300)

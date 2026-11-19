@@ -259,7 +259,7 @@ class TestTheme:
 
 class TestDeduplication:
 
-    def test_one_per_name_in_each_section_the_resolved_one_standing_for_all(self, app, world):
+    def test_each_name_once_across_sections_the_resolved_one_standing_for_all(self, app, world):
         small = remote_community('memes', 'small.example', subscribers=3)
         local = make_community('memes')
         other = remote_community('cats', 'lemmy.example')
@@ -269,7 +269,46 @@ class TestDeduplication:
         finally:
             ctx.pop()
         assert [c.id for c in favorites] == [local.id]
-        assert [c.id for c in joined] == [local.id, other.id]
+        assert [c.id for c in joined] == [other.id]
+
+    def test_communities_titled_alike_are_one_name(self, app, world):
+        """The menu shows titles: world@ and worldnews@ both titled "World News" read as one community."""
+        world_news = remote_community('world', 'lemmy.example', subscribers=50, title='World News')
+        worldnews = remote_community('worldnews', 'other.example', subscribers=5, title='world  news')
+        world_news_ = remote_community('world_news', 'third.example', subscribers=1, title='WORLD_NEWS')
+        ctx = as_user(app, world)
+        try:
+            assert [c.id for c in plain_communities([worldnews, world_news_, world_news])] == [world_news.id]
+        finally:
+            ctx.pop()
+
+    def test_names_alike_in_any_case_are_one_name(self, app, world):
+        cats = remote_community('cats', 'lemmy.example', subscribers=9, title='Cats')
+        kittens = remote_community('Cats', 'other.example', subscribers=1, title='Kitty pictures')
+        ctx = as_user(app, world)
+        try:
+            assert [c.id for c in plain_communities([kittens, cats])] == [cats.id]
+        finally:
+            ctx.pop()
+
+    def test_a_favorite_is_not_listed_again_under_joined(self, app, world):
+        cats = remote_community('cats', 'lemmy.example')
+        dogs = remote_community('dogs', 'lemmy.example')
+        ctx = as_user(app, world)
+        try:
+            favorites, moderating, joined = plain_communities([cats], [], [cats, dogs])
+        finally:
+            ctx.pop()
+        assert ([c.id for c in favorites], moderating, [c.id for c in joined]) == ([cats.id], [], [dogs.id])
+
+    def test_different_names_and_titles_stay_apart(self, app, world):
+        cats = remote_community('cats', 'lemmy.example', title='Cats')
+        felines = remote_community('felines', 'lemmy.example', title='Cat lovers')
+        ctx = as_user(app, world)
+        try:
+            assert [c.id for c in plain_communities([cats, felines])] == [cats.id, felines.id]
+        finally:
+            ctx.pop()
 
     def test_a_joined_community_is_kept_over_a_more_popular_one(self, app, world):
         big = remote_community('memes', 'big.example', subscribers=900)
@@ -301,6 +340,17 @@ class TestDeduplication:
         finally:
             ctx.pop()
         assert plain == {'Joined communities': [(2, 'Memes')], 'Others': [(3, 'Cats')]}
+
+    def test_post_destinations_titled_alike_are_one_choice(self, app, world):
+        facts = {1: ('world', 'World News', False, 50), 2: ('worldnews', 'world news', False, 5),
+                 3: ('cats', 'Cats', False, 1)}
+        ctx = as_user(app, None)
+        try:
+            plain = plain_choices({'Joined communities': [(2, 'world news@b.example')],
+                                   'Others': [(1, 'World News@a.example'), (3, 'Cats@c.example')]}, facts)
+        finally:
+            ctx.pop()
+        assert plain == {'Joined communities': [(1, 'World News')], 'Others': [(3, 'Cats')]}
 
 
 class TestMentions:
@@ -382,6 +432,20 @@ class TestCommunityPage:
         login(client, world)
 
         assert client.get('/c/memes').status_code == 302   # to add_local, as before
+
+    def test_a_picked_community_is_accepted_though_another_wins_its_name(self, client, world):
+        """The post chooser lists the reader's communities, grouped among themselves; the pick is checked against
+        every community they may post to, not that list grouped among all of them, where a local one wins."""
+        local = make_community('world')
+        local.title = 'World News'
+        joined = remote_community('worldnews', 'lemmy.example', title='World News')
+        join(world, joined)
+        login(client, world)
+
+        response = client.get(f'/add_post?community={joined.id}')
+
+        assert response.status_code == 302
+        assert '/community/worldnews@lemmy.example/submit' in response.headers['Location']
 
     def test_activitypub_is_unaffected(self, client, world):
         remote_community('memes', 'lemmy.example')

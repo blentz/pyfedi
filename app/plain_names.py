@@ -172,28 +172,59 @@ def _member_ids() -> set:
     return set(utils.joined_or_modding_communities(current_user.id))   # ids
 
 
+def name_key(text: str) -> str:
+    """A community name or title as a reader tells them apart: any case, with `_`, `-` and runs of white space all
+    one space. "World News", "world_news" and "WORLD  news" are one name."""
+    return ' '.join(_SEPARATORS_RE.sub(' ', text or '').casefold().split())
+
+
+_SEPARATORS_RE = re.compile(r'[_\-\s]+')
+
+
+def _duplicate_groups(entries) -> dict:
+    """{id: group id} for `entries` of (id, name, title): two are one group when their titles read the same
+    (`name_key`), which shows a reader the same text, or their names do, which leads them to the same /c/<name>.
+    Transitively, so an entry matching two others joins them."""
+    parent = {}
+
+    def root(node):
+        while parent.setdefault(node, node) != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for community_id, name, title in entries:
+        node = ('id', community_id)
+        for key in (('title', name_key(title)), ('name', name_key(name))):
+            parent[root(key)] = root(node)
+    return {community_id: root(('id', community_id)) for community_id, _name, _title in entries}
+
+
 def plain_communities(*sections) -> list:
-    """Each list of communities in `sections` with one community per name in each, for a reader without instance
-    details; unchanged otherwise. Of several with one name in any section, the one `_resolve` would pick stands for
-    all of them, at the first position any of them held. One list in, one list out; several in, a list of lists out."""
+    """The lists of communities in `sections` with each name once across all of them, for a reader without instance
+    details; unchanged otherwise. Communities are one name when their titles or their names read the same
+    (`_duplicate_groups`); the one `_resolve`'s order ranks first stands for them all, at the first position any of
+    them held. One list in, one list out; several in, a list of lists out."""
     sections = [list(section or []) for section in sections]
     if not instance_details_shown():
         members = _member_ids()
+        everyone = {community.id: community for section in sections for community in section}
+        groups = _duplicate_groups([(c.id, c.name, c.title) for c in everyone.values()])
         best = {}
-        for community in (c for section in sections for c in section):
-            key = community.name.lower()
+        for community in everyone.values():
             rank = _rank(community.ap_id is None, community.id in members, subscribers(community), community.id)
-            if key not in best or rank < best[key][0]:
-                best[key] = (rank, community)
+            group = groups[community.id]
+            if group not in best or rank < best[group][0]:
+                best[group] = (rank, community)
+        seen = set()
         plain = []
-        for section in sections:   # once per name in each section, as the menu lists a favorite again under Joined
-            seen = set()
+        for section in sections:
             kept = []
             for community in section:
-                key = community.name.lower()
-                if key not in seen:
-                    seen.add(key)
-                    winner = best[key][1]
+                group = groups[community.id]
+                if group not in seen:
+                    seen.add(group)
+                    winner = best[group][1]
                     winner.is_duplicate = False
                     kept.append(winner)
             plain.append(kept)
@@ -202,26 +233,29 @@ def plain_communities(*sections) -> list:
 
 
 def plain_choices(which_community: dict, facts: dict) -> dict:
-    """possible_communities()'s `{section: [(id, label)]}` with one choice per name for a reader without instance
-    details, labelled by title alone; unchanged otherwise. `facts` maps each id to (name, title, is_local,
-    subscriber_count). The choice kept for a name is the one `_resolve` would pick, in the first section any held."""
+    """possible_communities()'s `{section: [(id, label)]}` with each name once across all sections, for a reader
+    without instance details, labelled by title alone; unchanged otherwise. `facts` maps each id to (name, title,
+    is_local, subscriber_count). Names group as in plain_communities, and the choice kept is the one `_resolve`'s
+    order ranks first, in the first section any of them held."""
     if instance_details_shown():
         return which_community
     members = _member_ids()
+    groups = _duplicate_groups([(community_id, name, title) for community_id, (name, title, _l, _s) in facts.items()])
     best = {}
-    for community_id, (name, _title, is_local, subscriber_count) in facts.items():
+    for community_id, (_name, _title, is_local, subscriber_count) in facts.items():
         rank = _rank(is_local, community_id in members, subscriber_count, community_id)
-        if name.lower() not in best or rank < best[name.lower()][0]:
-            best[name.lower()] = (rank, community_id)
+        group = groups[community_id]
+        if group not in best or rank < best[group][0]:
+            best[group] = (rank, community_id)
     seen = set()
     plain = {}
     for section, choices in which_community.items():
         kept = []
         for community_id, _label in choices:
-            key = facts[community_id][0].lower()
-            if key not in seen:
-                seen.add(key)
-                winner = best[key][1]
+            group = groups[community_id]
+            if group not in seen:
+                seen.add(group)
+                winner = best[group][1]
                 kept.append((winner, facts[winner][1]))
         if kept:
             plain[section] = kept

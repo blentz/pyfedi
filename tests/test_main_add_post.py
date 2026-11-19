@@ -71,6 +71,7 @@ class TestTheChooser:
     def test_the_communities_are_grouped_like_the_main_menu(self, app, env):
         client, joined, elsewhere = env
         alice = User.query.filter_by(user_name='alice').one()
+        alice.show_instance_details = True   # without them each name is listed once (plain community names)
         modded = make_community('modded')
         make_community_member(alice, modded, is_moderator=True)
         db.session.add(CommunityFavorite(user_id=alice.id, community_id=joined.id))
@@ -80,6 +81,19 @@ class TestTheChooser:
 
         assert sections(html) == ['favorites', 'moderating', 'joined']
         assert picks(html) == [joined.id, modded.id, joined.id]
+
+    def test_without_instance_details_a_favorite_is_not_listed_again(self, app, env):
+        client, joined, elsewhere = env
+        alice = User.query.filter_by(user_name='alice').one()
+        modded = make_community('modded')
+        make_community_member(alice, modded, is_moderator=True)
+        db.session.add(CommunityFavorite(user_id=alice.id, community_id=joined.id))
+        db.session.commit()
+
+        html = client.get('/add_post').get_data(as_text=True)
+
+        assert sections(html) == ['favorites', 'moderating']
+        assert picks(html) == [joined.id, modded.id]
 
     def test_it_has_the_main_menus_search_box(self, app, env):
         client, joined, elsewhere = env

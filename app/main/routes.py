@@ -369,7 +369,7 @@ def add_post():
     preselected (owner ruling 2026-10-17). `?community=<id>` goes on to that community's form, keeping `&type=` --
     the compose form's community select comes back through here when it changes.
     """
-    poss_communities = possible_communities()
+    poss_communities = possible_communities(plain=False)   # every one: the picker's list is grouped differently
     chosen = request.args.get('community', '')
     if chosen.isascii() and chosen.isdigit():
         allowed = {community_id for section in poss_communities.values() for community_id, _name in section}
