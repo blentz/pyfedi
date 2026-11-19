@@ -14,10 +14,12 @@ from app import cache, db, utils
 from app.models import Community, CommunityMember, InstanceBlock, Site
 from app.plain_names import HIDE_DOMAINS_FLAG, community_href, community_links, community_label, instance_details_shown, plain_choices, \
     plain_communities, plain_community_mentions, plain_rendering, resolve_community_name, theme_community
+from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance, make_user
 from tests.test_microblog_live import local_instance, login
 
-pytestmark = pytest.mark.usefixtures('db_session', 'site')
+# fresh_cache: blocked_instances and the rest are memoized by user id, and ids repeat across tests
+pytestmark = pytest.mark.usefixtures('db_session', 'site', 'fresh_cache')
 
 
 def remote_community(name, host, subscribers=0, title=None, reported_total=0):
@@ -40,7 +42,7 @@ def instance_for(host):
 def block_instance(user, instance_id):
     db.session.add(InstanceBlock(user_id=user.id, instance_id=instance_id))
     db.session.commit()
-    cache.delete_memoized(utils.blocked_instances, user.id)   # ids are reused across tests
+    cache.delete_memoized(utils.blocked_instances, user.id)   # a lookup earlier in the test may have cached none
 
 
 def join(user, community):
