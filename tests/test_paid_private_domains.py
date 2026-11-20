@@ -22,6 +22,7 @@ from app.payments.gifts import REFERRAL_BENEFIT_SETTING
 from app.referral import GENERATORS_SETTING, generate_code
 from app.storefront import clear_domain_cache
 from app.utils import set_setting
+from tests.schema_history import DomainConfigMigrations
 from tests.factories import grant_permission, make_user, pay_link
 
 PAID = 'https://paid.example'
@@ -863,7 +864,7 @@ class TestTheMigration:
         env.site.private_instance = private
         db.session.commit()
         connection = db.session.connection()
-        migration, later = _migration(), _migration('domain_config')
+        migration, later = _migration(), DomainConfigMigrations()
         with Operations.context(MigrationContext.configure(connection)):
             later.downgrade()   # the columns it tests moved to domain_config
             migration.downgrade()
@@ -878,7 +879,7 @@ class TestTheMigration:
         register(env)
         connection = db.session.connection()
         with Operations.context(MigrationContext.configure(connection)):
-            _migration('domain_config').downgrade()
+            DomainConfigMigrations().downgrade()
             _migration().downgrade()
             registration = connection.execute(text("SELECT registration FROM site_domain WHERE domain = 'paid.example'")).scalar()
             found = connection.execute(text('SELECT count(*) FROM "user" WHERE user_name = \'joiner\'')).scalar()

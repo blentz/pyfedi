@@ -14,6 +14,7 @@ from app.branding import branding_for
 from app.models import DomainConfig, Site
 from app.sidebar import BOXES, COMMUNITY, HOME, layout, moved, shown_boxes, sidebar_boxes, stored, toggled
 from app.storefront import clear_domain_cache
+from tests.schema_history import DomainConfigMigrations
 from tests.conftest import forget_login
 from tests.factories import make_user
 from tests.test_admin_domain_branding import REPO
@@ -339,7 +340,7 @@ def page_on(admin, domains) -> str:
 
 def test_the_migration_adds_and_drops_the_sidebar_columns(db_session):
     migration = load_migration('*_sidebar_box_order.py')
-    later = load_migration('*_domain_config.py')   # it folded domain_branding and these columns into domain_config
+    later = DomainConfigMigrations()   # it folded domain_branding and these columns into domain_config
     db.session.commit()
 
     def columns(table):

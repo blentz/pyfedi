@@ -15,6 +15,7 @@ from app import cache, db
 from app.models import Site, SiteDomain
 from app.storefront import (check_default_domain, clear_domain_cache, default_domain, domain_for_host,
                             domain_rows, is_registered_host, normalise_host)
+from tests.schema_history import DomainConfigMigrations
 
 
 def add_domain(domain, **kw):
@@ -117,7 +118,7 @@ def load_migration(name: str = '*_site_domain.py'):
 def seed_schema(db_session):
     """site_domain as the seed wrote into it: without the instance link plan C2's migration adds after it."""
     per_domain_instance = load_migration('c8f4d2a6b9e1_per_domain_instance.py')
-    configs = load_migration('b9e4d2a7c1f6_domain_config.py')   # the seed wrote site_domain's registration column
+    configs = DomainConfigMigrations()   # the seed wrote site_domain's registration column
     with Operations.context(MigrationContext.configure(db.session.connection())):
         configs.downgrade()
     # Put back exactly the check the schema has now, not a copy of an older one: one that left out 'paid' broke every

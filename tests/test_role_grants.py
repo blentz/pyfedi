@@ -18,6 +18,7 @@ from app.community.util import notify_admins_of_post_needing_approval
 from app.models import Notification, Role, RolePermission, Site, SiteDomain, role_grant, utcnow
 from app.roles import STAFF_PERMISSIONS, seed_default_roles
 from app.utils import roles_with, user_access
+from tests.schema_history import DomainConfigMigrations
 from tests.factories import (admin_role, grant_permission, grant_role, make_community, make_instance, make_post,
                              make_user)
 from tests.test_branding import load_migration, restore_registration_check
@@ -58,7 +59,7 @@ def _migrate(old_shape):
     migration = load_migration('b4e8d2a6f1c9_role_grants.py')
     later = load_migration('d6a1f4c8e2b3_permission_scope.py')
     tiers = load_migration('b5e9a3d7c1f4_tier_roles.py')   # its column is on role_grant, which `later` remakes
-    configs = load_migration('b9e4d2a7c1f6_domain_config.py')   # `later` reads site_domain's registration column
+    configs = DomainConfigMigrations()   # `later` reads site_domain's registration column
     db.session.commit()
     with Operations.context(MigrationContext.configure(db.session.connection())):
         configs.downgrade()
@@ -156,7 +157,7 @@ def test_the_downgrade_keeps_instance_wide_grants_and_gives_admin_its_rows_back(
     first_id, admin_id = first.id, admin.id   # read now: the ORM cannot refresh a role from the old schema
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
-            configs = load_migration('b9e4d2a7c1f6_domain_config.py')   # `later` reads site_domain's registration
+            configs = DomainConfigMigrations()   # `later` reads site_domain's registration
             configs.downgrade()
             tiers = load_migration('b5e9a3d7c1f4_tier_roles.py')   # its column is on role_grant
             tiers.downgrade()

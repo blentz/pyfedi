@@ -1,6 +1,6 @@
 # Domains as tenants: one configuration per domain — design
 
-Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) built; 1b (the per-tenant `settings` keys) next.
+Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1 built: 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) and 1b (the per-tenant `settings` keys). Phase 2 (the admin UX) next.
 
 ## Why
 

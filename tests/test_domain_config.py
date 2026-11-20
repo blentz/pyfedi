@@ -14,11 +14,12 @@ from sqlalchemy import inspect, text
 
 from app import cache, db
 from app.domain_config import _CHANGED as CHANGED, SiteView, effective, own_config, resolve, site_view
-from app.models import FIRST_DEFAULTS, OWN_COLUMNS, TENANT_COLUMNS, DomainConfig, Site, SiteDomain, first_config
+from app.models import FIRST_DEFAULTS, OWN_COLUMNS, SETTING_COLUMNS, TENANT_COLUMNS, DomainConfig, Settings, Site, \
+    SiteDomain, first_config
 from app.storefront import clear_domain_cache, default_domain, domain_by_id
-from app.utils import get_site_as_dict
+from app.utils import get_setting, get_site_as_dict, set_setting
 from tests.factories import config_of, configure
-from tests.two_domains import FIRST, ONION
+from tests.two_domains import FIRST, ONION, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -314,3 +315,111 @@ def test_the_upgrade_without_a_site_or_default_row_makes_no_first_row(app, db_se
             assert config_rows(connection) == {}
     finally:
         db.session.rollback()
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Settings that are each domain's (phase 1b)
+
+def test_a_domain_setting_is_the_requests_domains(app, site):
+    row = sister()
+    set_setting('announcement', 'First news')
+    with request_on(app, domain_by_id(row.id)):
+        assert get_setting('announcement') == 'First news'   # inherited
+    configure(row, announcement='Sister news', captcha_enabled=False)
+    db.session.commit()
+    with request_on(app, domain_by_id(row.id)):
+        assert (get_setting('announcement'), get_setting('captcha_enabled', True)) == ('Sister news', False)
+    with request_on(app, default_domain()):
+        assert get_setting('announcement') == 'First news'
+    assert get_setting('announcement') == 'First news'   # outside a request: the first domain's
+
+
+def test_an_unset_domain_setting_is_the_callers_default(site):
+    assert get_setting('elevator_pitch', 'fallback') == 'fallback'
+
+
+def test_setting_a_domain_setting_writes_the_first_domains_row_not_a_key(site):
+    set_setting('max_album_images', 7)
+    db.session.expire_all()
+    assert first_config().max_album_images == 7
+    assert db.session.query(Settings).filter_by(name='max_album_images').first() is None
+
+
+def test_an_instance_setting_is_still_a_key(site):
+    set_setting('crawl_known_instances', True)
+    assert db.session.query(Settings).filter_by(name='crawl_known_instances').one().value == 'true'
+    assert get_setting('crawl_known_instances') is True
+    assert 'crawl_known_instances' not in SETTING_COLUMNS
+
+
+def settings_migration():
+    path = next(Path(__file__).parent.parent.glob('migrations/versions/c3f7a1e9d5b8_domain_config_settings.py'))
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+@pytest.fixture
+def settings_schema(app, db_session):
+    """The schema before migration c3f7a1e9d5b8, the first domain's row there."""
+    first_config()
+    db.session.commit()
+    migration = settings_migration()
+    connection = db.session.connection()
+    try:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            yield migration, connection
+    finally:
+        db.session.rollback()
+
+
+def keys(connection):
+    return dict(connection.execute(text('SELECT name, value FROM settings')).all())
+
+
+def put(connection, **values):
+    for name, value in values.items():
+        connection.execute(text('INSERT INTO settings (name, value) VALUES (:n, :v)'), {'n': name, 'v': value})
+
+
+def test_the_upgrade_moves_each_key_of_the_right_type(settings_schema):
+    migration, connection = settings_schema
+    put(connection, announcement='"News"', captcha_enabled='false', max_video_upload_bytes='5000000000',
+        logo_512='"/static/media/512.png"', number_of_admins='true', referral_generators='"' + 'x' * 30 + '"',
+        email_verification='"yes"', elevator_pitch='not json', crawl_known_instances='true')
+    migration.upgrade()
+    row = connection.execute(text('SELECT * FROM domain_config WHERE site_domain_id IS NULL')).mappings().one()
+    assert (row['announcement'], row['captcha_enabled'], row['max_video_upload_bytes'], row['logo_512']) == \
+        ('News', False, 5000000000, '/static/media/512.png')
+    # Of the wrong type, too long, or not JSON: dropped, as a missing key was
+    assert (row['number_of_admins'], row['referral_generators'], row['email_verification'], row['elevator_pitch']) == \
+        (None, None, None, None)
+    assert keys(connection) == {'crawl_known_instances': 'true'}   # an instance-wide key stays
+
+
+def test_the_upgrade_without_a_first_row_leaves_the_keys(settings_schema):
+    migration, connection = settings_schema
+    connection.execute(text('DELETE FROM domain_config'))
+    put(connection, announcement='"News"')
+    migration.upgrade()
+    assert keys(connection) == {'announcement': '"News"'}
+
+
+def test_the_downgrade_writes_the_first_domains_values_back(settings_schema):
+    migration, connection = settings_schema
+    put(connection, announcement='"News"', ban_posts='true', logo_192='"/static/media/192.png"')
+    migration.upgrade()
+    migration.downgrade()
+    assert keys(connection) == {'announcement': '"News"', 'ban_posts': 'true', 'logo_192': '"/static/media/192.png"'}
+    assert connection.execute(text('SELECT logo_192 FROM domain_config WHERE site_domain_id IS NULL')).scalar() is None
+    assert 'announcement' not in {c['name'] for c in inspect(connection).get_columns('domain_config')}
+
+
+def test_the_downgrade_without_a_first_row_writes_nothing(settings_schema):
+    migration, connection = settings_schema
+    migration.upgrade()
+    connection.execute(text('DELETE FROM domain_config'))
+    migration.downgrade()
+    assert keys(connection) == {}

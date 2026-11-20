@@ -78,7 +78,7 @@ from app.shared.community import hold_community_text
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
-from app.utils import canonical_host, captcha_enabled, render_template, permission_required, permission_held_anywhere, admin_required, set_setting, get_setting, gibberish, markdown_to_html, \
+from app.utils import canonical_host, captcha_enabled, render_template, permission_required, permission_held_anywhere, admin_required, set_setting, get_setting, stored_setting, gibberish, markdown_to_html, \
     max_album_images, \
     moderating_communities, joined_communities, finalize_user_setup, theme_choices, human_filesize, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
@@ -1329,8 +1329,8 @@ def admin_federation():
         set_setting('auto_add_remote_communities', form.auto_add_remote_communities.data)
         set_setting('cross_origin_delete_delay', form.cross_origin_delete_delay.data)
         cache.delete_memoized(blocked_phrases)
-        cache.delete_memoized(get_setting, 'actor_blocked_words')
-        cache.delete_memoized(get_setting, 'hosted_inbox_hosts')
+        cache.delete_memoized(stored_setting, 'actor_blocked_words')
+        cache.delete_memoized(stored_setting, 'hosted_inbox_hosts')
         db.session.commit()
         cache.delete_memoized(get_site_as_dict)   # g.site is read from it: secure mode and allowlist mode apply now
 

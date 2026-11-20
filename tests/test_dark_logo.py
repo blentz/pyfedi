@@ -24,6 +24,7 @@ from app.branding import Branding, branding_for, onion_safe
 from app.models import DomainConfig, Site
 from app.request_hooks import BrandingOnUse
 from app.storefront import clear_domain_cache
+from tests.schema_history import DomainConfigMigrations
 from tests.conftest import forget_login
 from tests.test_admin_domain_branding import ELSEWHERE, REPO, media_files, own_row, png, save
 from tests.test_admin_site_profile import HOSTILE_SVG, SVG
@@ -334,7 +335,7 @@ def test_the_branding_page_shows_the_dark_logo(admin_domain_branding_admin, admi
 
 def test_the_migration_adds_and_drops_the_dark_logo_columns(db_session):
     migration = load_migration('*_dark_mode_logo.py')
-    later = load_migration('*_domain_config.py')   # it folded these columns into domain_config
+    later = DomainConfigMigrations()   # it folded these columns into domain_config
     db.session.commit()
 
     def columns(table):

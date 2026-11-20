@@ -210,15 +210,19 @@ class TestProcessInboxRequestForARelay:
     def test_the_relay_context_is_reset_even_when_closing_the_session_raises(self, app, alice, fetch, logged,
                                                                              lockless_redis, monkeypatch):
         session = routes.get_task_session()
+        real_close = session.close
 
         def broken_close():
             raise RuntimeError('close failed')
         monkeypatch.setattr(session, 'close', broken_close)
         monkeypatch.setattr(routes, 'get_task_session', lambda: session)
         relay = make_relay(state=RELAY_ACCEPTED)
-        with pytest.raises(RuntimeError, match='close failed'):
-            routes.process_inbox_request(create(alice, note()), False, relay_id=relay.id)
-        assert current_relay_id.get() is None
+        try:
+            with pytest.raises(RuntimeError, match='close failed'):
+                routes.process_inbox_request(create(alice, note()), False, relay_id=relay.id)
+            assert current_relay_id.get() is None
+        finally:
+            real_close()   # the session the failed close left open, and its transaction's locks, released
 
     def test_a_create_for_an_unknown_community_is_dropped_and_logged(self, app, alice, fetch, logged):
         relay = make_relay(state=RELAY_ACCEPTED)

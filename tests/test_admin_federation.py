@@ -242,7 +242,7 @@ def test_saving_the_form_invalidates_the_phrase_caches(admin_client):
     """`blocked_phrases` and `actor_blocked_words` are memoized and are read on
     every inbound post, so a phrase added here must take effect now rather than
     when the cache expires."""
-    from app.utils import blocked_phrases, get_setting
+    from app.utils import blocked_phrases, stored_setting
 
     client, token = admin_client
 
@@ -251,7 +251,7 @@ def test_saving_the_form_invalidates_the_phrase_caches(admin_client):
 
     invalidated = [call.args for call in delete_memoized.call_args_list]
     assert (blocked_phrases,) in invalidated
-    assert (get_setting, 'actor_blocked_words') in invalidated
+    assert (stored_setting, 'actor_blocked_words') in invalidated
 
 
 def test_each_domain_is_normalised_once_for_its_row_and_its_cache_key(admin_client):

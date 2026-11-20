@@ -290,22 +290,10 @@ class TestTheNsfwCountryRestriction:
         return user
 
     def _restrict(self, env, value):
-        """`Settings.value` holds JSON, and `get_setting` returns the default when it
-        cannot be parsed -- so a newline-separated list has to be written with `json.dumps`,
-        not wrapped in quotes by hand. A raw newline inside a JSON string is invalid, and
-        the symptom is a restriction that silently matches nobody.
-        """
-        import json
+        """A newline-separated list of country codes."""
+        from app.utils import set_setting
 
-        from app.models import Settings
-
-        existing = Settings.query.filter_by(name='nsfw_country_restriction').first()
-        if existing:
-            existing.value = json.dumps(value)
-        else:
-            db.session.add(Settings(name='nsfw_country_restriction',
-                                    value=json.dumps(value)))
-        db.session.commit()
+        set_setting('nsfw_country_restriction', value)   # the first domain's (app.domain_config)
 
     def test_an_account_in_a_restricted_country_is_restricted(self, env):
         self._restrict(env, 'GB\nFR')

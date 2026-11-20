@@ -20,9 +20,10 @@ def test_the_default_is_four(app, db_session):
     assert max_album_images() == 4
 
 
-@pytest.mark.parametrize('stored,expected', [(6, 6), (1, 1), (50, 9), (0, 1), (-3, 1), ('7', 7), ('x', 4), (None, 4)])
+@pytest.mark.parametrize('stored,expected', [(6, 6), (1, 1), (50, 9), (0, 1), (-3, 1), (None, 4)])
 def test_a_stored_value_is_held_to_the_range(app, db_session, stored, expected):
-    """A row written by hand, or by an older form, cannot make albums empty or larger than one request can carry."""
+    """A value written by hand, or by an older form, cannot make albums empty or larger than one request can carry. The
+    column is an integer, so nothing else can be stored (migration c3f7a1e9d5b8 drops a key that was not one)."""
     set_setting('max_album_images', stored)
     assert max_album_images() == expected
 

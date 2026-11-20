@@ -413,7 +413,7 @@ def _teardown_sql(db):
 
 
 @pytest.fixture
-def db_session(app):
+def db_session(app, request):
     """Give each test a clean database (and a clean flask.g).
 
     Deletes every row rather than rolling back a nested transaction: the code
@@ -504,6 +504,26 @@ def db_session(app):
     # identity map) outright; the scoped_session transparently opens a new one
     # on next use, so every test starts from a truly clean slate.
     db.session.close()
+    _fail_on_abandoned_transactions(db, request.node.nodeid)
+
+
+def _fail_on_abandoned_transactions(db, nodeid: str) -> None:
+    """Fail the test that left a connection idle inside a transaction, and end that connection.
+
+    Each worker has a database of its own, and the test's own session is closed by now, so any other connection to it
+    still in a transaction was abandoned: a session that outlived its app context, or an engine connection never
+    closed. Postgres keeps such a transaction's locks, and the next test that changes the schema (a migration test's
+    DROP TABLE) waits on them forever, past pytest-timeout, which cannot interrupt a blocked socket read."""
+    with db.engine.connect() as connection:
+        abandoned = connection.exec_driver_sql(
+            "SELECT pid, state, left(query, 200) FROM pg_stat_activity WHERE datname = current_database() "
+            "AND pid <> pg_backend_pid() AND state LIKE 'idle in transaction%%'").all()
+        for pid, _state, _query in abandoned:
+            connection.exec_driver_sql(f'SELECT pg_terminate_backend({int(pid)})')
+        connection.commit()
+    if abandoned:
+        pytest.fail(f'{nodeid} left {len(abandoned)} connection(s) idle in a transaction, holding its locks: '
+                    + '; '.join(f'{state}: {query}' for _pid, state, query in abandoned), pytrace=False)
 
 
 def _row_counts(db) -> dict:
@@ -552,6 +572,7 @@ def _app_tests_leave_no_trace(request):
         problems.append(f'left rows behind {left} (use db_session)')
     if problems:
         pytest.fail(f'{request.node.nodeid} ' + '; '.join(problems), pytrace=False)
+    _fail_on_abandoned_transactions(db, request.node.nodeid)
 
 
 _ABSENT = object()

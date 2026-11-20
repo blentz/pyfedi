@@ -1250,7 +1250,7 @@ HOSTED_INBOX_HOSTS_DEFAULT = 'public-api.wordpress.com\nmicro.blog'
 def hosted_inbox_hosts() -> frozenset[str]:
     """The hosts whose inboxes are trusted for an actor on any host: one per line in the hosted_inbox_hosts
     setting, each normalised as host_of reads a host (a pasted URL is reduced to its host)."""
-    # One argument, so the admin save's delete_memoized(get_setting, 'hosted_inbox_hosts') names this cache key
+    # One argument, so the admin save's delete_memoized(stored_setting, 'hosted_inbox_hosts') names this cache key
     setting = get_setting('hosted_inbox_hosts')
     lines = (HOSTED_INBOX_HOSTS_DEFAULT if setting is None else setting).split('\n')
     hosts = (host_of(line.strip() if '//' in line else f'//{line.strip()}') for line in lines if line.strip())

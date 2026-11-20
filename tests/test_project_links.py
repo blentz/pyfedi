@@ -19,6 +19,7 @@ from app import cache, db
 from app.models import Site
 from app.project_links import (UPSTREAM_BUG_REPORT, UPSTREAM_GET_INVOLVED, UPSTREAM_SOURCE, ProjectLinks,
                                footer_invitation, is_web_url, project_links)
+from tests.schema_history import DomainConfigMigrations
 from tests.conftest import forget_login
 from tests.test_admin_site_profile import _payload
 from tests.test_branding import load_migration
@@ -199,7 +200,7 @@ def test_the_site_profile_shows_the_links_and_upstreams_as_placeholders(admin_si
 
 def test_the_migration_adds_and_drops_the_link_columns(db_session):
     migration = load_migration('*_project_links.py')
-    later = load_migration('*_domain_config.py')   # it moved these columns to domain_config
+    later = DomainConfigMigrations()   # it moved these columns to domain_config
     db.session.commit()
     names = {'source_url', 'bug_report_url', 'get_involved_url'}
 

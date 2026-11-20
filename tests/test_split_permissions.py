@@ -13,6 +13,7 @@ from app.permissions import (BY_NAME, CATALOGUE, INSTANCE_ONLY_PERMISSIONS, ROLE
                              STAFF_PERMISSIONS)
 from app.roles import seed_default_roles
 from app.utils import roles_with
+from tests.schema_history import DomainConfigMigrations
 from tests.factories import grant_role, make_instance, make_user
 from tests.test_branding import load_migration, restore_registration_check
 from tests.test_role_permissions import login
@@ -86,7 +87,7 @@ def _migrate(old_shape):
     later = load_migration('d6a1f4c8e2b3_permission_scope.py')
     latest = load_migration('e4c8a1d7f3b6_split_moderation_permissions.py')
     tiers = load_migration('b5e9a3d7c1f4_tier_roles.py')   # its column is on role_grant, which `later` remakes
-    configs = load_migration('b9e4d2a7c1f6_domain_config.py')   # `later` reads site_domain's registration column
+    configs = DomainConfigMigrations()   # `later` reads site_domain's registration column
     db.session.commit()
     with Operations.context(MigrationContext.configure(db.session.connection())):
         configs.downgrade()
@@ -161,7 +162,7 @@ def test_the_downgrade_gives_back_administer_all_communities_and_drops_the_rest(
     db.session.commit()
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
-            configs = load_migration('b9e4d2a7c1f6_domain_config.py')   # `later` reads site_domain's registration
+            configs = DomainConfigMigrations()   # `later` reads site_domain's registration
             configs.downgrade()
             tiers = load_migration('b5e9a3d7c1f4_tier_roles.py')   # its column is on role_grant, which `later` remakes
             tiers.downgrade()
@@ -221,7 +222,7 @@ def test_with_no_admin_role_an_admin_only_page_names_nobody(people):
 
 def _downgrade_to_grant_scope(fill):
     migration = load_migration('d6a1f4c8e2b3_permission_scope.py')
-    configs = load_migration('b9e4d2a7c1f6_domain_config.py')   # it reads site_domain's registration column
+    configs = DomainConfigMigrations()   # it reads site_domain's registration column
     db.session.commit()
     with Operations.context(MigrationContext.configure(db.session.connection())):
         configs.downgrade()
@@ -305,7 +306,7 @@ def test_the_registration_setting_merges_into_closed_and_the_downgrade_cannot_wi
     limited = _role('Limited', 'ban users')
     staff = _role('Staff', 'ban users')
     migration = load_migration('d6a1f4c8e2b3_permission_scope.py')
-    configs = load_migration('b9e4d2a7c1f6_domain_config.py')   # it reads site_domain's registration column
+    configs = DomainConfigMigrations()   # it reads site_domain's registration column
     for role_id in (limited, staff):
         db.session.execute(text('UPDATE role_permission SET all_domains = false WHERE role_id = :r'), {'r': role_id})
     db.session.commit()
@@ -331,7 +332,7 @@ def test_the_downgrade_takes_staffs_user_administration_only_if_the_upgrade_gave
     db.session.add(SiteDomain(domain='first.split.example', scheme='https', federates=True, is_default=True))
     db.session.commit()
     migration = load_migration('d6a1f4c8e2b3_permission_scope.py')
-    configs = load_migration('b9e4d2a7c1f6_domain_config.py')   # it reads site_domain's registration column
+    configs = DomainConfigMigrations()   # it reads site_domain's registration column
     staff = _role('Staff', 'ban users')
     db.session.commit()
     try:

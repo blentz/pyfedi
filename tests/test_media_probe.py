@@ -24,7 +24,8 @@ from app import cli, db
 from app.constants import (COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, COMMUNITY_KIND_VIDEO_CHANNEL, NOTIF_DEFAULT,
                            POST_STATUS_PROCESSING, POST_STATUS_PUBLISHED, POST_STATUS_REVIEWING, POST_STATUS_SCHEDULED, POST_TYPE_LINK,
                            POST_TYPE_VIDEO)
-from app.models import CommunityBan, CommunityMember, File, ModLog, Notification, Post, Settings, User, utcnow
+from app.models import CommunityBan, CommunityMember, DomainConfig, File, ModLog, Notification, Post, Settings, User, \
+    utcnow
 from app.shared.ffmpeg import MediaToolError, run_ffprobe
 from app.shared.media import media_local_path, media_of, store_uploaded_media, with_media
 from app.shared import post as post_module
@@ -519,8 +520,8 @@ def while_probing(monkeypatch, change):
 
 
 def setting_off(name):
-    def change(other):
-        other.query(Settings).filter_by(name=name).one().value = '"no"'
+    def change(other):   # the first domain's configuration (app.domain_config)
+        setattr(other.query(DomainConfig).filter(DomainConfig.site_domain_id.is_(None)).one(), name, 'no')
     return change
 
 

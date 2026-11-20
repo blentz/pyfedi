@@ -57,10 +57,9 @@ ALL_FOUR_MODES = [
 def policy(db_session):
     """Store a redirect policy for one test, then put the old value back.
 
-    The `app` fixture is session-scoped and `get_setting` is memoized, so a
-    leaked policy would silently change how every later test's redirects behave.
-    Restoration runs in a `finally`, and the memoized read is invalidated either
-    way.
+    The `app` fixture is session-scoped and the domain's configuration is
+    memoized, so a leaked policy would silently change how every later test's
+    redirects behave. Restoration runs in a `finally`; its commit clears the memo.
     """
     original = get_setting(REDIRECT_POLICY_SETTING, None)
 
@@ -70,12 +69,7 @@ def policy(db_session):
     try:
         yield set_policy
     finally:
-        if original is None:
-            db.session.query(Settings).filter_by(name=REDIRECT_POLICY_SETTING).delete()
-            db.session.commit()
-        else:
-            set_setting(REDIRECT_POLICY_SETTING, original)
-        cache.delete_memoized(get_setting)
+        set_setting(REDIRECT_POLICY_SETTING, original)   # the first domain's; None is no policy, as no key was
 
 
 @pytest.fixture

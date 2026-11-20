@@ -13,6 +13,7 @@ from app import cache, db
 from app.branding import Branding, branding_for, current_branding, own_branding
 from app.models import DomainConfig, SiteDomain
 from app.storefront import clear_domain_cache
+from tests.schema_history import DomainConfigMigrations
 from tests.two_domains import default_request, onion_request
 from tests.factories import config_of
 from app.domain_config import own_config
@@ -161,7 +162,7 @@ def test_migration_creates_and_drops_the_table(db_session):
     icons = load_migration('*_domain_branding_icons.py')
     dark = load_migration('*_dark_mode_logo.py')
     sidebar = load_migration('*_sidebar_box_order.py')
-    later = load_migration('*_domain_config.py')
+    later = DomainConfigMigrations()
     db.session.commit()
 
     def columns():

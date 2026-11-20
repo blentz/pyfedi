@@ -6349,7 +6349,7 @@ class DomainConfig(db.Model):
     logo_152 = db.Column(db.String(40))
     logo_32 = db.Column(db.String(40))
     logo_16 = db.Column(db.String(40))
-    logo_192 = db.Column(db.String(40))   # the PWA manifest's icons: the first domain's are still in settings
+    logo_192 = db.Column(db.String(40))   # the PWA manifest's icons
     logo_512 = db.Column(db.String(40))
     logo_dark = db.Column(db.String(40))       # what dark mode shows instead of logo, '' for logo itself
     logo_dark_152 = db.Column(db.String(40))   # and instead of logo_152
@@ -6385,6 +6385,36 @@ class DomainConfig(db.Model):
     referral_codes = db.Column(db.Boolean)
     lapse_grace_days = db.Column(db.Integer)   # paid: how long access outlasts a member's subscription
     paid_since = db.Column(db.DateTime)   # when it began charging: accounts made before it are grandfathered (plan M2)
+    # What were keys of the settings table (`SETTING_COLUMNS`), read and written by get_setting and set_setting
+    announcement = db.Column(db.Text)
+    announcement_html = db.Column(db.Text)
+    registration_approved_email = db.Column(db.Text)
+    email_verification = db.Column(db.Boolean)
+    captcha_enabled = db.Column(db.Boolean)
+    choose_topics = db.Column(db.Boolean)
+    filter_selection = db.Column(db.Boolean)
+    auto_decline_countries = db.Column(db.Text)
+    nsfw_country_restriction = db.Column(db.Text)
+    referral_generators = db.Column(db.String(20))
+    referral_max_per_code = db.Column(db.Integer)
+    referral_max_per_user = db.Column(db.Integer)
+    meme_comms_low_quality = db.Column(db.Boolean)
+    public_modlog = db.Column(db.Boolean)
+    enable_report_em_dash_replies = db.Column(db.Boolean)
+    limit_one_em_report_per_user = db.Column(db.Boolean)
+    ban_posts = db.Column(db.Boolean)
+    allow_default_user_add_remote_community = db.Column(db.Boolean)
+    allow_video_file_uploads = db.Column(db.String(20))
+    allow_audio_file_uploads = db.Column(db.String(20))
+    max_video_upload_bytes = db.Column(db.BigInteger)
+    max_audio_upload_bytes = db.Column(db.BigInteger)
+    max_album_images = db.Column(db.Integer)
+    redirect_policy = db.Column(db.String(20))
+    enable_instance_chooser = db.Column(db.Boolean)
+    elevator_pitch = db.Column(db.Text)
+    number_of_admins = db.Column(db.Integer)
+    financial_stability = db.Column(db.Boolean)
+    daily_backups = db.Column(db.Boolean)
 
 
 # What each domain holds for itself: never the first domain's. NULL is the default here.
@@ -6405,10 +6435,22 @@ FIRST_DEFAULTS = {
     'community_creation_admin_only': False, 'reports_email_admins': True, **OWN_COLUMNS,
 }
 
+# What were settings keys and are now each domain's: get_setting and set_setting read and write them here, a NULL
+# being the caller's default as a missing key was. logo_192 and logo_512 were the first domain's PWA icons.
+SETTING_COLUMNS = (
+    'logo_192', 'logo_512', 'announcement', 'announcement_html', 'registration_approved_email', 'email_verification',
+    'captcha_enabled', 'choose_topics', 'filter_selection', 'auto_decline_countries', 'nsfw_country_restriction',
+    'referral_generators', 'referral_max_per_code', 'referral_max_per_user', 'meme_comms_low_quality',
+    'public_modlog', 'enable_report_em_dash_replies', 'limit_one_em_report_per_user', 'ban_posts',
+    'allow_default_user_add_remote_community', 'allow_video_file_uploads', 'allow_audio_file_uploads',
+    'max_video_upload_bytes', 'max_audio_upload_bytes', 'max_album_images', 'redirect_policy',
+    'enable_instance_chooser', 'elevator_pitch', 'number_of_admins', 'financial_stability', 'daily_backups')
+FIRST_DEFAULTS.update(dict.fromkeys(SETTING_COLUMNS))
+
 # The columns a sister domain inherits from the first domain when it leaves them NULL (or '')
 TENANT_COLUMNS = tuple(name for name in FIRST_DEFAULTS if name not in OWN_COLUMNS)
-# The ones Site had, which its instances still read and write as the first domain's (logo_192 and 512 were settings)
-SITE_TENANT_COLUMNS = tuple(name for name in TENANT_COLUMNS if name not in ('logo_192', 'logo_512'))
+# The ones Site had, which its instances still read and write as the first domain's
+SITE_TENANT_COLUMNS = tuple(name for name in TENANT_COLUMNS if name not in SETTING_COLUMNS)
 
 _FIRST_CONFIG = 'first_domain_config'
 

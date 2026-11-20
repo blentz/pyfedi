@@ -76,7 +76,7 @@ from captcha.audio import AudioCaptcha
 from captcha.image import ImageCaptcha
 
 from app.complimentary import grant_to_new_account
-from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, User, Community, DomainBlock, IpBan, \
+from app.models import SETTING_COLUMNS, CronJobLog, Settings, first_config, Domain, Instance, BannedInstances, User, Community, DomainBlock, IpBan, \
     Site, Post, utcnow, Filter, CommunityMember, InstanceBlock, CommunityBan, Topic, UserBlock, Language, \
     File, ModLog, CommunityBlock, Feed, FeedMember, CommunityFlair, CommunityJoinRequest, Notification, UserNote, \
     PostReply, PostReplyBookmark, AllowedInstances, InstanceBan, Tag, Emoji, UserExtraField, ArchivedPostReply, \
@@ -88,6 +88,7 @@ from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, DomainInfo
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_hosted_uri, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from app.branding import branding_for
 from app import theme_code
+import app.domain_config as domain_config
 from app.custom_themes import THEME_PREVIEW, custom_identifier, custom_theme_here, custom_theme_id, custom_themes_for, \
     is_shipped, manages_themes, theme_counts, theme_version
 from collections import Counter
@@ -537,11 +538,21 @@ def is_local_microblogs(community) -> bool:
     return community.kind == COMMUNITY_KIND_MICROBLOGS and community.is_local()
 
 
+def get_setting(name: str, default=None):
+    """A setting: for one of `SETTING_COLUMNS`, the request's domain's (app.domain_config; outside a request, the first
+    domain's), else the instance's, from the key-value store. `default` when it has none."""
+    if name in SETTING_NAMES:
+        value = domain_config.effective(current_storefront())[name]
+        return default if value is None else value
+    return stored_setting(name, default)
+
+
 # Saves an arbitrary object into a persistent key-value store. cached.
 # Similar to g.site.* except g.site.* is populated on every single page load so g.site is best for settings that are
 # accessed very often (e.g. every page load)
 @cache.memoize(timeout=500)
-def get_setting(name: str, default=None):
+def stored_setting(name: str, default=None):
+    """An instance-wide setting from the key-value store, memoised."""
     setting = db.session.query(Settings).filter_by(name=name).first()
     if setting is None:
         return default
@@ -552,31 +563,35 @@ def get_setting(name: str, default=None):
             return default
 
 
+SETTING_NAMES = frozenset(SETTING_COLUMNS)
+
 
 def captcha_enabled() -> bool:
     """Whether registration asks for a captcha. One default for every reader (D1398): required until an admin turns
     it off, because no migration or seed writes a `captcha_enabled` row."""
     return bool(get_setting('captcha_enabled', True))
 
-# retrieves arbitrary object from persistent key-value store
+
 def set_setting(name: str, value):
+    """Store a setting: one of `SETTING_COLUMNS` as the first domain's, any other as the instance's."""
+    if name in SETTING_NAMES:
+        setattr(first_config(), name, value)
+        db.session.commit()   # which clears the domains' memoised values (app.domain_config)
+        return
     setting = Settings.query.filter_by(name=name).first()
     if setting is None:
         db.session.add(Settings(name=name, value=json.dumps(value)))
     else:
         setting.value = json.dumps(value)
     db.session.commit()
-    cache.delete_memoized(get_setting)
+    cache.delete_memoized(stored_setting)
 
 
 def max_album_images() -> int:
-    """How many images a local album post may hold: the admin's `max_album_images`, held to 1..MAX_ALBUM_IMAGES_CEILING
-    whatever the row says, else MAX_ALBUM_IMAGES_DEFAULT. Every reader goes through here, so there is one default."""
-    try:
-        value = int(get_setting('max_album_images', MAX_ALBUM_IMAGES_DEFAULT))
-    except (TypeError, ValueError):
-        return MAX_ALBUM_IMAGES_DEFAULT
-    return min(max(value, 1), MAX_ALBUM_IMAGES_CEILING)
+    """How many images a local album post may hold: the domain's `max_album_images` (an integer column), held to
+    1..MAX_ALBUM_IMAGES_CEILING whatever it says, else MAX_ALBUM_IMAGES_DEFAULT. Every reader goes through here, so
+    there is one default."""
+    return min(max(get_setting('max_album_images', MAX_ALBUM_IMAGES_DEFAULT), 1), MAX_ALBUM_IMAGES_CEILING)
 
 
 # Return the contents of a file as a string. Inspired by PHP's function of the same name.
