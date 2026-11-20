@@ -86,6 +86,13 @@
                 {% else -%}
                 <p class="small text-muted">{{ _('Joining is free at the moment, so there is no link to join with. A member enters the code under Settings, Subscription.') }}</p>
                 {% endif -%}
+                {% if item.deletable -%}
+                <form method="post" action="{{ url_for('user.user_assigned_code_delete', code_id=row.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-outline-danger confirm_first">{{ _('Delete this code') }}</button>
+                    <p class="small text-muted mt-2">{{ _('It stops working at once, and its link and QR code with it. Whoever has used it keeps what it gave them.') }}</p>
+                </form>
+                {% endif -%}
             </div>
         </section>
         {% endfor -%}

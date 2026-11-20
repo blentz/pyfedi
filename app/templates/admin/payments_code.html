@@ -27,6 +27,13 @@
             {{ render_field(form.user_name) }}
             {{ render_field(form.save_code) }}
         </form>
+        {% if deletable -%}
+        <form method="post" action="{{ url_for('admin.admin_payments_code_delete', code_id=code.id) }}" class="mb-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-outline-danger confirm_first">{{ _('Delete this code') }}</button>
+            <p class="small text-muted mt-2">{{ _('It stops working at once. Whoever has used it keeps what it gave them.') }}</p>
+        </form>
+        {% endif -%}
         <p><a href="{{ url_for('admin.admin_payments_codes') }}">{{ _('Back to codes') }}</a></p>
     </div>
 </div>

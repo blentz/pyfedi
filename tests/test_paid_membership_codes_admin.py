@@ -304,3 +304,53 @@ class TestAGiftCountsInUnits:
         db.session.commit()
         page = BeautifulSoup(env.client.get('/admin/payments/codes').get_data(as_text=True), 'html.parser')
         assert 'Furcas for 3 months' in page.find('tr', id=f'code-{PromoCode.query.one().id}').get_text()
+
+
+class TestDeletingACode:
+    """Owner 2026-11-19: an admin can delete a gift code, made for a member or for nobody."""
+
+    @pytest.fixture
+    def code(self, env):
+        holder = somebody(env, 'holder')
+        row = PromoCode(code='gift-month', kind='gift', offer_id=env.knight.id, periods=1, assigned_to=holder.id)
+        db.session.add(row)
+        db.session.commit()
+        return row
+
+    def test_it_is_deleted(self, env, admin, code):
+        response = post(env, f'/admin/payments/codes/{code.id}/delete')
+        assert response.status_code == 302 and response.headers['Location'].endswith('/admin/payments/codes')
+        assert db.session.get(PromoCode, code.id) is None
+        listed = BeautifulSoup(env.client.get('/admin/payments/codes').get_data(as_text=True), 'html.parser')
+        assert listed.find(id=f'code-{code.id}') is None and 'Code gift-month deleted.' in listed.get_text()
+
+    def test_the_list_and_its_page_offer_it(self, env, admin, code):
+        action = f'/admin/payments/codes/{code.id}/delete'
+        for path in ('/admin/payments/codes', f'/admin/payments/codes/{code.id}'):
+            html = BeautifulSoup(env.client.get(path).get_data(as_text=True), 'html.parser')
+            form = html.find('form', action=action)
+            assert form is not None and 'confirm_first' in form.find('button')['class'], path
+
+    def test_neither_a_referral_code_nor_a_discount_code_is_offered_or_deleted(self, env, admin):
+        set_setting(GENERATORS_SETTING, 'all')
+        referrer = somebody(env, 'referrer')
+        generate_code(referrer)
+        discount = PromoCode(code='ten-off-now', kind='percent', percent=10)
+        db.session.add(discount)
+        db.session.commit()
+        referral = PromoCode.query.filter_by(owner_id=referrer.id).one()
+        listed = env.client.get('/admin/payments/codes').get_data(as_text=True)
+        for row in (referral, discount):
+            assert f'/admin/payments/codes/{row.id}/delete' not in listed
+            assert f'/admin/payments/codes/{row.id}/delete' not in env.client.get(
+                f'/admin/payments/codes/{row.id}').get_data(as_text=True)
+            assert post(env, f'/admin/payments/codes/{row.id}/delete').status_code == 404
+            assert db.session.get(PromoCode, row.id) is not None
+
+    def test_an_unknown_code_is_404(self, env, admin):
+        assert post(env, '/admin/payments/codes/99999/delete').status_code == 404
+
+    def test_it_takes_manage_monetization(self, env, code):
+        login(env.client, somebody(env, 'plain'))
+        assert post(env, f'/admin/payments/codes/{code.id}/delete').status_code in (302, 403)
+        assert db.session.get(PromoCode, code.id) is not None

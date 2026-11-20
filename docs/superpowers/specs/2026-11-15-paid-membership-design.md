@@ -68,6 +68,11 @@ of kind `gift`; using it still records a `Referral`.
 - Each use is recorded (`promo_code_use`: code, user, payment or subscription), so `max_uses` holds and the ledger
   shows what was discounted. A discounted payment is not a mismatch: core checks it against the offer's price less
   the discount.
+- **Deleting a gift code** (owner 2026-11-19): an admin (Admin → Payments → Codes, or the code's own page) and the
+  member an admin made it for (their referral page) can delete a gift code. It stops working at once and leaves every
+  list. Whoever used it keeps the period it gave: a gift subscription names no code. Its `promo_code_use` rows go with
+  it. A member's referral code is not deleted this way (it is regenerated), nor is a discount code, whose uses hold
+  checkouts in progress.
 
 ### D4 Locking (PM4)
 

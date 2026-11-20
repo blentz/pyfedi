@@ -34,7 +34,7 @@ from app.payments.core import refresh_access
 from app.roles import describe_scopes, may_attach, may_manage_offer, permission_scopes, set_offer_roles
 from app.payments.discounts import DISCOUNT_KINDS
 from app.payments.gifts import AUTO, REFERRAL_BENEFIT_SETTING, Benefit, default_referral_choice, \
-    referral_benefit
+    deletable as gift_deletable, delete_gift_code, referral_benefit
 from app.payments.offers import LINK, offers_changed, offers_on, period_text, tiers_on
 from app.storefront import clear_domain_cache, domain_rows
 from app.tier_roles import offer_roles, sync_tier_roles
@@ -362,7 +362,8 @@ def _codes_page(default_form=None, code_form=None):
     code_form.offer_id.choices = _tier_choices(none=True)
     return render_template('admin/payments_codes.html', title=_('Codes'), codes=codes, uses=uses, owners=owners, gives=gives,
                            tiers=tiers, default_form=default_form, code_form=code_form, currency=get_setting(CURRENCY_SETTING),
-                           roles_with=roles_with('manage monetization'))
+                           roles_with=roles_with('manage monetization'),
+                           deletable={code.id for code in codes if gift_deletable(code)})
 
 
 def _editable_offer(offer_id: int) -> Offer:
@@ -627,7 +628,22 @@ def admin_payments_code_edit(code_id):
         return redirect(url_for('admin.admin_payments_codes'))
     owner = db.session.get(User, code.owner_id) if code.owner_id else None
     return render_template('admin/payments_code.html', title=_('Code'), code=code, owner=owner, form=form,
-                           roles_with=roles_with('manage monetization'))
+                           roles_with=roles_with('manage monetization'), deletable=gift_deletable(code))
+
+
+@bp.route('/payments/codes/<int:code_id>/delete', methods=['POST'])
+@login_required
+@permission_required('manage monetization')
+def admin_payments_code_delete(code_id):
+    """Delete a gift code (owner 2026-11-19). Whoever used it keeps what it gave."""
+    code = db.session.get(PromoCode, code_id)
+    if not gift_deletable(code):
+        abort(404)
+    text = code.code
+    delete_gift_code(code)
+    db.session.commit()
+    flash(_('Code %(code)s deleted.', code=text))
+    return redirect(url_for('admin.admin_payments_codes'))
 
 
 def _edit_referral_code(code: PromoCode):

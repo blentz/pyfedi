@@ -6,8 +6,8 @@ from flask_login import current_user
 from app import db
 from app.models import Offer, PromoCode, PromoCodeUse
 from app.payments.discounts import DISCOUNT_KINDS, usable as discount_usable
-from app.payments.gifts import Benefit, default_referral_benefit, referral_gift_code, \
-    usable as gift_usable
+from app.payments.gifts import Benefit, default_referral_benefit, deletable as gift_deletable, delete_gift_code, \
+    referral_gift_code, usable as gift_usable
 from app.payments.offers import money, period_text
 from app.permissions import user_access
 from app.referral import (assigned_codes, benefit_on, caps, generate_code, lifetime_referrals, referral_domain,
@@ -73,7 +73,7 @@ def _assigned(row: PromoCode) -> dict:
     link = _assigned_link(row)
     uses = db.session.query(PromoCodeUse).filter_by(promo_code_id=row.id).count()
     return {'row': row, 'gives': gives, 'usable': can_be_used, 'uses': uses, 'link': link,
-            'qr_svg': referral_qr_svg(link) if link else None}
+            'qr_svg': referral_qr_svg(link) if link else None, 'deletable': gift_deletable(row)}
 
 
 def _gives(benefit) -> str | None:
@@ -129,3 +129,19 @@ def user_assigned_code_qr_png(code_id):
     response.headers['Content-Disposition'] = f'attachment; filename="code-{row.id}-qr.png"'
     response.headers['Cache-Control'] = 'no-store'
     return response
+
+
+@bp.route('/user/settings/referrals/codes/<int:code_id>/delete', methods=['POST'])
+@login_required
+def user_assigned_code_delete(code_id):
+    """Delete a gift code an admin made for the member to hand out (owner 2026-11-19). Whoever used it keeps what it
+    gave. Their referral page, if it has nothing left to show, gives way to their settings."""
+    row = next((row for row in assigned_codes(current_user) if row.id == code_id), None)
+    if not gift_deletable(row):
+        abort(404)
+    text = row.code
+    delete_gift_code(row)
+    db.session.commit()
+    flash(_('Code %(code)s deleted.', code=text))
+    return redirect(url_for('user.user_referrals') if referral_page_available(current_user)
+                    else url_for('user.user_settings'))

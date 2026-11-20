@@ -182,3 +182,20 @@ def start_gift(user: User, code: PromoCode, commit: bool = True, offer: Offer | 
     if commit:
         db.session.commit()
     return subscription
+
+
+def deletable(code: PromoCode | None) -> bool:
+    """Whether `code` may be deleted, by an admin or the member it was made for: a gift code an admin made. Not a
+    member's referral code, which is their code (they regenerate it), nor a discount code, whose uses hold checkouts
+    in progress (D4)."""
+    return code is not None and code.kind == 'gift' and code.owner_id is None
+
+
+def delete_gift_code(code: PromoCode) -> None:
+    """Delete a gift code (owner 2026-11-19): it can no longer be used, and leaves every list. Whoever used it keeps the
+    period it gave, as a gift subscription names no code; its uses go with it (they cascade). Locked first, so a use
+    under way finishes before it goes, or finds it gone. The caller commits."""
+    locked = PromoCode.query.filter_by(id=code.id).with_for_update().first()
+    if locked is not None:
+        db.session.delete(locked)
+        db.session.flush()

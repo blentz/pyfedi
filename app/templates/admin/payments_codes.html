@@ -55,7 +55,14 @@
                     <td>{{ uses.get(code.id, 0) }}{% if code.max_uses %} / {{ code.max_uses }}{% endif %}</td>
                     <td>{{ code.expires_at.strftime('%Y-%m-%d') if code.expires_at else '' }}</td>
                     <td>{{ _('Yes') if code.active else _('No') }}</td>
-                    <td><a href="{{ url_for('admin.admin_payments_code_edit', code_id=code.id) }}">{{ _('Edit') }}</a></td>
+                    <td><a href="{{ url_for('admin.admin_payments_code_edit', code_id=code.id) }}">{{ _('Edit') }}</a>
+                        {% if code.id in deletable -%}
+                        <form method="post" action="{{ url_for('admin.admin_payments_code_delete', code_id=code.id) }}" class="d-inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger confirm_first">{{ _('Delete') }}</button>
+                        </form>
+                        {% endif -%}
+                    </td>
                 </tr>
                 {% endfor -%}
             </tbody>

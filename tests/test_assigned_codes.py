@@ -10,7 +10,8 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import Offer, PromoCode, PromoCodeUse, Site, SiteDomain, utcnow
+from app.models import MemberSubscription, Offer, PromoCode, PromoCodeUse, Site, SiteDomain, utcnow
+from app.payments.gifts import delete_gift_code
 from app.referral import GENERATORS_SETTING, REFERRAL_MODE, generate_code
 from app.storefront import clear_domain_cache
 from app.utils import set_setting
@@ -211,3 +212,128 @@ class TestBesideTheirOwnReferralCode:
             env.client.post(f'{PAGE}/generate', data={'csrf_token': token}, base_url=env.base)
         kept = db.session.get(PromoCode, row.id)
         assert (kept.code, kept.assigned_to, kept.active) == ('hand-out-one', referrer.id, True)
+
+
+def post(env, path, csrf=True):
+    """POST with a real CSRF token, checked (WTF_CSRF_ENABLED); csrf=False sends none."""
+    data = {}
+    if csrf:
+        with env.app.test_request_context():
+            g.pop('csrf_token', None)
+            data['csrf_token'] = generate_csrf()
+            raw = flask_session['csrf_token']
+        with env.client.session_transaction() as session:
+            session['csrf_token'] = raw
+    with patch.dict(current_app.config, {'WTF_CSRF_ENABLED': True}):
+        return env.client.post(path, data=data, base_url=env.base)
+
+
+def delete_path(row):
+    return f'{PAGE}/codes/{row.id}/delete'
+
+
+class TestTheMemberDeletesACode:
+    """Owner 2026-11-19: the member a gift code was made for can delete it."""
+
+    def test_their_gift_code_is_deleted(self, env):
+        holder = member(env)
+        row, other = code_for(env, holder), code_for(env, holder, text='hand-out-two')
+        login(env, holder)
+
+        response = post(env, delete_path(row))
+
+        assert response.status_code == 302 and response.headers['Location'].endswith(PAGE)   # one is left to show
+        assert db.session.get(PromoCode, row.id) is None and db.session.get(PromoCode, other.id) is not None
+        listed = page(env)
+        assert listed.find(id=f'assigned-{row.id}') is None
+        assert 'hand-out-one' not in [code.get_text() for code in listed.find_all('code')]
+        assert 'Code hand-out-one deleted.' in listed.get_text()
+
+    def test_with_none_left_they_go_to_their_settings(self, env):
+        holder = member(env)
+        row = code_for(env, holder)
+        login(env, holder)
+
+        response = post(env, delete_path(row))
+
+        assert response.headers['Location'].endswith('/user/settings')
+        assert env.client.get(PAGE, base_url=env.base).status_code == 404   # nothing left: no referral page
+
+    def test_whoever_used_it_keeps_what_it_gave(self, env):
+        holder, joiner = member(env), member(env, 'joiner')
+        row = code_for(env, holder)
+        given = MemberSubscription(user_id=joiner.id, offer_id=env.knight.id, provider_kind='gift',
+                                   provider_reference='gift:kept', status='active', created_at=utcnow(),
+                                   current_period_end=utcnow() + timedelta(days=30))
+        db.session.add(given)
+        db.session.flush()
+        db.session.add(PromoCodeUse(promo_code_id=row.id, user_id=joiner.id, subscription_id=given.id))
+        db.session.commit()
+        login(env, holder)
+
+        post(env, delete_path(row))
+
+        assert db.session.get(MemberSubscription, given.id).status == 'active'
+        assert PromoCodeUse.query.filter_by(user_id=joiner.id).count() == 0
+
+    def test_the_page_offers_it(self, env):
+        holder = member(env)
+        row = code_for(env, holder)
+        login(env, holder)
+        form = block(env, row).find('form', action=delete_path(row))
+        assert form is not None and 'confirm_first' in form.find('button')['class']
+
+    def test_a_discount_code_is_not_theirs_to_delete(self, env):
+        holder = member(env)
+        row = code_for(env, holder, kind='percent', percent=20, offer_id=None, periods=None)
+        login(env, holder)
+        assert block(env, row).find('form', action=delete_path(row)) is None
+        assert post(env, delete_path(row)).status_code == 404
+        assert db.session.get(PromoCode, row.id) is not None
+
+    def test_another_members_code_is_404(self, env):
+        holder, other = member(env), member(env, 'other')
+        row = code_for(env, other)
+        code_for(env, holder, text='hand-out-two')
+        login(env, holder)
+        assert post(env, delete_path(row)).status_code == 404
+        assert db.session.get(PromoCode, row.id) is not None
+
+    def test_a_code_made_for_nobody_is_404(self, env):
+        holder = member(env)
+        row = code_for(env, None)
+        login(env, holder)
+        assert post(env, delete_path(row)).status_code == 404
+        assert db.session.get(PromoCode, row.id) is not None
+
+    def test_without_a_csrf_token_nothing_is_deleted(self, env):
+        holder = member(env)
+        row = code_for(env, holder)
+        login(env, holder)
+        assert post(env, delete_path(row), csrf=False).status_code == 400
+        assert db.session.get(PromoCode, row.id) is not None
+
+    def test_signed_out_nothing_is_deleted(self, env):
+        row = code_for(env, member(env))
+        assert post(env, delete_path(row)).status_code == 302   # to the login
+        assert db.session.get(PromoCode, row.id) is not None
+
+
+def test_a_code_gone_before_it_is_deleted_is_no_error(env):
+    """Two deletes at once: the second finds no row under its lock and does nothing."""
+
+    row = code_for(env, member(env))
+    PromoCode.query.filter_by(id=row.id).delete()
+    db.session.flush()
+    delete_gift_code(row)
+    db.session.commit()
+    assert db.session.get(PromoCode, row.id) is None
+
+
+def test_a_member_without_referral_codes_cannot_generate_one(env):
+    """Holding only codes an admin made, the referral page is theirs but their own referral code is not (RC1)."""
+    holder = member(env)
+    code_for(env, holder)
+    login(env, holder)
+    assert post(env, f'{PAGE}/generate').status_code == 404
+    assert db.session.get(type(holder), holder.id).referral_code is None
