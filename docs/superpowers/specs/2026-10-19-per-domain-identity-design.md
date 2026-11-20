@@ -71,8 +71,10 @@ Anti-goals (a failure even if it "works")
 - A local name is unique within its domain, case-insensitively, not across domains. Remote rows are unaffected.
   Prod has no local user or community names that differ only in case (checked 2026-10-19), so the index can be
   built without a cleanup step.
-- A community belongs to its creator's home domain, whichever storefront they created it on. (Claude's call,
-  following "acts as their home identity".)
+- A community belongs to the storefront it is created on, whatever its creator's home domain: it is that domain's
+  local community, its name unique there and its URLs built from it, by the web form and the API alike. (Owner
+  2026-11-19. Was Claude's call, following "acts as their home identity": the creator's home domain, whichever
+  storefront they created it on.) Feeds keep their own rule: a creator's home domain (per-domain feeds F4, owner).
 - A post's or comment's object ID is on its author's home domain, whatever community it is in. A fetch of
   `/post/N` through another of our domains redirects to that ID. (Claude's call: the fediverse's usual rule.)
 - Each hosted domain has its own `instance` row. Sister content then reads as federated wherever the code tests the

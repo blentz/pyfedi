@@ -29,7 +29,7 @@ from app.models import CommunityBlock, CommunityMember, Notification, Notificati
 from app.shared.tasks import task_selector
 from app.shared.upload import process_upload
 from app.user.utils import search_for_user
-from app.storefront import canonicalise_text, default_storefront, delete_memoized_everywhere, domain_authority, \
+from app.storefront import canonicalise_text, current_storefront, default_storefront, delete_memoized_everywhere, domain_authority, \
     domain_base_url, federating_base, instance_id_of, link_on, storefront_url
 from app.utils import authorise_api_user, blocked_communities, shorten_string, markdown_to_html, \
     instance_banned, community_membership, joined_communities, moderating_communities, is_image_url, \
@@ -309,8 +309,9 @@ def make_community(input, src, auth=None, uploaded_icon_file=None, uploaded_bann
     if not name:
         raise Exception('A community needs a name')
 
+    # the community belongs to the domain the request is on, not the creator's (owner 2026-11-19)
+    home = current_storefront()
     # test user with this name doesn't already exist
-    home = user.home_domain()
     base_url = domain_base_url(home)
     ap_profile_id = base_url + '/u/' + name.lower()
     existing_user = User.query.filter_by(ap_profile_id=ap_profile_id).first() or \

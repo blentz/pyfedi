@@ -15,6 +15,7 @@ from app.activitypub.util import find_microblogging_community
 from app.models import Community, Instance, Language, Role, RolePermission, Site, SiteDomain, User, role_grant
 from app.storefront import clear_domain_cache, default_domain, domain_base_url, domain_by_id
 from app.utils import finalize_user_setup
+from app.local_only import community_local_only
 from app.constants import SRC_API
 from app.shared.community import make_community
 from tests.factories import bearer, make_community as make_community_row, make_instance, make_user
@@ -166,24 +167,36 @@ def _create(app, user, host, **overrides):
     return Community.query.filter(db.func.lower(Community.name) == overrides['url'].lower()).first()
 
 
-def test_a_community_belongs_to_its_creators_home_domain(app, creators, per_domain_creation_domains):
+def test_a_community_belongs_to_the_domain_it_is_created_on(app, creators, per_domain_creation_domains):
+    """Owner 2026-11-19: a member creating a community on another of our domains makes it that domain's, its local
+    community there, whatever their own home domain is."""
     default, onion = per_domain_creation_domains
     founder, other = creators
     base = app.config['SERVER_URL']
 
-    made = _create(app, founder, 'abc.onion', url='clearnet')
+    made = _create(app, founder, 'abc.onion', url='hidden')   # a default-domain member, on the onion
+    assert made.site_domain_id == onion.id
+    assert made.ap_profile_id == 'http://abc.onion/c/hidden'
+    assert made.ap_public_url == 'http://abc.onion/c/hidden'
+    assert made.ap_moderators_url == 'http://abc.onion/c/hidden/moderators'
+    assert made.ap_domain == 'abc.onion'
+    assert made.user_id == founder.id
+
+    made = _create(app, other, default.domain, url='clearnet')   # an onion member, on the default domain
     assert made.site_domain_id == default.id
     assert made.ap_profile_id == f'{base}/c/clearnet'
     assert made.ap_public_url == f'{base}/c/clearnet'
     assert made.ap_followers_url == f'{base}/c/clearnet/followers'
     assert made.ap_domain == app.config['SERVER_NAME']
 
-    made = _create(app, other, 'abc.onion', url='hidden')
-    assert made.site_domain_id == onion.id
-    assert made.ap_profile_id == 'http://abc.onion/c/hidden'
-    assert made.ap_public_url == 'http://abc.onion/c/hidden'
-    assert made.ap_moderators_url == 'http://abc.onion/c/hidden/moderators'
-    assert made.ap_domain == 'abc.onion'
+
+def test_a_community_created_on_a_local_only_domain_is_local_only(app, creators, per_domain_creation_domains):
+    """By its domain (spec 3.4): the creator's own federating home does not make it federate."""
+    founder, _other = creators
+    made = _create(app, founder, 'abc.onion', url='hidden')
+    assert community_local_only(made) is True
+    made = _create(app, founder, per_domain_creation_domains[0].domain, url='clearnet')
+    assert community_local_only(made) is False
 
 
 def _api_creator(name, domain):
@@ -193,21 +206,45 @@ def _api_creator(name, domain):
     return user
 
 
-def test_the_api_make_community_builds_an_onion_creators_urls(app, db_session, per_domain_creation_domains):
+def _make_over(app, host, name, user):
+    """The API's make_community, over a request addressed to `host`."""
+    with app.test_request_context(base_url=f'http://{host}'):
+        app.preprocess_request()
+        _user_id, community_id = make_community(_api_input(name=name), SRC_API, bearer(user))
+    return db.session.get(Community, community_id)
+
+
+def test_the_api_makes_a_community_on_the_domain_it_is_asked_on(app, db_session, per_domain_creation_domains):
     default, onion = per_domain_creation_domains
     make_user(db.session.get(Instance, 1), 'founder', local=True)
     _seed_und_language()
-    user = _api_creator('onionite', onion)
-    make_community(_api_input(name='hidden'), SRC_API, bearer(user))
-    community = Community.query.filter_by(name='hidden').one()
+    onionite, clearnetter = _api_creator('onionite', onion), _api_creator('clearnetter', default)
+
+    community = _make_over(app, 'abc.onion', 'hidden', clearnetter)
     assert community.site_domain_id == onion.id
     assert community.ap_profile_id == 'http://abc.onion/c/hidden'
     assert community.ap_public_url == 'http://abc.onion/c/hidden'
     assert community.ap_followers_url == 'http://abc.onion/c/hidden/followers'
     assert community.ap_domain == 'abc.onion'
 
+    community = _make_over(app, default.domain, 'clearnet', onionite)
+    assert community.site_domain_id == default.id
+    assert community.ap_profile_id == f"{app.config['SERVER_URL']}/c/clearnet"
 
-def test_add_local_takes_a_name_only_on_the_creators_own_domain(app, creators, per_domain_creation_domains):
+
+def test_the_api_refuses_a_name_taken_on_the_domain_it_is_asked_on(app, db_session, per_domain_creation_domains):
+    default, onion = per_domain_creation_domains
+    make_user(db.session.get(Instance, 1), 'founder', local=True)
+    _seed_und_language()
+    clearnetter = _api_creator('clearnetter', default)
+    _make_over(app, 'abc.onion', 'hidden', clearnetter)
+    with pytest.raises(Exception, match='community with that name already exists'):
+        _make_over(app, 'abc.onion', 'Hidden', clearnetter)
+    assert _make_over(app, default.domain, 'hidden', clearnetter).site_domain_id == default.id
+
+
+def test_add_local_takes_a_name_only_once_on_the_domain_it_is_created_on(app, creators,
+                                                                         per_domain_creation_domains):
     default, onion = per_domain_creation_domains
     founder, other = creators
 
@@ -215,10 +252,10 @@ def test_add_local_takes_a_name_only_on_the_creators_own_domain(app, creators, p
         return sorted(c.site_domain_id for c in Community.query.filter(db.func.lower(Community.name) == name))
 
     _create(app, founder, 'abc.onion', url='shared_name')
-    assert named('shared_name') == [default.id]
-    _create(app, other, 'abc.onion', url='Shared_Name')
-    assert named('shared_name') == sorted([default.id, onion.id])
-    _create(app, other, 'abc.onion', url='SHARED_NAME')
+    assert named('shared_name') == [onion.id]
+    _create(app, other, 'abc.onion', url='Shared_Name')   # taken there, whoever asks
+    assert named('shared_name') == [onion.id]
+    _create(app, other, default.domain, url='SHARED_NAME')   # free on the default domain
     assert named('shared_name') == sorted([default.id, onion.id])
 
 
@@ -273,9 +310,9 @@ def test_a_storefront_home_community_and_user_resolve_by_name(app, creators, per
 
 def test_a_default_domain_community_document_is_unchanged(app, creators, per_domain_creation_domains):
     founder, other = creators
-    made = _create(app, founder, 'abc.onion', url='clearnet')
+    made = _create(app, founder, 'default.example', url='clearnet')
     response = app.test_client().get('/c/clearnet', headers={**AP, 'Host': 'default.example'})
     assert response.status_code == 200
     assert response.json['id'] == f"{app.config['SERVER_URL']}/c/clearnet" == made.ap_profile_id
-    # a bare name is the storefront's own (plan C1): the onion has no `clearnet`, whoever created it from there
+    # a bare name is the storefront's own (plan C1): the onion has no `clearnet`
     assert app.test_client().get('/c/clearnet', headers={**AP, 'Host': 'abc.onion'}).status_code == 404

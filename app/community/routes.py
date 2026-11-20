@@ -132,7 +132,7 @@ def add_local():
         form.nsfl.render_kw = {'disabled': True}
 
     form.languages.choices = select_choices(languages_for_form(all_languages=True))
-    form.theme.choices = select_choices(community_theme_list(current_user.home_domain().id))   # where it will live
+    form.theme.choices = select_choices(community_theme_list(current_storefront().id))   # where it will live
 
     if form.validate_on_submit():
         # No slugify here any more: AddCommunityForm.validate normalises before
@@ -154,7 +154,7 @@ def add_local():
         else:
             private_key, public_key = RsaKeys.generate_keypair()
             form.invitations.data = 0
-        home = current_user.home_domain()
+        home = current_storefront()   # the domain it is created on, not the creator's (owner 2026-11-19)
         base_url = domain_base_url(home)
         community = Community(title=form.community_name.data, name=form.url.data,
                               description=piefed_markdown_to_lemmy_markdown(form.description.data,

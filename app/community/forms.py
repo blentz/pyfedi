@@ -20,6 +20,7 @@ from app.constants import APPLE_PODCAST_CATEGORIES, COMMUNITY_KIND_DISCUSSION, C
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE, MAX_ALBUM_IMAGES_CEILING
 from app.local_names import local_named
 from app.models import Community, Site, utcnow, User, Feed, storable_alt_text
+from app.storefront import current_storefront
 from app.utils import domain_from_url, MultiCheckboxField, get_timezones, get_request, url_is_parseable, is_hex_color, max_album_images
 from app.form_choices import select_choices
 
@@ -124,8 +125,8 @@ class AddCommunityForm(PodcastCategoryMixin, FlaskForm):
                 self.url.errors.append(_l('Url is required.'))
                 return False
 
-            # a name is unique on the creator's home domain, where the community will be made
-            domain = current_user.home_domain()
+            # a name is unique on the domain this request is on, where the community will be made
+            domain = current_storefront()
             community = Community.query.filter(local_named(Community, self.url.data.strip(), domain)).first()
             if community is not None:
                 self.url.errors.append(_l('A community with this url already exists.'))
