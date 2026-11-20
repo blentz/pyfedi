@@ -46,8 +46,11 @@ def main():
     timeout = int(os.environ.get('SCHEMA_WAIT_TIMEOUT', '600'))
     engine = create_engine(os.environ['DATABASE_URL'])
     print(f'Waiting for the database schema to match the migrations (up to {timeout}s)...', flush=True)
-    current = wait_for_schema(engine.connect, lambda connection: schema_is_current(connection, MIGRATIONS),
-                              timeout=timeout, interval=2)
+    try:
+        current = wait_for_schema(engine.connect, lambda connection: schema_is_current(connection, MIGRATIONS),
+                                  timeout=timeout, interval=2)
+    finally:
+        engine.dispose()   # its pooled connection closed, not left to the garbage collector
     if not current:
         print(f'The database schema was not current after {timeout}s.', file=sys.stderr, flush=True)
         return 1

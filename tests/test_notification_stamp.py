@@ -131,10 +131,12 @@ def test_the_python_stamp_covers_every_notification_the_migrations_backfill_stam
     for table, start in (('conversation', 5000), ('post_reply', 7000)):   # ids no row of another kind has
         db.session.execute(text(f"SELECT setval('{table}_id_seq', {start})"))
     with_onion, with_first = Conversation(user_id=onion_hidden_on_clearnet_alpha.first_bob.id), Conversation(user_id=onion_hidden_on_clearnet_alpha.first_bob.id)
+    # In the session before they gain members: make_post_reply's commit would otherwise meet them through
+    # User.conversations while they were not (SAWarning, and the members not saved by that flush)
+    db.session.add_all([with_onion, with_first])
     with_onion.members.extend([onion_hidden_on_clearnet_alpha.first_bob, onion_hidden_on_clearnet_alpha.onion_bob])
     with_first.members.extend([onion_hidden_on_clearnet_alpha.first_bob, onion_hidden_on_clearnet_alpha.admin])
     first_reply = make_post_reply(onion_hidden_on_clearnet_alpha.first_post, onion_hidden_on_clearnet_alpha.first_bob, 'FIRSTREPLY')
-    db.session.add_all([with_onion, with_first])
     db.session.commit()
     rows = shapes(onion_hidden_on_clearnet_alpha, with_onion.id, with_first.id, onion_hidden_on_clearnet_alpha.reply.id, first_reply.id)
     # a feed's notification names it by `feed_id` (per-domain feeds Task 7), which the backfill predates: the hook

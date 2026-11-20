@@ -23,8 +23,21 @@ def _script():
     return ScriptDirectory(MIGRATIONS)
 
 
+_ENGINES = []
+
+
+@pytest.fixture(autouse=True)
+def _dispose_engines():
+    """Every engine a test here made is disposed after it: an in-memory SQLite engine left to the garbage collector
+    closes its connection whenever that runs, and the ResourceWarning lands on whichever test is running then."""
+    yield
+    while _ENGINES:
+        _ENGINES.pop().dispose()
+
+
 def _engine_holding(revisions):
     engine = create_engine('sqlite://')
+    _ENGINES.append(engine)
     if revisions is not None:
         with engine.begin() as connection:
             connection.execute(text('CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)'))
@@ -163,6 +176,33 @@ def test_main_exits_zero_when_current_and_one_on_timeout(monkeypatch, revisions,
     monkeypatch.setenv('SCHEMA_WAIT_TIMEOUT', '0')
     monkeypatch.setattr(wait_for_schema, 'create_engine', lambda url: engine)
     assert wait_for_schema.main() == expected
+
+
+def test_main_disposes_its_engine(monkeypatch):
+    engine = _engine_holding(list(_script().get_heads()))
+    disposed, dispose = [], engine.dispose
+    monkeypatch.setattr(engine, 'dispose', lambda: (disposed.append(True), dispose()))   # recorded, and still done
+    monkeypatch.setenv('DATABASE_URL', 'sqlite://')
+    monkeypatch.setenv('SCHEMA_WAIT_TIMEOUT', '0')
+    monkeypatch.setattr(wait_for_schema, 'create_engine', lambda url: engine)
+    assert wait_for_schema.main() == 0
+    assert disposed == [True]
+
+
+def test_main_disposes_its_engine_when_the_wait_raises(monkeypatch):
+    engine = _engine_holding(None)
+    disposed, dispose = [], engine.dispose
+    monkeypatch.setattr(engine, 'dispose', lambda: (disposed.append(True), dispose()))   # recorded, and still done
+    monkeypatch.setenv('DATABASE_URL', 'sqlite://')
+    monkeypatch.setattr(wait_for_schema, 'create_engine', lambda url: engine)
+
+    def broken_wait(*args, **kwargs):
+        raise RuntimeError('no database')
+
+    monkeypatch.setattr(wait_for_schema, 'wait_for_schema', broken_wait)
+    with pytest.raises(RuntimeError, match='no database'):
+        wait_for_schema.main()
+    assert disposed == [True]
 
 
 def test_main_defaults_to_a_ten_minute_timeout(monkeypatch):
