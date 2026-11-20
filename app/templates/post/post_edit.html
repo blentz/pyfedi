@@ -379,7 +379,7 @@
           window.open('{{ site_url }}/share?url=' + url + '&title=' + title, '_blank');
         })();"
            title="{{ _('Drag this to your bookmarks bar') }}"
-           style="cursor: grab; text-decoration: underline;">{{ _('Share on PieFed') }}</a></p>
+           style="cursor: grab; text-decoration: underline;">{{ _('Share on %(domain)s', domain=instance_domain) }}</a></p>
     </main>
 
     {% include "_side_pane.html" %}

@@ -373,6 +373,7 @@ def test_share_bookmarklet_names_the_storefront_origin(app, storefront_presentat
     text = response.get_data(as_text=True)
     assert f"window.open('http://{ONION}/share?url=" in text
     assert f'https://{ONION}' not in text
+    assert f'Share on {ONION}</a>' in text and 'Share on PieFed' not in text   # the link names the domain it shares to
 
 
 # --- JSON-LD page metadata follows the storefront (final review item 9) -------------------------------------------
