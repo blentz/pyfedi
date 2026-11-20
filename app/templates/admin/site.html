@@ -4,6 +4,7 @@
     {% extends "base.html" -%}
 {% endif -%}
 {% from 'bootstrap5/form.html' import render_field %}
+{% from 'admin/_tenant_field.html' import tenant_field %}
 {% set active_child = 'admin_site' %}
 
 
@@ -13,39 +14,52 @@
 <br>
 <div class="row">
     <div class="col">
-        <h1>{{ _('Site profile') }}</h1>
+        <h1>{{ _('Site profile') if tenant.is_first else _('Site profile: %(domain)s', domain=tenant.domain.domain) }}</h1>
+        {% if tenant.domain.is_onion %}
+        <p class="alert alert-info">{{ _('This is an onion: its pages may load nothing from another site. A save that would is refused.') }}</p>
+        {% endif %}
         <form method="post" enctype="multipart/form-data">
-            {{ form.csrf_token() }}
+            {% if form.csrf_token %}{{ form.csrf_token() }}{% endif %}
             <p>{{ _('Configure the appearance of the instance, by giving it a name, a short slogan, basic info for the sidebar and a logo. This information appears in link previews in social media.') }}</p>
-            {{ render_field(form.name) }}
-            {{ render_field(form.description) }}
-            {{ render_field(form.sidebar) }}
+            {{ tenant_field(form.name, tenant, editable, inherited) }}
+            {{ tenant_field(form.description, tenant, editable, inherited) }}
+            {{ tenant_field(form.sidebar, tenant, editable, inherited) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}
-                <a href="{{ url_for('admin.admin_sidebar') }}">{{ _('Order and hide the sidebar boxes') }}</a></p>
-            {{ render_field(form.announcement) }}
+                <a href="{{ url_for('admin.admin_sidebar') if tenant.is_first else url_for('admin.admin_domain_sidebar', domain_id=tenant.domain.id) }}">{{ _('Order and hide the sidebar boxes') }}</a></p>
+            {{ tenant_field(form.announcement, tenant, editable, inherited) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
-            {{ render_field(form.icon) }}
+            {% if stored and stored.logo %}
+            <p><img src="{{ stored.logo }}" alt="{{ _('The logo') }}" height="50"></p>
+            {% elif inherited.get('logo') %}
+            <p><img src="{{ inherited.logo }}" alt="{{ _("The first domain's logo") }}" height="50"> {{ _("The first domain's logo, until this domain has one of its own.") }}</p>
+            {% endif %}
+            {{ render_field(form.logo) }}
             <p class="small field_hint">{{ _('Provide a square image, minimum 50 pixels wide but ideally 152+ pixels.') }}
             {{ _('It is best to use the PNG file format as that is most widely compatible for PWA icons.') }}</p>
-            {% if site.logo_dark %}
-            <p><img src="{{ site.logo_dark }}" alt="{{ _('The dark mode icon') }}" height="50"></p>
+            {{ render_field(form.remove_logo) }}
+            {% if stored and stored.logo_dark %}
+            <p><img src="{{ stored.logo_dark }}" alt="{{ _('The dark mode logo') }}" height="50"></p>
             {% endif %}
-            {{ render_field(form.icon_dark) }}
-            <p class="small field_hint">{{ _('Shown instead of the icon when the page is in dark mode. Leave it unset to show the icon in both modes.') }}</p>
-            {{ render_field(form.remove_icon_dark) }}
+            {{ render_field(form.logo_dark) }}
+            <p class="small field_hint">{{ _('Shown instead of the logo when the page is in dark mode. Leave it unset to show the logo in both modes.') }}</p>
+            {{ render_field(form.remove_logo_dark) }}
+            <h2>{{ _('Look') }}</h2>
+            {{ tenant_field(form.default_theme, tenant, editable, inherited) }}
+            {{ tenant_field(form.additional_css, tenant, editable, inherited) }}
+            <p class="small field_hint">{{ _('CSS in this field will be added to every page.') }}</p>
             <h2>{{ _('About this instance') }}</h2>
             <p>{{ _('Provide a more extensive description of the instance, set a contact address and provide legal information. This information appears on the <a href="/about">about</a> page.') }}</p>
-            {{ render_field(form.about) }}
+            {{ tenant_field(form.about, tenant, editable, inherited) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
-            {{ render_field(form.legal_information) }}
+            {{ tenant_field(form.legal_information, tenant, editable, inherited) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
-            {{ render_field(form.contact_email) }}
-            {{ render_field(form.tos_url) }}
+            {{ tenant_field(form.contact_email, tenant, editable, inherited) }}
+            {{ tenant_field(form.tos_url, tenant, editable, inherited) }}
             <p class="small field_hint">{{ _('Create a page in the "Pages" area then put it\'s address in here.') }}</p>
-            {{ render_field(form.source_url) }}
+            {{ tenant_field(form.source_url, tenant, editable, inherited) }}
             <p class="small field_hint">{{ _('The AGPL requires a server running modified PieFed code to offer its users that code. Point this at your fork. Blank means upstream PieFed\'s repository. The footer, nodeinfo and the Mastodon API all use it.') }}</p>
-            {{ render_field(form.bug_report_url) }}
-            {{ render_field(form.get_involved_url) }}
+            {{ tenant_field(form.bug_report_url, tenant, editable, inherited) }}
+            {{ tenant_field(form.get_involved_url, tenant, editable, inherited) }}
             <p class="small field_hint">{{ _('The footer\'s "report bugs" and "get involved" links. Blank means upstream PieFed\'s.') }}</p>
             {{ render_field(form.submit) }}
         </form>

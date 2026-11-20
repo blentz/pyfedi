@@ -83,10 +83,8 @@ def _valid_misc_payload(language):
     from wtforms.validators import NumberRange
 
     from app.admin.forms import SiteMiscForm
-    from app.utils import theme_list
 
     form = SiteMiscForm(formdata=None, meta={'csrf': False})
-    form.default_theme.choices = select_choices(theme_list())
     # Not languages_for_form(): that reads current_user, which needs a request.
     form.language_id.choices = select_choices([(language.id, language.name)])
     data = {}

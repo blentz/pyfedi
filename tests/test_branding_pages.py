@@ -266,28 +266,24 @@ def test_site_profile_save_shows_on_next_page_load(app, branded, real_cache, set
                                data={'name': 'Renamed Site', 'description': 'A new tagline', 'about': 'New about',
                                      'sidebar': 'New sidebar', 'legal_information': '', 'tos_url': '',
                                      'announcement': '', 'contact_email': 'admin@example.com', 'submit': 'Save',
-                                     'csrf_token': token, 'icon': (b'', '')})
-    assert response.status_code == 200, response.headers.get('Location')
+                                     'csrf_token': token, 'logo': (b'', '')})
+    assert response.status_code == 302 and response.headers['Location'].endswith('/admin/site')
     about = page(app, '/about')
     assert 'About Renamed Site' in about
     assert 'New about' in about
     assert 'Golden Site' not in about
 
 
-def test_site_misc_save_shows_on_next_page_load(app, branded, real_cache, settings_admin):
+def test_the_first_domains_look_saved_shows_on_next_page_load(app, branded, real_cache, settings_admin):
+    """The first domain's theme and CSS are on the Site page (MT4), and its save clears the memo too."""
     client, token = settings_admin
     assert '.golden-site' in page(app, '/')   # memoised now
     forget_login()
-    # No 'submit' key: SiteMiscForm and CloseInstanceForm both name their submit field 'submit'
     with patch('app.admin.routes.render_template', return_value='rendered'):
-        response = client.post('/admin/misc', data={
-            'csrf_token': token, 'redirect_policy': 'same_origin', 'allow_video_file_uploads': 'no',
-            'allow_audio_file_uploads': 'no', 'default_filter': 'popular', 'default_theme': 'forest',
-            'registration_mode': 'Open', 'language_id': '2', 'read_posts_cutoff': '180', 'max_album_images': '4', 'nsfw_country_restriction': '',
-            'auto_decline_countries': '', 'application_question': '', 'auto_decline_referrers': '',
-            'ban_check_servers': '', 'registration_approved_email': '', 'additional_css': '.renamed { color: red; }',
-            'additional_js': ''})
-    assert response.status_code == 200, response.headers.get('Location')
+        response = client.post('/admin/site', content_type='multipart/form-data', data={
+            'name': 'Golden Site', 'contact_email': 'admin@example.com', 'default_theme': 'forest',
+            'additional_css': '.renamed { color: red; }', 'submit': 'Save', 'csrf_token': token, 'logo': (b'', '')})
+    assert response.status_code == 302 and response.headers['Location'].endswith('/admin/site')
     home = page(app, '/')
     assert '.renamed { color: red; }' in home
     assert '.golden-site' not in home

@@ -1,14 +1,16 @@
-"""Admins edit each domain's branding on the Domains page (project 4, Task 5; spec §3.4, §3.5).
+"""Admins edit each domain's branding on the Site page with the domain picked (project 4, Task 5; spec §3.4, §3.5;
+spec 2026-11-20-multitenant-domain-config MT4).
 
-`/admin/domains/<id>/branding` edits a sister domain's `DomainConfig` row; the first domain's branding is Site row
-1's, edited at the site settings page. A blank field inherits the first domain's value again.
+`/admin/site?domain=<id>` edits that domain's `DomainConfig` row: a sister's own row, or the first domain's row for the
+first domain. The old `/admin/domains/<id>/branding` address opens it. A sister's blank field inherits the first
+domain's value again.
 
 A logo upload makes the files the site logo upload makes (`save_logo_upload`), the 192 and 512 pixel manifest icons
-included. Replacing or clearing a domain's logo removes only files that domain's own upload wrote: never a file Site's
-logo or icon settings name, another domain's row names, or the form names.
+included. Replacing or clearing a domain's logo removes only files that domain's own upload wrote: never a file another
+domain's row names, the first domain's included, or the form names.
 
 Off-site references: a save of the onion's branding with one is refused, naming it, and writes nothing; anywhere else,
-the site settings included, the save goes ahead with a warning naming each one.
+the first domain included, the save goes ahead with a warning naming each one.
 
 Each test runs in a scratch directory holding its own `app/static/media` (and the real templates, for the themes), so
 what an upload writes and what a guard removes is only ever this test's."""
@@ -57,7 +59,7 @@ def save(admin, domain, logo=None, **fields):
     data.update(fields)
     data['logo'] = logo if logo is not None else (io.BytesIO(b''), '')
     forget_login()
-    return client.post(f'/admin/domains/{domain.id}/branding', data=data, content_type='multipart/form-data')
+    return client.post(f'/admin/site?domain={domain.id}', data=data, content_type='multipart/form-data')
 
 
 def flashes(admin) -> list:
@@ -89,25 +91,34 @@ def write_media(media, *names):
 # ---------------------------------------------------------------------------------------------------------------------
 # Who may, and which domain
 
-def test_non_admin_403(app, admin_domain_branding_domains):
+def test_non_admin_is_turned_away(app, admin_domain_branding_domains):
     ordinary = make_user(admin_domain_branding_domains['instance'], 'ordinary', local=True)
     ordinary.verified = True
     db.session.commit()
     client = app.test_client()
     login(client, ordinary)
-    assert client.get(f"/admin/domains/{admin_domain_branding_domains['shop'].id}/branding").status_code == 403
+    response = client.get(f"/admin/site?domain={admin_domain_branding_domains['shop'].id}")
+    assert response.status_code == 302 and '/auth/permission_denied' in response.headers['Location']
     response = save((client, csrf(app, client)), admin_domain_branding_domains['shop'], name='Not allowed')
-    assert response.status_code == 403
+    assert response.status_code == 302 and '/auth/permission_denied' in response.headers['Location']
     assert own_row(admin_domain_branding_domains['shop']) is None
 
 
-def test_default_row_redirects_to_site_settings(admin_domain_branding_admin, admin_domain_branding_domains):
-    response = admin_domain_branding_admin[0].get(f"/admin/domains/{admin_domain_branding_domains['first'].id}/branding")
-    assert response.status_code == 302
-    assert response.headers['Location'].endswith('/admin/site')
-    response = save(admin_domain_branding_admin, admin_domain_branding_domains['first'], name='Never stored')
+def test_the_old_branding_address_opens_the_site_page_with_the_domain_picked(admin_domain_branding_admin,
+                                                                             admin_domain_branding_domains):
+    for name in ('first', 'shop'):
+        domain = admin_domain_branding_domains[name]
+        response = admin_domain_branding_admin[0].get(f'/admin/domains/{domain.id}/branding')
+        assert response.status_code == 302
+        assert response.headers['Location'].endswith(f'/admin/site?domain={domain.id}')
+
+
+def test_the_first_domains_branding_is_the_first_domains_row(admin_domain_branding_admin, admin_domain_branding_domains):
+    response = save(admin_domain_branding_admin, admin_domain_branding_domains['first'], name='The first, renamed',
+                    contact_email='admin@example.com')
     assert response.status_code == 302 and response.headers['Location'].endswith('/admin/site')
     assert db.session.query(DomainConfig).filter(DomainConfig.site_domain_id.isnot(None)).count() == 0
+    assert db.session.get(Site, 1).name == 'The first, renamed'
 
 
 def test_unknown_domain_is_404(admin_domain_branding_admin, admin_domain_branding_domains):
@@ -116,9 +127,9 @@ def test_unknown_domain_is_404(admin_domain_branding_admin, admin_domain_brandin
 
 def test_the_domains_page_links_each_sister_to_its_branding(admin_domain_branding_admin, admin_domain_branding_domains):
     body = admin_domain_branding_admin[0].get('/admin/domains').get_data(as_text=True)
-    assert f"/admin/domains/{admin_domain_branding_domains['shop'].id}/branding" in body
-    assert f"/admin/domains/{admin_domain_branding_domains['onion'].id}/branding" in body
-    assert f"/admin/domains/{admin_domain_branding_domains['first'].id}/branding" not in body
+    assert f"/admin/site?domain={admin_domain_branding_domains['shop'].id}" in body
+    assert f"/admin/site?domain={admin_domain_branding_domains['onion'].id}" in body
+    assert f"/admin/site?domain={admin_domain_branding_domains['first'].id}" not in body
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -128,7 +139,7 @@ def test_admin_sets_and_clears_each_field(app, admin_domain_branding_admin, admi
     shop = admin_domain_branding_domains['shop']
     response = save(admin_domain_branding_admin, shop, logo=(io.BytesIO(png()), 'shop.png'))
     assert response.status_code == 302
-    assert response.headers['Location'].endswith(f'/admin/domains/{shop.id}/branding')
+    assert response.headers['Location'].endswith('/admin/site')
     row = own_row(shop)
     assert (row.name, row.description, row.default_theme, row.additional_css) == \
         ('Shop Branded', 'The shop tagline', 'forest', '.shop-own { color: teal; }')
@@ -143,7 +154,7 @@ def test_admin_sets_and_clears_each_field(app, admin_domain_branding_admin, admi
         ('Shop Branded', logos['logo_180'], row.sidebar_html)
 
     # A form showing the domain's own values
-    body = admin_domain_branding_admin[0].get(f'/admin/domains/{shop.id}/branding').get_data(as_text=True)
+    body = admin_domain_branding_admin[0].get(f'/admin/site?domain={shop.id}').get_data(as_text=True)
     assert 'Shop Branded' in body and 'The shop *sidebar*' in body and logos['logo'] in body
 
     response = save(admin_domain_branding_admin, shop, remove_logo='y', **BLANK_FIELDS)
@@ -182,7 +193,7 @@ def test_a_save_without_an_upload_keeps_the_logo(admin_domain_branding_admin, ad
 
 
 def test_a_domain_with_no_row_shows_an_empty_form(admin_domain_branding_admin, admin_domain_branding_domains):
-    response = admin_domain_branding_admin[0].get(f"/admin/domains/{admin_domain_branding_domains['shop'].id}/branding")
+    response = admin_domain_branding_admin[0].get(f"/admin/site?domain={admin_domain_branding_domains['shop'].id}")
     assert response.status_code == 200
     assert SHOP in response.get_data(as_text=True)
     assert own_row(admin_domain_branding_domains['shop']) is None
@@ -217,6 +228,17 @@ def test_saved_branding_shows_on_next_load(app, admin_domain_branding_admin, adm
 @pytest.mark.parametrize('logo', [
     pytest.param(lambda: (io.BytesIO(b'just text'), 'notes.txt'), id='not an image type'),
     pytest.param(lambda: (io.BytesIO(b'GIF89a'), 'anim.gif'), id='a gif'),
+])
+def test_an_upload_of_another_kind_is_a_form_error(admin_domain_branding_admin, admin_domain_branding_domains,
+                                                    admin_domain_branding_media, logo):
+    response = save(admin_domain_branding_admin, admin_domain_branding_domains['shop'], logo=logo())
+    assert response.status_code == 200
+    assert 'Images only!' in response.get_data(as_text=True)
+    assert own_row(admin_domain_branding_domains['shop']) is None
+    assert media_files(admin_domain_branding_media) == set()
+
+
+@pytest.mark.parametrize('logo', [
     pytest.param(lambda: (io.BytesIO(b'\x89PNG\r\n\x1a\nnot really'), 'broken.png'), id='cannot be decoded'),
     pytest.param(lambda: (io.BytesIO(png()[:60]), 'truncated.png'), id='truncated'),
     pytest.param(lambda: (io.BytesIO(HOSTILE_SVG), 'hostile.svg'), id='an svg that cannot be sanitized'),
@@ -503,7 +525,7 @@ def test_a_site_tagline_that_ends_inside_markup_warns(admin_domain_branding_admi
         client.post('/admin/site', content_type='multipart/form-data', data={
             'name': 'The First Site', 'description': 'Hi <textarea>', 'about': '', 'sidebar': '',
             'legal_information': '', 'tos_url': '', 'announcement': '', 'contact_email': 'admin@example.org',
-            'submit': 'Save', 'csrf_token': token, 'icon': (b'', '')})
+            'submit': 'Save', 'csrf_token': token, 'logo': (b'', '')})
     assert db.session.get(Site, 1).description == 'Hi <textarea>'
     [warning] = [message for category, message in flashes(admin_domain_branding_admin) if category == 'warning']
     assert 'unfinished' in warning
@@ -549,8 +571,8 @@ def test_site_settings_offsite_warns(admin_domain_branding_admin, admin_domain_b
         response = client.post('/admin/site', content_type='multipart/form-data', data={
             'name': 'The First Site', 'description': '', 'about': f'![b]({ELSEWHERE}/b.png)',
             'sidebar': f'![s]({ELSEWHERE}/s.png)', 'legal_information': '', 'tos_url': '', 'announcement': '',
-            'contact_email': 'admin@example.org', 'submit': 'Save', 'csrf_token': token, 'icon': (b'', '')})
-    assert response.status_code == 200
+            'contact_email': 'admin@example.org', 'submit': 'Save', 'csrf_token': token, 'logo': (b'', '')})
+    assert response.status_code == 302
     assert db.session.get(Site, 1).sidebar == f'![s]({ELSEWHERE}/s.png)'   # saved
     [warning] = [message for category, message in flashes(admin_domain_branding_admin) if category == 'warning']
     assert f'{ELSEWHERE}/s.png' in warning and f'{ELSEWHERE}/b.png' in warning
@@ -563,8 +585,8 @@ def test_a_site_tagline_offsite_warns(admin_domain_branding_admin, admin_domain_
         response = client.post('/admin/site', content_type='multipart/form-data', data={
             'name': 'The First Site', 'description': f'Hi <img src="{ELSEWHERE}/t.png">', 'about': '', 'sidebar': '',
             'legal_information': '', 'tos_url': '', 'announcement': '', 'contact_email': 'admin@example.org',
-            'submit': 'Save', 'csrf_token': token, 'icon': (b'', '')})
-    assert response.status_code == 200
+            'submit': 'Save', 'csrf_token': token, 'logo': (b'', '')})
+    assert response.status_code == 302
     assert db.session.get(Site, 1).description == f'Hi <img src="{ELSEWHERE}/t.png">'   # saved, as written
     [warning] = [message for category, message in flashes(admin_domain_branding_admin) if category == 'warning']
     assert f'{ELSEWHERE}/t.png' in warning
@@ -577,30 +599,26 @@ def test_site_settings_without_offsite_references_do_not_warn(admin_domain_brand
         client.post('/admin/site', content_type='multipart/form-data', data={
             'name': 'The First Site', 'description': '', 'about': '![b](/static/media/b.png)', 'sidebar': 'plain',
             'legal_information': '', 'tos_url': '', 'announcement': '', 'contact_email': 'admin@example.org',
-            'submit': 'Save', 'csrf_token': token, 'icon': (b'', '')})
+            'submit': 'Save', 'csrf_token': token, 'logo': (b'', '')})
     assert [category for category, _message in flashes(admin_domain_branding_admin)] == ['message']
 
 
-def misc_post(admin, css):
+def site_css_post(admin, css):
     client, token = admin
     forget_login()
-    # No 'submit' key: SiteMiscForm and CloseInstanceForm both name their submit field 'submit'
     with patch('app.admin.routes.render_template', return_value='rendered'):
-        return client.post('/admin/misc', data={
-            'csrf_token': token, 'redirect_policy': 'same_origin', 'allow_video_file_uploads': 'no',
-            'allow_audio_file_uploads': 'no', 'default_filter': 'popular', 'default_theme': 'piefed',
-            'registration_mode': 'Open', 'language_id': '2', 'read_posts_cutoff': '180', 'max_album_images': '4', 'nsfw_country_restriction': '',
-            'auto_decline_countries': '', 'application_question': '', 'auto_decline_referrers': '',
-            'ban_check_servers': '', 'registration_approved_email': '', 'additional_css': css, 'additional_js': ''})
+        return client.post('/admin/site', content_type='multipart/form-data', data={
+            'name': 'The First Site', 'contact_email': 'admin@example.org', 'additional_css': css, 'submit': 'Save',
+            'csrf_token': token, 'logo': (b'', '')})
 
 
 def test_site_css_offsite_warns(site_admin, admin_domain_branding_domains):
-    response = misc_post(site_admin, f'@import "{ELSEWHERE}/e.css";')
-    assert response.status_code == 200
+    response = site_css_post(site_admin, f'@import "{ELSEWHERE}/e.css";')
+    assert response.status_code == 302
     assert db.session.get(Site, 1).additional_css == f'@import "{ELSEWHERE}/e.css";'
     [warning] = [message for category, message in flashes(site_admin) if category == 'warning']
     assert f'{ELSEWHERE}/e.css' in warning
-    misc_post(site_admin, '.plain { color: red; }')
+    site_css_post(site_admin, '.plain { color: red; }')
     assert [category for category, _message in flashes(site_admin)] == ['message']
 
 
@@ -655,7 +673,7 @@ def test_an_image_that_cannot_be_written_as_png_is_400_on_the_site(admin_domain_
     response = client.post('/admin/site', content_type='multipart/form-data', data={
         'name': 'Never stored', 'description': '', 'about': '', 'sidebar': '', 'legal_information': '', 'tos_url': '',
         'announcement': '', 'contact_email': 'admin@example.org', 'submit': 'Save', 'csrf_token': token,
-        'icon': (io.BytesIO(cmyk_jpeg()), 'print.jpg')})
+        'logo': (io.BytesIO(cmyk_jpeg()), 'print.jpg')})
     assert response.status_code == 400
     assert UNWRITABLE in response.get_data(as_text=True)
     db.session.expire_all()
@@ -685,14 +703,14 @@ def test_a_nul_byte_in_the_site_profile_is_a_form_error(admin_domain_branding_ad
     forget_login()
     with patch('app.admin.routes.render_template', return_value='rendered'):
         response = client.post('/admin/site', content_type='multipart/form-data',
-                               data={**SITE_PROFILE, field: NUL, 'csrf_token': token, 'icon': (b'', '')})
+                               data={**SITE_PROFILE, field: NUL, 'csrf_token': token, 'logo': (b'', '')})
     assert response.status_code == 200
     assert '\x00' not in (getattr(db.session.get(Site, 1), field) or '')
     assert [category for category, _message in flashes(admin_domain_branding_admin)] == []   # not saved
 
 
 def test_a_nul_byte_in_the_site_css_is_a_form_error(site_admin, admin_domain_branding_domains):
-    response = misc_post(site_admin, NUL)
+    response = site_css_post(site_admin, NUL)
     assert response.status_code == 200
     assert '\x00' not in (db.session.get(Site, 1).additional_css or '')
     assert flashes(site_admin) == []

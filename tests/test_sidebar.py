@@ -318,9 +318,9 @@ def test_the_onions_order_is_changed_like_any_domains(admin_domain_branding_admi
 
 def test_the_branding_pages_link_to_the_sidebar_pages(admin_domain_branding_admin, admin_domain_branding_domains):
     shop = admin_domain_branding_domains['shop']
-    # /admin/site renders form.csrf_token, which tests (WTF_CSRF_ENABLED False) don't have: read its template
-    assert "url_for('admin.admin_sidebar')" in (REPO / 'app' / 'templates' / 'admin' / 'site.html').read_text()
-    assert f'/admin/domains/{shop.id}/sidebar' in admin_domain_branding_admin[0].get(f'/admin/domains/{shop.id}/branding').get_data(as_text=True)
+    first = admin_domain_branding_domains['first']
+    assert '/admin/sidebar"' in admin_domain_branding_admin[0].get(f'/admin/site?domain={first.id}').get_data(as_text=True)
+    assert f'/admin/domains/{shop.id}/sidebar' in admin_domain_branding_admin[0].get(f'/admin/site?domain={shop.id}').get_data(as_text=True)
     assert f'/admin/domains/{shop.id}/sidebar' in admin_domain_branding_admin[0].get('/admin/domains').get_data(as_text=True)
 
 

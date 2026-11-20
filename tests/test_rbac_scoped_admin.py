@@ -173,7 +173,7 @@ def test_the_domains_page_hides_adding_and_deleting_from_a_branding_holder(world
     holder(world, 'brander', 'edit domain branding', domain=world.x)
     page = body(world, '/admin/domains')
     assert 'Add a domain' not in page and 'admin/domains/' + str(world.x.id) + '/delete' not in page
-    assert f'/admin/domains/{world.x.id}/branding' in page
+    assert f'/admin/site?domain={world.x.id}' in page
     response = post(world, '/admin/domains', data={'domain': 'new.example', 'scheme': 'https'})
     assert response.status_code == 302 and 'permission_denied' in response.headers['Location']
     assert SiteDomain.query.filter_by(domain='new.example').first() is None

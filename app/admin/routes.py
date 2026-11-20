@@ -45,7 +45,7 @@ from app.admin.forms import ADMIN_SCOPE_ROLE_DEFAULT, FederationForm, SiteMiscFo
     EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
     CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
-    EmojiFilterForm, ContactInstanceForm, MastodonDirectoryScanForm, SiteDomainForm, DomainBrandingForm, CustomThemeForm, DomainSettingsForm, \
+    EmojiFilterForm, ContactInstanceForm, MastodonDirectoryScanForm, SiteDomainForm, CustomThemeForm, DomainSettingsForm, \
     ComplimentaryForm
 from flask_wtf import FlaskForm
 from app.admin.util import ban_list_entries, unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
@@ -61,6 +61,7 @@ from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
 from app.domain_config import own_config
 from app.admin.scope import creatable_domains, scope_for
+from app.admin.tenant import tenant_for
 from app.roles import grant_role
 from app.oauth_server import admin_scopes
 from app.permissions import domains_for, holds_any_grant, may_act_on_user
@@ -175,8 +176,6 @@ LOGO_SIZES = (('logo_180', 180), ('logo_152', 152), ('logo_32', 32), ('logo_16',
               ('logo_192', 192))
 DARK_LOGO_SIZES = (('logo_152', 152),)
 LOGO_MEDIA = 'app/static/media'
-# What the domain branding form edits besides the logo
-BRANDING_TEXT_FIELDS = ('name', 'description', 'default_theme', 'additional_css', 'sidebar', 'about')
 # Every name `save_logo_upload` gives a file: logo_, five characters of gibberish, a size suffix or none, an image
 # extension in whatever case it was uploaded in
 _UPLOADED_LOGO = re.compile(r'/static/media/logo_[0-9A-Za-z]{5}(_(100|180|152|32|16|192|512))?\.(png|jpe?g|webp|svg)',
@@ -329,12 +328,9 @@ def save_logo_upload_after(upload, directory: str, earlier: dict[str, str]) -> d
 
 
 def _logo_paths_in_use() -> set[str]:
-    """The real path of every logo file something names: Site's logo fields and icon settings, and every domain's row,
-    dark logos included."""
-    site = db.session.get(Site, 1)
-    paths = [getattr(site, field, None) for field in SITE_LOGO_FIELDS + DARK_LOGO_FIELDS] + \
-        [get_setting('logo_192', ''), get_setting('logo_512', '')] + \
-        [getattr(row, field) for row in db.session.query(DomainConfig) for field in LOGO_FIELDS + DARK_LOGO_FIELDS]
+    """The real path of every logo file something names: every domain's configuration row, the first domain's
+    included, dark logos and icons included."""
+    paths = [getattr(row, field) for row in db.session.query(DomainConfig) for field in LOGO_FIELDS + DARK_LOGO_FIELDS]
     return {os.path.realpath(f'app{path}') for path in paths if path}
 
 
@@ -344,8 +340,7 @@ def remove_superseded_logos(paths: list[str | None]) -> None:
     - its name is one `save_logo_upload` gives;
     - it is not a symlink, and with every symlink and `..` resolved it is that same name directly inside the media
       directory;
-    - nothing else names it: not Site's logo fields or its logo_192/logo_512 settings, not any domain's row (this one,
-      as saved, included).
+    - nothing else names it: no domain's configuration row, the first domain's and this one as saved included.
     Anything else is left where it is, and logged. What is unlinked is the path the row names, never a resolved target:
     a symlink named like a logo would otherwise delete whatever it points at."""
     media = os.path.realpath(LOGO_MEDIA)
@@ -398,113 +393,118 @@ def flash_unfinished_warning(fields: list[str]) -> None:
                 '%(fields)s', fields=', '.join(fields)), 'warning')
 
 
+# The Site page (MT4): one domain's profile and look. `edit domain branding` on a sister domain lets its holder change
+# BRANDING_FIELDS and its logos; the rest, and anything on the first domain, take `change instance settings`.
+BRANDING_FIELDS = ('name', 'description', 'default_theme', 'additional_css', 'sidebar', 'about')
+PROFILE_FIELDS = ('announcement', 'legal_information', 'contact_email', 'tos_url', 'source_url', 'bug_report_url',
+                  'get_involved_url')
+# Each Markdown source is stored with the HTML made from it, never one without the other
+MARKDOWN_FIELDS = ('sidebar', 'about', 'announcement', 'legal_information')
+
+
+def may_edit_branding(domain) -> bool:
+    """Whether the current user may change `domain`'s branding on the Site page."""
+    user_id = current_user.get_id()
+    return user_access('change instance settings', user_id) or \
+        (not domain.is_default and user_access('edit domain branding', user_id, on=domain))
+
+
+def _markdown_html(field: str, text: str) -> str:
+    if not text:
+        return ''
+    if field == 'announcement':
+        return markdown_to_html(text, anchors_new_tab=False, a_target="")
+    return markdown_to_html(text, a_target="")
+
+
 @bp.route('/site', methods=['GET', 'POST'])
 @login_required
-@permission_required('change instance settings')
 def admin_site():
+    """The picked domain's profile and look (spec 2026-11-20-multitenant-domain-config MT4). A sister domain's blank
+    field is the first domain's. An onion's page may load nothing from another site, so a save that would is refused
+    there (branding spec §3.4); elsewhere it is saved with a warning."""
+    tenant = tenant_for(may_edit_branding)
+    if tenant is None:
+        return redirect(url_for('auth.permission_denied'))
+    domain = tenant.domain
+    whole = user_access('change instance settings', current_user.get_id())
+    editable = BRANDING_FIELDS + (PROFILE_FIELDS if whole else ())
+    stored = tenant.stored()
     form = SiteProfileForm()
-    site = db.session.get(Site, 1)
-    if site is None:
-        site = Site()
+    stored_theme = getattr(stored, 'default_theme', None) or ''
+    themes = ([] if tenant.is_first else [('', _("The first domain's"))]) + theme_choices(domain.id, stored_theme)
+    form.default_theme.choices = select_choices(themes)
     if form.validate_on_submit():
-        site.name = form.name.data
-        site.description = form.description.data  # tagline
-
-        site.about = canonicalise_text(form.about.data)
-        if form.about.data:
-            site.about_html = markdown_to_html(form.about.data, a_target="")
+        # A field the post leaves out is blank, as an emptied one is: on a sister domain it is the first domain's
+        values = {field: canonicalise_text(getattr(form, field).data or '') if field in MARKDOWN_FIELDS
+                  else (getattr(form, field).data or '') for field in editable}
+        if 'default_theme' not in request.form or values['default_theme'] not in {value for value, _label in themes}:
+            values['default_theme'] = stored_theme   # a post without the select, or with a theme not on offer
+        html = {field: _markdown_html(field, values[field]) for field in MARKDOWN_FIELDS if field in values}
+        upload = request.files.get('logo')
+        uploading = bool(upload and upload.filename)
+        replacing = uploading or form.remove_logo.data
+        # The logo the row keeps when it is not replaced. A new upload is this site's own media: never off-site.
+        kept_logos = [] if replacing or stored is None else [getattr(stored, field) or '' for field in LOGO_FIELDS]
+        upload_dark = request.files.get('logo_dark')
+        uploading_dark = bool(upload_dark and upload_dark.filename)
+        replacing_dark = uploading_dark or form.remove_logo_dark.data
+        kept_dark = [] if replacing_dark or stored is None else \
+            [getattr(stored, field) or '' for field in DARK_LOGO_FIELDS]
+        found = offsite_by_field(domain.domain, values['additional_css'], html['sidebar'], html['about'], kept_logos,
+                                 values['description'], kept_dark)
+        # A field that ends inside markup is finished by whatever the page writes after it, which nothing here can
+        # check: the onion's pages would drop it (app/branding.py), so the onion refuses it; elsewhere it is advised.
+        # The CSS is read as HTML on the onion only, as its pages read it.
+        texts = {'description': values['description'], 'sidebar': html['sidebar'], 'about': html['about']}
+        if domain.is_onion:
+            texts['additional_css'] = values['additional_css']
+        unfinished = unfinished_fields(texts, found)
+        if tenant.is_first and not values['contact_email']:   # the first domain's page takes the whole permission
+            form.contact_email.errors.append(_('The first domain needs a contact address.'))
+        elif (found or unfinished) and domain.is_onion:
+            # The onion never loads anything off the onion (spec §3.4): refused, and nothing written
+            for field, references in found.items():
+                getattr(form, field).errors.append(_('Off the onion: %(references)s', references=', '.join(references)))
+            for field in unfinished:
+                getattr(form, field).errors.append(_('This ends inside an unfinished tag or other markup, which the '
+                                                     'onion cannot check. Finish or remove it.'))
         else:
-            site.about_html = ""
-
-        site.sidebar = canonicalise_text(form.sidebar.data)
-        if form.sidebar.data:
-            site.sidebar_html = markdown_to_html(form.sidebar.data, a_target="")
-        else:
-            site.sidebar_html = ""
-
-        site.legal_information = canonicalise_text(form.legal_information.data)
-        if form.legal_information.data:
-            site.legal_information_html = markdown_to_html(form.legal_information.data, a_target="")
-        else:
-            site.legal_information_html = ""
-
-        site.tos_url = form.tos_url.data
-        site.source_url = form.source_url.data
-        site.bug_report_url = form.bug_report_url.data
-        site.get_involved_url = form.get_involved_url.data
-        site.updated = utcnow()
-        site.contact_email = form.contact_email.data
-        if site.id is None:
-            db.session.add(site)
-        # The dark mode icon, before the icon: replaced by an upload, or cleared so that dark mode shows the icon. The
-        # files it named go once the row no longer names them. Stored first so that an icon upload refused below can
-        # take its files with it.
-        uploaded_dark = request.files.get('icon_dark')
-        dark_logos, superseded_dark = {}, []
-        if uploaded_dark and uploaded_dark.filename != '':
-            dark_logos = save_dark_logo_upload(uploaded_dark, LOGO_MEDIA)
-        elif form.remove_icon_dark.data:
-            dark_logos = dict.fromkeys(DARK_LOGO_FIELDS, '')
-        if dark_logos:
-            superseded_dark = [getattr(site, field) for field in DARK_LOGO_FIELDS]
-            for field in DARK_LOGO_FIELDS:
-                setattr(site, field, dark_logos[field])
-        # Save site icon
-        # `.get`, not `['icon']`: `request.files[...]` is a
-        # BadRequestKeyError -- a 400 -- for a submission that does not
-        # carry the field, and the `if` below already handles None. Same
-        # shape as D1047, fixed once in app/user/routes.py.
-        uploaded_icon = request.files.get('icon')
-        if uploaded_icon and uploaded_icon.filename != '':
-            # The files the current logo occupies, captured but NOT yet
-            # removed. Unlinking them here -- which is what this did -- meant
-            # that any failure below destroyed the site's existing logo while
-            # the row went on pointing at it: an upload Pillow cannot decode
-            # raised UnidentifiedImageError, db.session.commit() was never
-            # reached, and the site served a broken image on every page with no
-            # way back but another upload. They are removed at the end, once
-            # the replacement has been processed and assigned.
-            superseded = [f'app{path}' for path in
-                          (site.logo, site.logo_180, site.logo_152, site.logo_32,
-                           site.logo_16, get_setting('logo_512', ''),
-                           get_setting('logo_192', '')) if path]
-
-            logos = save_logo_upload_after(uploaded_icon, 'app/static/media', dark_logos)
-            for field in SITE_LOGO_FIELDS:
-                setattr(site, field, logos[field])
-            # Site keeps its 512x512 and 192x192 versions in settings
-            set_setting('logo_512', logos['logo_512'])
-            set_setting('logo_192', logos['logo_192'])
-
-            # Only now, with the replacement processed and assigned.
-            for superseded_path in superseded:
-                if os.path.isfile(superseded_path):
-                    os.unlink(superseded_path)
-        db.session.commit()
-        remove_superseded_logos(superseded_dark)
-        cache.delete_memoized(get_site_as_dict)
-        clear_domain_cache()   # the first domain's branding is Site row 1's, memoised (app/branding.py)
-        set_setting('announcement', form.announcement.data)
-        set_setting('announcement_html', markdown_to_html(form.announcement.data, anchors_new_tab=False, a_target=""))
-        flash(_('Settings saved.'))
-        found = offsite_by_field(default_domain().domain, sidebar_html=site.sidebar_html, about_html=site.about_html,
-                                 description=site.description or '')
-        flash_offsite_warning(found)
-        flash_unfinished_warning(unfinished_fields({'description': site.description or '', 'sidebar': site.sidebar_html,
-                                                    'about': site.about_html}, found))
-    elif request.method == 'GET':
-        form.name.data = site.name
-        form.description.data = site.description
-        form.about.data = site.about if site.about is not None else ''
-        form.sidebar.data = site.sidebar if site.sidebar is not None else ''
-        form.legal_information.data = site.legal_information if site.legal_information is not None else ''
-        form.tos_url.data = site.tos_url
-        form.source_url.data = site.source_url or ''
-        form.bug_report_url.data = site.bug_report_url or ''
-        form.get_involved_url.data = site.get_involved_url or ''
-        form.contact_email.data = site.contact_email
-        form.announcement.data = get_setting('announcement', '')
-    return render_template('admin/site.html', title=_('Site profile'), form=form, site=site,
+            dark_logos = save_dark_logo_upload(upload_dark, LOGO_MEDIA) if uploading_dark else \
+                dict.fromkeys(DARK_LOGO_FIELDS, '')
+            logos = save_logo_upload_after(upload, LOGO_MEDIA, dark_logos) if uploading else \
+                dict.fromkeys(LOGO_FIELDS, '')
+            target = tenant.target()
+            superseded = []
+            if replacing:
+                superseded = [getattr(target, field) for field in LOGO_FIELDS]
+                for field in LOGO_FIELDS:
+                    setattr(target, field, logos[field])
+            if replacing_dark:
+                superseded += [getattr(target, field) for field in DARK_LOGO_FIELDS]
+                for field in DARK_LOGO_FIELDS:
+                    setattr(target, field, dark_logos[field])
+            for field, value in values.items():
+                setattr(target, field, value)
+            for field, value in html.items():
+                setattr(target, f'{field}_html', value)
+            site = db.session.get(Site, 1)
+            if site is None:   # an install that never made one: the instance-wide row every request reads
+                site = Site()
+                db.session.add(site)
+            site.updated = utcnow()
+            db.session.commit()   # the commit clears each domain's memoised configuration (app.domain_config)
+            cache.delete_memoized(get_site_as_dict)
+            remove_superseded_logos(superseded)
+            flash(_('Settings saved.'))
+            flash_offsite_warning(found)
+            flash_unfinished_warning(unfinished)
+            return redirect(url_for('admin.admin_site'))
+    elif request.method == 'GET' and stored is not None:
+        for field in BRANDING_FIELDS + PROFILE_FIELDS:
+            getattr(form, field).data = getattr(stored, field) or ''
+    return render_template('admin/site.html', title=_('Site profile'), form=form, tenant=tenant, stored=stored,
+                           editable=set(editable), inherited=tenant.inherited(),
                            roles_with=roles_with('change instance settings'))
 
 
@@ -1012,81 +1012,9 @@ def admin_domain_theme_delete(domain_id, theme_id):
 @bp.route('/domains/<int:domain_id>/branding', methods=['GET', 'POST'])
 @login_required
 def admin_domain_branding(domain_id):
-    """A sister domain's own branding (spec §3.5). The first domain's is Site row 1's, edited at the site settings."""
+    """A domain's branding is edited on the Site page with the domain picked (MT4)."""
     row = db.session.get(SiteDomain, domain_id) or abort(404)
-    if not user_access('edit domain branding', current_user.get_id(), on=row):
-        abort(403)
-    if row.is_default:
-        return redirect(url_for('admin.admin_site'))
-    branding = own_config(row.id)
-    form = DomainBrandingForm()
-    form.default_theme.choices = select_choices([('', _('The site default'))] +
-                                                theme_choices(row.id, branding.default_theme if branding else ''))
-    if form.validate_on_submit():
-        # A field the post leaves out is blank, as an emptied one is: it inherits
-        values = {field: getattr(form, field).data or '' for field in BRANDING_TEXT_FIELDS}
-        # Each Markdown source is written with the HTML made from it, never one without the other
-        sidebar_html = markdown_to_html(values['sidebar'], a_target="") if values['sidebar'] else ''
-        about_html = markdown_to_html(values['about'], a_target="") if values['about'] else ''
-        upload = request.files.get('logo')
-        uploading = bool(upload and upload.filename)
-        replacing = uploading or form.remove_logo.data
-        # The logo the row keeps when it is not replaced. A new upload is this site's own media: never off-site.
-        kept_logos = [] if replacing or branding is None else [getattr(branding, field) or '' for field in LOGO_FIELDS]
-        upload_dark = request.files.get('logo_dark')
-        uploading_dark = bool(upload_dark and upload_dark.filename)
-        replacing_dark = uploading_dark or form.remove_logo_dark.data
-        kept_dark = [] if replacing_dark or branding is None else \
-            [getattr(branding, field) or '' for field in DARK_LOGO_FIELDS]
-        found = offsite_by_field(row.domain, values['additional_css'], sidebar_html, about_html, kept_logos,
-                                 values['description'], kept_dark)
-        # A field that ends inside markup is finished by whatever the page writes after it, which nothing here can
-        # check: the onion's pages would drop it (app/branding.py), so the onion refuses it; elsewhere it is advised.
-        # The CSS is read as HTML on the onion only, as its pages read it.
-        texts = {'description': values['description'], 'sidebar': sidebar_html, 'about': about_html}
-        if row.is_onion:
-            texts['additional_css'] = values['additional_css']
-        unfinished = unfinished_fields(texts, found)
-        if (found or unfinished) and row.is_onion:
-            # The onion never loads anything off the onion (spec §3.4): refused, and nothing written
-            for field, references in found.items():
-                getattr(form, field).errors.append(_('Off the onion: %(references)s', references=', '.join(references)))
-            for field in unfinished:
-                getattr(form, field).errors.append(_('This ends inside an unfinished tag or other markup, which the '
-                                                     'onion cannot check. Finish or remove it.'))
-        else:
-            dark_logos = save_dark_logo_upload(upload_dark, LOGO_MEDIA) if uploading_dark else \
-                dict.fromkeys(DARK_LOGO_FIELDS, '')
-            logos = save_logo_upload_after(upload, LOGO_MEDIA, dark_logos) if uploading else \
-                dict.fromkeys(LOGO_FIELDS, '')
-            if branding is None:
-                branding = row.config()
-            superseded = []
-            if replacing:
-                superseded = [getattr(branding, field) for field in LOGO_FIELDS]
-                for field in LOGO_FIELDS:
-                    setattr(branding, field, logos[field])
-            if replacing_dark:
-                superseded += [getattr(branding, field) for field in DARK_LOGO_FIELDS]
-                for field in DARK_LOGO_FIELDS:
-                    setattr(branding, field, dark_logos[field])
-            for field, value in values.items():
-                setattr(branding, field, value)
-            branding.sidebar_html = sidebar_html
-            branding.about_html = about_html
-            db.session.commit()
-            clear_domain_cache()   # branding is memoised per domain (app/branding.py)
-            remove_superseded_logos(superseded)
-            flash(_('Branding saved.'))
-            flash_offsite_warning(found)
-            flash_unfinished_warning(unfinished)
-            return redirect(url_for('admin.admin_domain_branding', domain_id=row.id))
-    elif request.method == 'GET' and branding is not None:
-        for field in BRANDING_TEXT_FIELDS:
-            getattr(form, field).data = getattr(branding, field) or ''
-    return render_template('admin/domain_branding.html', title=_('Branding: %(domain)s', domain=row.domain),
-                           form=form, row=row, logo=branding.logo if branding is not None else '',
-                           logo_dark=branding.logo_dark if branding is not None else '')
+    return redirect(url_for('admin.admin_site', domain=row.id))
 
 
 @bp.route('/misc', methods=['GET', 'POST'])
@@ -1098,7 +1026,6 @@ def admin_misc():
     site = db.session.get(Site, 1)
     if site is None:
         site = Site()
-    form.default_theme.choices = select_choices(theme_choices(default_domain().id, site.default_theme))
     form.language_id.choices = select_choices(languages_for_form(all_languages=True))
     form.oauth_admin_role.choices = select_choices([(0, ADMIN_SCOPE_ROLE_DEFAULT)] +
                                                    [(role.id, role.name) for role in Role.query.order_by(Role.name)])
@@ -1129,8 +1056,6 @@ def admin_misc():
         site.log_activitypub_json = form.log_activitypub_json.data
         site.show_inoculation_block = form.show_inoculation_block.data
         site.updated = utcnow()
-        site.default_theme = form.default_theme.data
-        site.additional_css = form.additional_css.data
         site.additional_js = form.additional_js.data
         site.default_filter = form.default_filter.data
         site.private_instance = form.private_instance.data
@@ -1183,7 +1108,6 @@ def admin_misc():
         if form.onion_media_av_max_mb.data is not None:
             set_setting('onion_media_av_max_bytes', form.onion_media_av_max_mb.data * 1048576)
         flash(_('Settings saved.'))
-        flash_offsite_warning(offsite_by_field(default_domain().domain, css=site.additional_css or ''))
     elif request.method == 'GET':
         form.enable_downvotes.data = site.enable_downvotes
         form.enable_gif_reply_rep_decrease.data = site.enable_gif_reply_rep_decrease
@@ -1207,8 +1131,6 @@ def admin_misc():
         form.log_activitypub_json.data = site.log_activitypub_json
         form.language_id.data = site.language_id
         form.show_inoculation_block.data = site.show_inoculation_block
-        form.default_theme.data = site.default_theme if site.default_theme is not None else ''
-        form.additional_css.data = site.additional_css if site.additional_css is not None else ''
         form.additional_js.data = site.additional_js if site.additional_js is not None else ''
         form.default_filter.data = site.default_filter if site.default_filter else 'popular'
         form.public_modlog.data = get_setting('public_modlog', False)

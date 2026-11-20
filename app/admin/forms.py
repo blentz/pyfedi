@@ -39,19 +39,31 @@ def no_nul(form, field):
         raise ValidationError(_l('This cannot contain a NUL character.'))
 
 
+LOGO_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'svg']
+
+
 class SiteProfileForm(FlaskForm):
-    name = StringField(_l('Site Name'), validators=[no_nul])
-    description = StringField(_l('Tagline'), validators=[no_nul])
-    icon = FileField(_l('Icon'), validators=[FileAllowed(['jpg', 'jpeg', 'png', 'webp', 'svg'], 'Images only!')],
+    """One domain's profile and look (spec 2026-11-20-multitenant-domain-config MT4): the picked domain's, the first
+    domain's included. On a sister domain a blank field is the first domain's value. The logos have no FileAllowed: an
+    upload the route will not take is a 400 (`save_logo_upload`), not a form error. The contact address is required of
+    the first domain only, which the route checks."""
+    name = StringField(_l('Site Name'), validators=[Length(max=256), no_nul])
+    description = StringField(_l('Tagline'), validators=[Length(max=256), no_nul])
+    logo = FileField(_l('Logo'), validators=[FileAllowed(LOGO_EXTENSIONS, 'Images only!')],
                      render_kw={'accept': 'image/*'})
-    icon_dark = FileField(_l('Icon for dark mode'),
-                          validators=[FileAllowed(['jpg', 'jpeg', 'png', 'webp', 'svg'], 'Images only!')],
+    remove_logo = BooleanField(_l('Remove the logo'))
+    logo_dark = FileField(_l('Logo for dark mode'), validators=[FileAllowed(LOGO_EXTENSIONS, 'Images only!')],
                           render_kw={'accept': 'image/*'})
-    remove_icon_dark = BooleanField(_l('Remove the dark mode icon'))
+    remove_logo_dark = BooleanField(_l('Remove the dark mode logo'))
+    # Checked by the route: a theme it does not offer, or none posted, keeps the one stored
+    default_theme = SelectField(_l('Default theme'), choices=[], validate_choice=False, render_kw={'class': 'form-select'})
+    additional_css = TextAreaField(_l('Additional CSS'), validators=[no_nul])
     sidebar = TextAreaField(_l('Sidebar'), validators=[no_nul])
+    announcement = TextAreaField(_l('Announcement at top of home page'), validators=[no_nul])
     about = TextAreaField(_l('About'), validators=[no_nul])
-    announcement = TextAreaField(_l('Announcement at top of home page'))
-    legal_information = TextAreaField(_l('Legal information'))
+    legal_information = TextAreaField(_l('Legal information'), validators=[no_nul])
+    contact_email = EmailField(_l('General instance contact email address'),
+                               validators=[Optional(), Length(min=5, max=255)])
     tos_url = StringField(_l('Terms of service url'), validators=[Length(max=255)])
     source_url = StringField(_l('AGPL compliance URL: where this server\'s source code is'),
                              validators=[Length(max=MAX_LENGTH), web_url_or_blank],
@@ -60,7 +72,6 @@ class SiteProfileForm(FlaskForm):
                                  render_kw={'placeholder': UPSTREAM_BUG_REPORT})
     get_involved_url = StringField(_l('Get involved URL'), validators=[Length(max=MAX_LENGTH), web_url_or_blank],
                                    render_kw={'placeholder': UPSTREAM_GET_INVOLVED})
-    contact_email = EmailField(_l('General instance contact email address'), validators=[DataRequired(), Length(min=5, max=255)])
     submit = SubmitField(_l('Save'))
 
 
@@ -68,22 +79,6 @@ class CustomThemeForm(FlaskForm):
     """A custom theme's stylesheet (custom themes spec §3.2). Its size cap is config, checked by the route."""
     css = TextAreaField(_l('CSS'), validators=[no_nul], render_kw={'rows': 30, 'class': 'font-monospace',
                                                                   'spellcheck': 'false'})
-    submit = SubmitField(_l('Save'))
-
-
-class DomainBrandingForm(FlaskForm):
-    """A sister domain's own branding. A blank field inherits the first domain's value (app/branding.py). The logo has no
-    FileAllowed: an upload the route will not take is a 400 (`save_logo_upload`), not a form error."""
-    name = StringField(_l('Site Name'), validators=[Length(max=256), no_nul])
-    description = StringField(_l('Tagline'), validators=[Length(max=256), no_nul])
-    logo = FileField(_l('Logo'), render_kw={'accept': 'image/*'})
-    remove_logo = BooleanField(_l("Remove this domain's logo"))
-    logo_dark = FileField(_l('Logo for dark mode'), render_kw={'accept': 'image/*'})
-    remove_logo_dark = BooleanField(_l("Remove this domain's dark mode logo"))
-    default_theme = SelectField(_l('Default theme'), choices=[], render_kw={'class': 'form-select'})
-    additional_css = TextAreaField(_l('Additional CSS'), validators=[no_nul])
-    sidebar = TextAreaField(_l('Sidebar'), validators=[no_nul])
-    about = TextAreaField(_l('About'), validators=[no_nul])
     submit = SubmitField(_l('Save'))
 
 
@@ -155,8 +150,6 @@ class SiteMiscForm(FlaskForm):
     auto_decline_referrers = TextAreaField(_l('Block registrations from these referrers (one per line)'))
     ban_check_servers = TextAreaField(_l('Warn if new account banned from these instances'))
     language_id = SelectField(_l('Primary language'), validators=[DataRequired()], coerce=int, render_kw={'class': 'form-select'})
-    default_theme = SelectField(_l('Default theme'), coerce=str, render_kw={'class': 'form-select'})
-    additional_css = TextAreaField(_l('Additional CSS'), validators=[no_nul])
     additional_js = TextAreaField(_l('Additional JS'))
     # InputRequired + NumberRange, not bare IntegerField: admin_misc() does
     # int(form.read_posts_cutoff.data) unguarded, so a submission that omits

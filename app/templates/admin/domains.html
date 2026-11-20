@@ -50,7 +50,7 @@
                             <a href="{{ url_for('admin.admin_domain_themes', domain_id=row.id) }}">{{ _('Themes') }}</a>{% if not row.is_default %} |{% endif %}
                             {% endif %}
                             {% if not row.is_default %}
-                            <a href="{{ url_for('admin.admin_domain_branding', domain_id=row.id) }}">{{ _('Branding') }}</a> |
+                            <a href="{{ url_for('admin.admin_site', domain=row.id) }}">{{ _('Branding') }}</a> |
                             <a href="{{ url_for('admin.admin_domain_sidebar', domain_id=row.id) }}">{{ _('Sidebar') }}</a>
                             {%- if can_manage %} |
                             <a href="{{ url_for('admin.admin_domain_settings', domain_id=row.id) }}">{{ _('Settings') }}</a> |

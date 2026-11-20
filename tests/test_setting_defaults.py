@@ -41,13 +41,14 @@ each was read rather than assumed:
     `if g.admin_ids is None:` on the very next line and computes the list itself;
   * `actor_blocked_words`, `actor_bio_blocked_words` -- omitted at their consumers,
     which open with `if blocked_words and blocked_words.strip() != ''`;
-  * `announcement`, `announcement_html` -- omitted at the readers, which render the
-    value only when it is truthy.
+  * `announcement_html` -- omitted at its reader, which renders the value only when
+    it is truthy. (`announcement` is read with one default only, since the admin
+    page edits the domain's column directly.)
 
 `captcha_enabled` was the only one where the two defaults meant two different things,
 and the only one where one of the callers was an admin pre-fill.
 
-The rule is asserted over the source below, with those six as a named allowlist
+The rule is asserted over the source below, with those five as a named allowlist
 carrying its reason, so a future `True` against `False` fails in the suite.
 """
 import ast
@@ -75,8 +76,7 @@ BENIGN_DISAGREEMENTS = {
     'admin_ids',                # request_hooks tests `is None` and computes it itself
     'actor_blocked_words',      # consumer opens `if blocked_words and ...`
     'actor_bio_blocked_words',  # the same
-    'announcement',             # rendered only when truthy
-    'announcement_html',        # the same; its default is a nested get_setting
+    'announcement_html',        # rendered only when truthy; its default is a nested get_setting
 }
 
 
@@ -129,7 +129,7 @@ def test_the_allowlist_holds_no_name_that_has_stopped_disagreeing():
 
 
 def test_every_allowlisted_name_differs_only_by_an_omitted_default():
-    """What makes the six benign: one group of callers passes a falsy literal and the
+    """What makes the five benign: one group of callers passes a falsy literal and the
     rest pass nothing, so `get_setting` answers None where the others answer their
     literal. A name where two callers passed two DIFFERENT literals would not belong
     here, and this row is what says so.

@@ -160,12 +160,12 @@ def test_the_admin_pickers_offer_their_domains_themes(app, two_domains, themes):
     clear_domain_cache()
     client = as_user(app, admin)
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
-        client.get(f'/admin/domains/{onion.id}/branding', base_url=f'https://{FIRST}')
+        client.get(f'/admin/site?domain={onion.id}', base_url=f'https://{FIRST}')
     offered = values(render.call_args.kwargs['form'].default_theme.choices)
     assert offered[0] == ''
     assert custom_identifier(themes['onion'].id) in offered and custom_identifier(themes['own'].id) not in offered
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
-        client.get('/admin/misc', base_url=f'https://{FIRST}')
+        client.get(f'/admin/site?domain={default.id}', base_url=f'https://{FIRST}')
     offered = values(render.call_args.kwargs['form'].default_theme.choices)
     assert custom_identifier(themes['own'].id) in offered and custom_identifier(themes['onion'].id) not in offered
 

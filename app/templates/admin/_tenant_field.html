@@ -1,0 +1,18 @@
+{# One field of a per-domain settings page (spec 2026-11-20-multitenant-domain-config MT4). On a sister domain a blank
+   field is the first domain's value, shown as its placeholder; a field the user may not change here is shown, not
+   editable. #}
+{% from 'bootstrap5/form.html' import render_field %}
+{% macro tenant_field(field, tenant, editable, inherited) -%}
+{% set options = {} -%}
+{% if field.name not in editable %}{% set _unused = options.update({'disabled': true}) %}{% endif -%}
+{% if not tenant.is_first and inherited.get(field.name) and field.type in ('StringField', 'TextAreaField', 'EmailField') -%}
+    {% set _unused = options.update({'placeholder': inherited[field.name]|string|truncate(200)}) -%}
+{% endif -%}
+{{ render_field(field, **options) }}
+{% if not tenant.is_first and field.type in ('StringField', 'TextAreaField', 'EmailField') -%}
+<p class="small field_hint">{{ _("Left blank, this is the first domain's.") }}</p>
+{% endif -%}
+{% if field.name not in editable -%}
+<p class="small field_hint">{{ _('Changing this needs the change instance settings permission.') }}</p>
+{% endif -%}
+{%- endmacro %}

@@ -179,9 +179,9 @@ def site_save(admin, icon=None, icon_dark=None, **fields):
     client, token = admin
     data = {'name': 'The First Site', 'description': '', 'about': '', 'sidebar': '', 'legal_information': '',
             'tos_url': '', 'announcement': '', 'contact_email': 'admin@example.com', 'submit': 'Save',
-            'csrf_token': token, 'icon': icon or (io.BytesIO(b''), ''),
-            'icon_dark': icon_dark or (io.BytesIO(b''), '')}
-    data.update(fields)
+            'csrf_token': token, 'logo': icon or (io.BytesIO(b''), ''),
+            'logo_dark': icon_dark or (io.BytesIO(b''), '')}
+    data.update({'remove_logo_dark' if name == 'remove_icon_dark' else name: value for name, value in fields.items()})
     forget_login()
     with patch('app.admin.routes.render_template', return_value='rendered'):
         return client.post('/admin/site', data=data, content_type='multipart/form-data')
@@ -194,7 +194,7 @@ def site_dark_logo() -> tuple:
 
 
 def test_a_png_dark_icon_keeps_its_upload_and_header_copies(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
-    assert site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(png(300, 300)), 'dark.png')).status_code == 200
+    assert site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(png(300, 300)), 'dark.png')).status_code == 302
     dark, dark_152 = site_dark_logo()
     assert re.fullmatch(r'/static/media/logo_\w{5}_100\.png', dark)
     assert dark_152 == dark.replace('_100.png', '_152.png')
@@ -204,7 +204,7 @@ def test_a_png_dark_icon_keeps_its_upload_and_header_copies(admin_domain_brandin
 
 
 def test_an_svg_dark_icon_is_kept_as_uploaded(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
-    assert site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(SVG), 'dark.svg')).status_code == 200
+    assert site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(SVG), 'dark.svg')).status_code == 302
     dark, dark_152 = site_dark_logo()
     assert re.fullmatch(r'/static/media/logo_\w{5}\.svg', dark) and dark_152 == ''
     assert media_files(admin_domain_branding_media) == {dark.rsplit('/', 1)[1]}
@@ -213,7 +213,7 @@ def test_an_svg_dark_icon_is_kept_as_uploaded(admin_domain_branding_admin, admin
 def test_a_save_without_a_dark_upload_keeps_the_dark_icon(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
     site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(SVG), 'dark.svg'))
     kept = site_dark_logo()
-    assert site_save(admin_domain_branding_admin).status_code == 200
+    assert site_save(admin_domain_branding_admin).status_code == 302
     assert site_dark_logo() == kept
 
 
@@ -222,14 +222,14 @@ def test_replacing_and_removing_the_dark_icon_removes_its_files(admin_domain_bra
     site_save(admin_domain_branding_admin, icon_dark=(io.BytesIO(png()), 'two.png'))
     second = site_dark_logo()
     assert media_files(admin_domain_branding_media) == {path.rsplit('/', 1)[1] for path in second}
-    assert site_save(admin_domain_branding_admin, remove_icon_dark='y').status_code == 200
+    assert site_save(admin_domain_branding_admin, remove_icon_dark='y').status_code == 302
     assert site_dark_logo() == ('', '')
     assert media_files(admin_domain_branding_media) == set()
 
 
 def test_both_icons_in_one_save(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
     response = site_save(admin_domain_branding_admin, icon=(io.BytesIO(png()), 'light.png'), icon_dark=(io.BytesIO(SVG), 'dark.svg'))
-    assert response.status_code == 200
+    assert response.status_code == 302
     site = db.session.get(Site, 1)
     assert site.logo_152 and site.logo_dark.endswith('.svg')
     assert site.logo_dark not in (site.logo, site.logo_152)
@@ -326,8 +326,8 @@ def test_the_branding_page_shows_the_dark_logo(admin_domain_branding_admin, admi
     save(admin_domain_branding_admin, shop, logo_dark=(io.BytesIO(SVG), 'dark.svg'))
     client, _token = admin_domain_branding_admin
     forget_login()
-    body = client.get(f'/admin/domains/{shop.id}/branding').get_data(as_text=True)
-    assert f'<img src="{own_row(shop).logo_dark}" alt="This domain\'s dark mode logo" height="50">' in body
+    body = client.get(f'/admin/site?domain={shop.id}').get_data(as_text=True)
+    assert f'<img src="{own_row(shop).logo_dark}" alt="The dark mode logo" height="50">' in body
 
 
 # ---------------------------------------------------------------------------------------------------------------------

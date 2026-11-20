@@ -118,10 +118,10 @@ def _post(client, token, **overrides):
     UndefinedError -- a template-rendering failure that has nothing to do with
     the behaviour under test.
     """
-    icon = overrides.pop('icon', (io.BytesIO(b''), ''))
+    overrides['logo'] = overrides.pop('icon', (io.BytesIO(b''), ''))
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
         response = client.post('/admin/site',
-                               data=_payload(token, icon=icon, **overrides),
+                               data=_payload(token, **overrides),
                                content_type='multipart/form-data')
     return response, render
 
@@ -141,8 +141,9 @@ def media_is_clean():
 
 
 def _existing_logo():
-    """A site that already has a logo: five files on disk, five columns and two
-    settings pointing at them. This is the state P1 destroyed."""
+    """A site that already has a logo: seven files on disk, named as a logo upload
+    names them (only those are ever removed), and the first domain's seven logo
+    columns pointing at them. This is the state P1 destroyed."""
     from app.utils import set_setting
 
     os.makedirs(MEDIA, exist_ok=True)
@@ -150,13 +151,13 @@ def _existing_logo():
              'logo_32': '_32', 'logo_16': '_16'}
     site = db.session.get(Site, 1)
     for column, suffix in names.items():
-        with open(f'{MEDIA}/existing{suffix}.png', 'wb') as handle:
+        with open(f'{MEDIA}/logo_exist{suffix}.png', 'wb') as handle:
             handle.write(b'the bytes that were already there')
-        setattr(site, column, f'/static/media/existing{suffix}.png')
+        setattr(site, column, f'/static/media/logo_exist{suffix}.png')
     for setting, suffix in (('logo_512', '_512'), ('logo_192', '_192')):
-        with open(f'{MEDIA}/existing{suffix}.png', 'wb') as handle:
+        with open(f'{MEDIA}/logo_exist{suffix}.png', 'wb') as handle:
             handle.write(b'the bytes that were already there')
-        set_setting(setting, f'/static/media/existing{suffix}.png')
+        set_setting(setting, f'/static/media/logo_exist{suffix}.png')
     db.session.commit()
     return site
 
@@ -194,7 +195,7 @@ def test_an_undecodable_upload_leaves_the_existing_logo_alone(admin_site_profile
 
         PROBE s5 old logo on disk before: True
         PROBE s5 RAISED: UnidentifiedImageError cannot identify image file ...
-        PROBE s5 row still points at: /static/media/existing_100.png
+        PROBE s5 row still points at: /static/media/logo_exist_100.png
         PROBE s5 old logo on disk after: False
 
     Both halves are asserted: the files and the row. Either alone would pass
@@ -211,8 +212,8 @@ def test_an_undecodable_upload_leaves_the_existing_logo_alone(admin_site_profile
     assert response.status_code == 400
 
     for suffix in ('_100', '_180', '_152', '_32', '_16', '_512', '_192'):
-        assert os.path.isfile(f'{MEDIA}/existing{suffix}.png'), (
-            f'existing{suffix}.png was deleted by an upload that failed')
+        assert os.path.isfile(f'{MEDIA}/logo_exist{suffix}.png'), (
+            f'logo_exist{suffix}.png was deleted by an upload that failed')
 
     db.session.expire_all()
     site = db.session.get(Site, 1)
@@ -245,10 +246,10 @@ def test_a_good_upload_does_remove_the_superseded_files(admin_site_profile_admin
 
     response, _ = _post(client, token, icon=(io.BytesIO(_png(200, 200)), 'new.png'))
 
-    assert response.status_code == 200
+    assert response.status_code == 302
     for suffix in ('_100', '_180', '_152', '_32', '_16', '_512', '_192'):
-        assert not os.path.isfile(f'{MEDIA}/existing{suffix}.png'), (
-            f'existing{suffix}.png survived a successful replacement')
+        assert not os.path.isfile(f'{MEDIA}/logo_exist{suffix}.png'), (
+            f'logo_exist{suffix}.png survived a successful replacement')
 
 
 # --------------------------------------------------------------------------
@@ -275,7 +276,7 @@ def test_an_uppercase_svg_is_stored_as_an_svg(admin_site_profile_admin_client, m
 
     response, _ = _post(client, token, icon=(io.BytesIO(SVG), 'LOGO.SVG'))
 
-    assert response.status_code == 200
+    assert response.status_code == 302
     db.session.expire_all()
     site = db.session.get(Site, 1)
     assert site.logo.endswith('.SVG')
@@ -293,7 +294,7 @@ def test_a_lowercase_svg_is_stored_the_same_way(admin_site_profile_admin_client,
 
     response, _ = _post(client, token, icon=(io.BytesIO(SVG), 'logo.svg'))
 
-    assert response.status_code == 200
+    assert response.status_code == 302
     db.session.expire_all()
     site = db.session.get(Site, 1)
     assert site.logo.endswith('.svg')
@@ -369,7 +370,7 @@ def test_a_large_png_is_thumbnailed_to_every_size(admin_site_profile_admin_clien
 
     response, _ = _post(client, token, icon=(io.BytesIO(_png(400, 400)), 'big.png'))
 
-    assert response.status_code == 200
+    assert response.status_code == 302
     db.session.expire_all()
     site = db.session.get(Site, 1)
 
@@ -411,7 +412,7 @@ def test_a_small_png_is_stored_without_being_scaled_up(admin_site_profile_admin_
 
     response, _ = _post(client, token, icon=(io.BytesIO(_png(64, 64)), 'small.png'))
 
-    assert response.status_code == 200
+    assert response.status_code == 302
     db.session.expire_all()
     site = db.session.get(Site, 1)
 
@@ -438,7 +439,7 @@ def test_a_small_upload_in_another_format_still_removes_the_original(
     response, _ = _post(client, token, icon=(io.BytesIO(buffer.getvalue()),
                                              'small.webp'))
 
-    assert response.status_code == 200
+    assert response.status_code == 302
     db.session.expire_all()
     site = db.session.get(Site, 1)
     assert os.path.isfile(f'app{site.logo}')
@@ -459,7 +460,7 @@ def test_a_png_of_exactly_100_pixels_takes_the_small_arm(admin_site_profile_admi
 
 def test_a_disallowed_extension_is_refused_by_the_form(admin_site_profile_admin_client,
                                                        media_is_clean):
-    """The FIRST of the two layers. `SiteProfileForm.icon` carries
+    """The FIRST of the two layers. `SiteProfileForm.logo` carries
     `FileAllowed(['jpg', 'jpeg', 'png', 'webp', 'svg'])`, so a disallowed
     extension never reaches the route at all -- the form refuses it and the
     page comes back with a field error, not a 400."""
@@ -469,7 +470,7 @@ def test_a_disallowed_extension_is_refused_by_the_form(admin_site_profile_admin_
                              icon=(io.BytesIO(_png(50, 50)), 'payload.php'))
 
     assert response.status_code == 200
-    assert render.call_args.kwargs['form'].errors == {'icon': ['Images only!']}
+    assert render.call_args.kwargs['form'].errors == {'logo': ['Images only!']}
     assert glob.glob(f'{MEDIA}/logo_*') == []
 
 
@@ -503,15 +504,15 @@ def test_the_routes_own_extension_check_still_refuses_what_the_form_would_let_by
         token = generate_csrf()
         raw = flask_session['csrf_token']
 
-    payload = _payload(token, icon=(io.BytesIO(_png(50, 50)), filename))
+    payload = _payload(token, logo=(io.BytesIO(_png(50, 50)), filename))
     with app.test_request_context('/admin/site', method='POST', data=payload,
                                   content_type='multipart/form-data'):
         flask_session['csrf_token'] = raw
         g.site = site_row
         login_user(admin)
-        # SiteProfileForm.icon is an UnboundField until the form is
+        # SiteProfileForm.logo is an UnboundField until the form is
         # instantiated, so the validators live in its kwargs, not on it.
-        with patch.dict(SiteProfileForm.icon.kwargs, {'validators': []}):
+        with patch.dict(SiteProfileForm.logo.kwargs, {'validators': []}):
             with pytest.raises(HTTPException) as refused:
                 admin_site()
 
@@ -529,10 +530,10 @@ def test_an_empty_icon_field_leaves_the_logo_untouched(admin_site_profile_admin_
 
     response, _ = _post(client, token)
 
-    assert response.status_code == 200
+    assert response.status_code == 302
     db.session.expire_all()
-    assert db.session.get(Site, 1).logo == '/static/media/existing_100.png'
-    assert os.path.isfile(f'{MEDIA}/existing_100.png')
+    assert db.session.get(Site, 1).logo == '/static/media/logo_exist_100.png'
+    assert os.path.isfile(f'{MEDIA}/logo_exist_100.png')
 
 
 # --------------------------------------------------------------------------
@@ -553,7 +554,7 @@ def test_the_profile_text_is_saved_and_rendered_to_html(admin_site_profile_admin
                         tos_url='https://example.com/tos',
                         contact_email='contact@example.com')
 
-    assert response.status_code == 200
+    assert response.status_code == 302
     db.session.expire_all()
     site = db.session.get(Site, 1)
 
@@ -717,10 +718,9 @@ def test_the_profile_creates_a_site_row_when_there_is_none(app, db_session):
         db.session.commit()
         assert Site.query.count() == 0
 
-        with patch('app.admin.routes.render_template', return_value='rendered') as render:
-            admin_site()
-        # Fact 356: without this the branch under test may never have run.
-        assert render.call_args.kwargs['form'].errors == {}
+        response = admin_site()
+        # Fact 356: without this the branch under test may never have run. A save redirects.
+        assert response.status_code == 302
 
     assert Site.query.count() == 1
     assert db.session.execute(db.select(Site)).scalar_one().name == 'Test Instance'

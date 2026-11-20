@@ -242,6 +242,6 @@ def test_community_rules_and_description_saved_through_the_api_are_canonical(app
 def test_site_legal_information_saved_by_an_admin_is_canonical(app, storefront_presentation_onion, admin_site_profile_admin_client):
     client, token = admin_site_profile_admin_client
     response, _ = _post(client, token, legal_information=PASTED)
-    assert response.status_code == 200
+    assert response.status_code == 302
     db.session.expire_all()
     assert db.session.get(Site, 1).legal_information == STORED

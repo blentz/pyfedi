@@ -157,7 +157,7 @@ def post_profile(client, token, **fields):
     form.csrf_token, which tests (WTF_CSRF_ENABLED False) don't have."""
     forget_login()
     with patch('app.admin.routes.render_template', return_value='rendered'):
-        return client.post('/admin/site', data={**_payload(token, **fields), 'icon': (io.BytesIO(b''), '')},
+        return client.post('/admin/site', data={**_payload(token, **fields), 'logo': (io.BytesIO(b''), '')},
                            content_type='multipart/form-data')
 
 
@@ -169,7 +169,7 @@ def site_row() -> Site:
 def test_the_site_profile_saves_the_links(admin_site_profile_admin_client):
     client, token = admin_site_profile_admin_client
     response = post_profile(client, token, source_url=f'  {FORK} ', bug_report_url=BUGS, get_involved_url=INVOLVED)
-    assert response.status_code == 200
+    assert response.status_code == 302
     assert (site_row().source_url, site_row().bug_report_url, site_row().get_involved_url) == (FORK, BUGS, INVOLVED)
     post_profile(client, token, source_url='', bug_report_url='', get_involved_url='')
     assert project_links(site_row()) == UPSTREAM
@@ -189,7 +189,7 @@ def test_the_site_profile_shows_the_links_and_upstreams_as_placeholders(admin_si
     from app.admin.forms import SiteProfileForm
     text = (REPO / 'app' / 'templates' / 'admin' / 'site.html').read_text()
     for field in ('source_url', 'bug_report_url', 'get_involved_url'):
-        assert f'render_field(form.{field})' in text
+        assert f'tenant_field(form.{field}, ' in text
     placeholders = {field: SiteProfileForm.__dict__[field].kwargs['render_kw']['placeholder']
                     for field in ('source_url', 'bug_report_url', 'get_involved_url')}
     assert tuple(placeholders.values()) == UPSTREAM

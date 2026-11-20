@@ -124,14 +124,14 @@ def test_a_holder_runs_x_and_nothing_else(world):
     client = as_grantee(world)
     x, y = world.on_x, world.on_y
 
-    for path in (f'/admin/domains/{world.x.id}/branding', '/admin/users', '/admin/communities', '/admin/content',
+    for path in (f'/admin/site?domain={world.x.id}', '/admin/users', '/admin/communities', '/admin/content',
                  '/admin/reports', '/admin/referrals', '/admin/approve_registrations', '/admin/users/add',
                  f'/admin/user/{x.user.id}/edit', f'/admin/community/{x.community.id}/edit'):
         assert opens(client, path), f'should open: {path}'
-    for path in (f'/admin/domains/{world.y.id}/branding', f'/admin/user/{y.user.id}/edit',
+    for path in (f'/admin/user/{y.user.id}/edit',
                  f'/admin/community/{y.community.id}/edit', f'/admin/user/{world.remote.id}/edit',
                  f'/admin/community/{world.far.id}/edit',
-                 '/admin/site', '/admin/misc', '/admin/pages', '/admin/newsletter', '/admin/roles', '/admin/federation',
+                 '/admin/misc', '/admin/pages', '/admin/newsletter', '/admin/roles', '/admin/federation',
                  '/admin/topics', '/admin/media', '/admin/instances'):
         assert not opens(client, path), f'should be refused: {path}'
     assert world.grantee.id in shown_as_admin_ids(world.x.id) and world.grantee.id not in shown_as_admin_ids(world.y.id)

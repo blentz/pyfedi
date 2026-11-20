@@ -20,8 +20,8 @@ ADMIN = [
     Row('admin.settings.activity_json', 'DDDAA', gate(lambda w: f'/admin/activity_json/{w.activity.id}')),
     Row('admin.settings.emoji_edit', 'DDDAA', gate(lambda w: f'/admin/emoji/{w.emoji.id}/edit')),
     Row('admin.settings.masquerade', 'DDDAA', gate(lambda w: f'/admin/masquerade/{w.target.id}')),
-    # admin_domain_branding: in-body user_access('change instance settings') + abort(403)
-    Row('admin.domain_branding', 'DDDAA', gate(lambda w: f'/admin/domains/{w.shop.id}/branding')),
+    # admin_site with a sister domain picked (MT4): tenant_for(may_edit_branding), else permission_denied
+    Row('admin.domain_branding', 'DDDAA', gate(lambda w: f'/admin/site?domain={w.shop.id}')),
     # @permission_required('administer all communities'); since step 4, the permission split from it for each page
     *[Row(f'admin.communities{path.replace("/", ".")}', 'DDAAA', gate(f'/admin{path}')) for path in (
         '/communities', '/communities/no-topic', '/communities/low-quality', '/communities/un-moderated',
