@@ -1328,6 +1328,14 @@ def _in_event_timezone(moment: datetime | None, event_tz: ZoneInfo) -> datetime 
     return moment.replace(tzinfo=ZoneInfo('UTC')).astimezone(event_tz).replace(tzinfo=None)
 
 
+def _location_text(location, key: str) -> str | None:
+    """One text field of an event's stored location. A peer's location may be any
+    JSON (None, a list, an object missing the key or holding a non-text value), and
+    anything but text is left out of the form rather than crashing it."""
+    value = location.get(key) if isinstance(location, dict) else None
+    return value if isinstance(value, str) else None
+
+
 @bp.route('/post/<int:post_id>/edit', methods=['GET', 'POST'])
 @login_required
 def post_edit(post_id: int):
@@ -1497,9 +1505,9 @@ def post_edit(post_id: int):
                 if event.online:
                     form.online_link.data = event.online_link
                 else:
-                    form.irl_address.data = event.location['address']
-                    form.irl_city.data = event.location['city']
-                    form.irl_country.data = event.location['country']
+                    form.irl_address.data = _location_text(event.location, 'address')
+                    form.irl_city.data = _location_text(event.location, 'city')
+                    form.irl_country.data = _location_text(event.location, 'country')
                 event_online = event.online
 
             if not (post.community.is_moderator() or post.community.is_owner() or user_access('administer all communities', current_user.get_id(), on=post)):

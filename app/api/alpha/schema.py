@@ -377,6 +377,13 @@ class PostEvent(DefaultSchema):
     location = fields.Dict(allow_none=True, metadata={"description": "JSON object containing location details"})
 
 
+class PostEventView(PostEvent):
+    """An event as served: one federated from a peer may lack either time, so
+    neither is required here, while a client creating one must still send both."""
+    start = fields.String(validate=validate_datetime_string, metadata={"example": "2025-06-07T02:29:07.980084Z", "format": "datetime"})
+    end = fields.String(validate=validate_datetime_string, metadata={"example": "2025-06-07T02:29:07.980084Z", "format": "datetime"})
+
+
 class PollChoice(DefaultSchema):
     id = fields.Integer(required=True)
     choice_text = fields.String(required=True)
@@ -457,7 +464,7 @@ class Post(DefaultSchema):
     tags = fields.String(allow_none=True)
     flair = fields.String(allow_none=True)
     emoji_reactions = fields.List(fields.Nested(Reactions), allow_none=True)
-    event = fields.Nested(PostEvent)
+    event = fields.Nested(PostEventView)
     poll = fields.Nested(PostPoll)
     gallery = fields.List(fields.String(metadata={"format": "url"}))
     extensions = fields.Nested(PostExtensions)

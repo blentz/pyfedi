@@ -4,14 +4,15 @@ Sub-project 85, slice D -- the twenty-two post routes, driven through the test
 client with the API switched on, so that each route's body runs and every
 response is validated against the schema its route declares.
 """
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
 from flask import current_app, g
 
-from app.constants import POST_TYPE_POLL, REPORT_STATE_RESOLVED
+from app.constants import POST_TYPE_EVENT, POST_TYPE_POLL, REPORT_STATE_RESOLVED
 from app import db
-from app.models import (Language, Post, PostBookmark, PostVote, Report, Site,
+from app.models import (Event, Language, Post, PostBookmark, PostVote, Report, Site,
                         read_posts)
 from tests.factories import (a_keypair, make_community, make_community_flair,
                              make_community_member, make_poll,
@@ -68,6 +69,53 @@ class TestReadingPosts:
                 query_string={'url': 'https://example.test/x'})
         assert response.status_code == 200
         assert response.get_json()['metadata']['title'] == 'a title'
+
+
+class TestReadingAFederatedEvent:
+    """A peer's Event may lack `startTime` or `endTime`, and its `location` may be
+    any JSON a peer sent (a list, or an object missing fields); the post must
+    still be served, through the response validation the route applies."""
+
+    def _get(self, env, **event_columns):
+        env.post.type = POST_TYPE_EVENT
+        db.session.add(Event(post_id=env.post.id, timezone='UTC', **event_columns))
+        db.session.commit()
+        response = env.client.get('/api/alpha/post', query_string={'id': env.post.id})
+        assert response.status_code == 200
+        return response.get_json()['post_view']['post']['event']
+
+    def test_an_event_without_an_end_time_is_served_with_its_start(self, api_routes_post_env):
+        event = self._get(api_routes_post_env, start=datetime(2030, 6, 1, 12, 0), end=None)
+
+        assert event['start'] == '2030-06-01T12:00:00.000000Z'
+        assert 'end' not in event
+
+    def test_an_event_without_a_start_time_is_served_with_its_end(self, api_routes_post_env):
+        event = self._get(api_routes_post_env, start=None, end=datetime(2030, 6, 1, 13, 0))
+
+        assert event['end'] == '2030-06-01T13:00:00.000000Z'
+        assert 'start' not in event
+
+    def test_an_event_with_both_times_serves_both(self, api_routes_post_env):
+        event = self._get(api_routes_post_env, start=datetime(2030, 6, 1, 12, 0),
+                          end=datetime(2030, 6, 1, 13, 0))
+
+        assert event['start'] == '2030-06-01T12:00:00.000000Z'
+        assert event['end'] == '2030-06-01T13:00:00.000000Z'
+
+    def test_a_location_that_is_not_an_object_is_left_out(self, api_routes_post_env):
+        event = self._get(api_routes_post_env, start=datetime(2030, 6, 1, 12, 0),
+                          end=datetime(2030, 6, 1, 13, 0),
+                          location=[{'type': 'Place', 'name': 'a hall'}])
+
+        assert 'location' not in event
+
+    def test_a_location_object_is_served_as_it_is(self, api_routes_post_env):
+        location = {'type': 'Place', 'name': 'a hall', 'address': {'streetAddress': '1 Street'}}
+        event = self._get(api_routes_post_env, start=datetime(2030, 6, 1, 12, 0),
+                          end=datetime(2030, 6, 1, 13, 0), location=location)
+
+        assert event['location'] == location
 
 
 class TestVotingAndSaving:

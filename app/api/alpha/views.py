@@ -299,7 +299,6 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                 event = Event.query.filter_by(post_id=post.id).first()
                 if event:
                     event_data = {
-                        'start': event.start.isoformat(timespec="microseconds") + 'Z',
                         'timezone': event.timezone,
                         'max_attendees': event.max_attendees,
                         'participant_count': event.participant_count,
@@ -308,6 +307,9 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                         'anonymous_participation': event.anonymous_participation,
                         'online': event.online
                     }
+                    # a federated event may lack either time
+                    if event.start:
+                        event_data['start'] = event.start.isoformat(timespec="microseconds") + 'Z'
                     if event.end:
                         event_data['end'] = event.end.isoformat(timespec="microseconds") + 'Z'
                     if event.online_link:
@@ -320,7 +322,8 @@ def post_view(post: Post | int, variant, stub=False, user_id=None, my_vote=0, co
                         event_data['event_fee_currency'] = event.event_fee_currency
                     if event.event_fee_amount:
                         event_data['event_fee_amount'] = event.event_fee_amount
-                    if event.location:
+                    # a peer's location may be any JSON; the schema serves an object
+                    if event.location and isinstance(event.location, dict):
                         event_data['location'] = event.location
 
                     v2['post']['event'] = event_data

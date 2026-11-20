@@ -1194,6 +1194,34 @@ def test_an_event_in_a_place_arrives_with_its_address(app, env):
     assert form.irl_country.data == 'Nowhere'
 
 
+@pytest.mark.parametrize('location, expected', [
+    (None, (None, None, None)),
+    ([{'type': 'Place', 'name': 'a hall'}], (None, None, None)),
+    ({'city': 'Town'}, (None, 'Town', None)),
+    ({'address': {'streetAddress': '1 Main St'}, 'city': 'Town', 'country': 7},
+     (None, 'Town', None)),
+])
+def test_a_federated_events_location_fills_only_what_it_has(app, env, location, expected):
+    """A peer's in-person event may arrive with no location, a list, or an object
+    missing fields or holding non-text ones; the edit page fills the text fields it
+    can and leaves the rest empty instead of crashing."""
+    anon, community, post, mod, author, outsider = env
+    post.type = POST_TYPE_EVENT
+    db.session.add(Event(post_id=post.id,
+                         start=datetime(2026, 6, 1, 12, 0),
+                         end=datetime(2026, 6, 1, 13, 0),
+                         timezone='UTC', online=False, location=location))
+    db.session.commit()
+
+    with patch('app.post.routes.render_template',
+               return_value='rendered') as render:
+        response = as_user(app, author).get(f'/post/{post.id}/edit')
+
+    assert response.status_code == 200
+    form = render.call_args.kwargs['form']
+    assert (form.irl_address.data, form.irl_city.data, form.irl_country.data) == expected
+
+
 def test_the_sticky_box_is_for_moderators(app, env):
     anon, community, post, mod, author, outsider = env
 
