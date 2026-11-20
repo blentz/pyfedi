@@ -9,7 +9,7 @@ import pytest
 from app import db
 from app.community.util import community_theme_list
 from app.custom_themes import custom_identifier
-from app.models import CommunityMember, CustomTheme, DomainBranding, User
+from app.models import CommunityMember, CustomTheme, DomainConfig, User
 from app.shared.community import _refuse_community_settings_the_form_would_not_offer
 from app.storefront import clear_domain_cache
 from app.utils import theme_choices, theme_list
@@ -17,6 +17,7 @@ from tests.factories import grant_permission
 from tests.test_community_lifecycle import able_to_create
 from tests.test_user_settings import csrf, settings_payload
 from tests.two_domains import FIRST
+from tests.factories import config_of
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -154,7 +155,7 @@ def test_the_admin_pickers_offer_their_domains_themes(app, two_domains, themes):
     admin = two_domains.local_user('themeadmin', default)
     grant_permission(admin, 'edit domain branding')
     grant_permission(admin, 'change instance settings')
-    db.session.add(DomainBranding(site_domain_id=onion.id))
+    config_of(onion)
     db.session.commit()
     clear_domain_cache()
     client = as_user(app, admin)

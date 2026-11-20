@@ -1,6 +1,6 @@
 """/admin/sidebar and /admin/domains/<id>/sidebar: the order of the sidebars' boxes and which are hidden (app/sidebar.py).
 
-The site's order is Site row 1's, under `change instance settings`. A sister domain's is its `DomainBranding` row's,
+The site's order is Site row 1's, under `change instance settings`. A sister domain's is its `DomainConfig` row's,
 under `edit domain branding` on that domain; until it sets one it shows the site's, and its first change starts from
 the site's. Each button is its own POST: it moves one box up or down, hides or shows one, or (on a domain) goes back to
 the site's order, and the page comes back showing the result. Nothing needs JavaScript.
@@ -11,7 +11,8 @@ from flask_login import current_user
 
 from app import db
 from app.admin import bp
-from app.models import DomainBranding, Site, SiteDomain
+from app.domain_config import own_config
+from app.models import Site, SiteDomain
 from app.sidebar import BOXES, FIELDS, layout, moved, stored, toggled
 from app.storefront import clear_domain_cache
 from app.utils import login_required, permission_required, render_template, user_access
@@ -94,15 +95,14 @@ def admin_domain_sidebar(domain_id):
         abort(403)
     if row.is_default:
         return redirect(url_for('admin.admin_sidebar'))
-    branding = db.session.get(DomainBranding, row.id)
+    branding = own_config(row.id)
     values = {area: (getattr(branding, field) or None) if branding is not None else None
               for area, field in FIELDS.items()}
 
     def save(result):
         own = branding
         if own is None:
-            own = DomainBranding(site_domain_id=row.id)
-            db.session.add(own)
+            own = row.config()
         for area, field in FIELDS.items():
             setattr(own, field, result[area])
     return sidebar_page(values, site_values(db.session.get(Site, 1)), save, row=row)

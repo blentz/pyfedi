@@ -36,13 +36,27 @@ from app.models import (ActivityPubLog, BannedInstances, ChatMessage, Community,
                         CommunityFlair, CommunityFlairBlock, CommunityJoinRequest, CommunityMember, Conversation,
                         Domain, DomainBlock, Feed, FeedItem, FeedJoinRequest, FeedMember, File, Instance, InstanceBan,
                         InstanceBlock, Notification, NotificationSubscription, Poll, PollChoice, Post, PostReply,
-                        PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, RolePermissionDomain, Site, SiteDomain, User,
+                        PostReplyBookmark, PostReplyVote, PostVote, Role, RolePermission, RolePermissionDomain, Site, SiteDomain, User, DomainConfig,
                         UserBlock, UserFollower, UserFollowRequest, UserRegistration, hidden_posts, read_posts,
                         role_grant, utcnow)
 from app.utils import get_deduped_post_ids
 
 
 from app.permissions import STAFF_PERMISSIONS
+def config_of(domain) -> DomainConfig:
+    """The configuration row domain `domain` (a DomainInfo or a SiteDomain row) writes to: a sister's own, made empty
+    the first time; the default domain's is the first domain's (app.domain_config)."""
+    return db.session.get(SiteDomain, domain.id).config()
+
+
+def configure(domain, **values) -> DomainConfig:
+    """Set `values` on domain `domain`'s configuration row (`config_of`); the caller commits."""
+    row = config_of(domain)
+    for name, value in values.items():
+        setattr(row, name, value)
+    return row
+
+
 def make_instance(domain: str, software: str = 'mastodon') -> Instance:
     """A new Instance row, or the hosted domain's row when a SiteDomain already names `domain`: a domain row makes
     its own instance row on insert, and a test that adds the default domain before its instance gets that row back

@@ -24,13 +24,14 @@ from app.admin.util import send_newsletter
 from app.constants import NOTIF_POST
 from app.email import (mail_name, send_password_reset_email, send_registration_approved_email,
                        send_topic_suggestion, send_verification_email)
-from app.models import DomainBranding, Notification, Site, User
+from app.models import DomainConfig, Notification, Site, User
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import utcnow
 from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, GOLDEN_PATHS, SHOP, golden_copy
 from tests.test_per_domain_actor_documents import SHOP_BASE, site_named_first
 from tests.test_per_domain_discovery import alpha_api, alpha_get  # noqa: F401  (a fixture)
 from tests.two_domains import FIRST
+from tests.factories import configure
 
 pytestmark = pytest.mark.usefixtures('golden_site', 'shop_rows', 'site_named_first')
 
@@ -45,7 +46,7 @@ DEFAULT_ICON = '/static/images/piefed_logo_icon_t_75.png'
 
 
 def brand(domain, **values):
-    db.session.add(DomainBranding(site_domain_id=domain.id, **values))
+    configure(domain, **values)
     db.session.commit()
     clear_domain_cache()
     cache.clear()
@@ -367,12 +368,10 @@ FIRST_DOMAIN = [(name, path, AP) for name, path in sorted(GOLDEN_PATHS.items())]
 
 @pytest.mark.parametrize('name, path, headers', FIRST_DOMAIN)
 def test_first_domain_documents_unchanged(app, two_domains, shop_rows, name, path, headers):
-    """The first domain's documents stay their golden copies beside a branded sister, and even with a branding row of
-    its own, which nothing reads: its branding is Site's."""
+    """The first domain's documents stay their golden copies beside a branded sister."""
     db.session.get(Site, 1).name = 'Golden Site'   # as the golden copies were captured
     db.session.commit()
     brand(shop_rows[0], **SHOP_OWN)
-    brand(two_domains.domains[0], **SHOP_OWN)
     response = app.test_client().get(path, headers=headers, base_url=f'https://{FIRST}')
     assert response.status_code == 200
     assert response.data == golden_copy(name)

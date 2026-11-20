@@ -863,8 +863,9 @@ class TestTheMigration:
         env.site.private_instance = private
         db.session.commit()
         connection = db.session.connection()
-        migration = _migration()
+        migration, later = _migration(), _migration('domain_config')
         with Operations.context(MigrationContext.configure(connection)):
+            later.downgrade()   # the columns it tests moved to domain_config
             migration.downgrade()
             migration.upgrade()
             rows = dict(connection.execute(text('SELECT domain, login_required FROM site_domain')).fetchall())
@@ -877,6 +878,7 @@ class TestTheMigration:
         register(env)
         connection = db.session.connection()
         with Operations.context(MigrationContext.configure(connection)):
+            _migration('domain_config').downgrade()
             _migration().downgrade()
             registration = connection.execute(text("SELECT registration FROM site_domain WHERE domain = 'paid.example'")).scalar()
             found = connection.execute(text('SELECT count(*) FROM "user" WHERE user_name = \'joiner\'')).scalar()
@@ -885,8 +887,8 @@ class TestTheMigration:
         assert (registration, found) == ('closed', 0)
 
 
-def _migration():
-    path = next(Path(__file__).parent.parent.glob('migrations/versions/*_paid_private_domains.py'))
+def _migration(name='paid_private_domains'):
+    path = next(Path(__file__).parent.parent.glob(f'migrations/versions/*_{name}.py'))
     spec = importlib.util.spec_from_file_location(path.stem, path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)

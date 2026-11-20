@@ -59,6 +59,7 @@ from app.community.routes import do_subscribe
 from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
+from app.domain_config import own_config
 from app.admin.scope import creatable_domains, scope_for
 from app.roles import grant_role
 from app.oauth_server import admin_scopes
@@ -68,7 +69,7 @@ from app.complimentary import complimentary_of
 from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, Domain, \
-    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainBranding, Referral, CustomTheme, CustomThemeTemplate
+    Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainConfig, Referral, CustomTheme, CustomThemeTemplate
 from app.referral import DEFAULT_GENERATORS, GENERATOR_CHOICES, GENERATORS_SETTING, MAX_PER_CODE_SETTING, MAX_PER_USER_SETTING
 from app.storefront import clear_domain_cache, current_storefront, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
 from app.onion_media import DEFAULT_CACHE_BYTES
@@ -164,7 +165,7 @@ def admin_home():
 
 
 # The logo files an upload makes, as `save_logo_upload` names them. Site keeps the first five on its row and the last two
-# in the settings of the same names; a domain keeps all seven on its DomainBranding row.
+# in the settings of the same names; a domain keeps all seven on its DomainConfig row.
 SITE_LOGO_FIELDS = ('logo', 'logo_180', 'logo_152', 'logo_32', 'logo_16')
 LOGO_FIELDS = SITE_LOGO_FIELDS + ('logo_192', 'logo_512')
 # The dark-mode logo's files, on Site's row and a domain's alike: the upload and the copy the header shows
@@ -333,7 +334,7 @@ def _logo_paths_in_use() -> set[str]:
     site = db.session.get(Site, 1)
     paths = [getattr(site, field, None) for field in SITE_LOGO_FIELDS + DARK_LOGO_FIELDS] + \
         [get_setting('logo_192', ''), get_setting('logo_512', '')] + \
-        [getattr(row, field) for row in db.session.query(DomainBranding) for field in LOGO_FIELDS + DARK_LOGO_FIELDS]
+        [getattr(row, field) for row in db.session.query(DomainConfig) for field in LOGO_FIELDS + DARK_LOGO_FIELDS]
     return {os.path.realpath(f'app{path}') for path in paths if path}
 
 
@@ -557,7 +558,7 @@ def admin_domains_delete(domain_id):
     else:
         instance_id = row.instance_id
         # Its branding row goes with it: the files its logo upload wrote go once nothing names them
-        branding = db.session.get(DomainBranding, row.id)
+        branding = own_config(row.id)
         logos = [getattr(branding, field) for field in LOGO_FIELDS + DARK_LOGO_FIELDS] if branding is not None else []
         theme_files = theme_file_paths(custom_themes_for(row.id, include_retired=True))   # its themes go with it
         db.session.delete(row)
@@ -1017,7 +1018,7 @@ def admin_domain_branding(domain_id):
         abort(403)
     if row.is_default:
         return redirect(url_for('admin.admin_site'))
-    branding = db.session.get(DomainBranding, row.id)
+    branding = own_config(row.id)
     form = DomainBrandingForm()
     form.default_theme.choices = select_choices([('', _('The site default'))] +
                                                 theme_choices(row.id, branding.default_theme if branding else ''))
@@ -1059,8 +1060,7 @@ def admin_domain_branding(domain_id):
             logos = save_logo_upload_after(upload, LOGO_MEDIA, dark_logos) if uploading else \
                 dict.fromkeys(LOGO_FIELDS, '')
             if branding is None:
-                branding = DomainBranding(site_domain_id=row.id)
-                db.session.add(branding)
+                branding = row.config()
             superseded = []
             if replacing:
                 superseded = [getattr(branding, field) for field in LOGO_FIELDS]

@@ -14,13 +14,14 @@ from flask import g
 from app import cache, db
 from app.branding import Branding, current_branding, ends_inside_markup, offsite_references, onion_safe
 from app.constants import POST_TYPE_IMAGE
-from app.models import DomainBranding, File, Site
+from app.models import DomainConfig, File, Site
 from app.onion_media import cache_name, proxy_url
 from app.storefront import clear_domain_cache
 from app.utils import set_setting
 from tests.conftest import forget_login
 from tests.factories import make_instance, make_post, make_user
 from tests.two_domains import FIRST, ONION, default_request, onion_request
+from tests.factories import configure
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -462,8 +463,7 @@ def test_an_inherited_tagline_that_leaves_the_onion_is_stripped_on_the_onion_onl
 
 def test_the_onions_own_offsite_value_is_stripped_too(app, onion_site):
     domains, _post = onion_site
-    db.session.add(DomainBranding(site_domain_id=domains.domains[1].id, logo_32=f'{ELSEWHERE}/32.png',
-                                  about_html=f'<p>about <img src="{ELSEWHERE}/a.png"></p>'))
+    configure(domains.domains[1], logo_32=f'{ELSEWHERE}/32.png', about_html=f'<p>about <img src="{ELSEWHERE}/a.png"></p>')
     db.session.commit()
     clear_domain_cache()
     with onion_request(app):

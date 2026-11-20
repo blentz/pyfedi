@@ -1,6 +1,6 @@
 """Admins edit each domain's branding on the Domains page (project 4, Task 5; spec §3.4, §3.5).
 
-`/admin/domains/<id>/branding` edits a sister domain's `DomainBranding` row; the first domain's branding is Site row
+`/admin/domains/<id>/branding` edits a sister domain's `DomainConfig` row; the first domain's branding is Site row
 1's, edited at the site settings page. A blank field inherits the first domain's value again.
 
 A logo upload makes the files the site logo upload makes (`save_logo_upload`), the 192 and 512 pixel manifest icons
@@ -24,12 +24,14 @@ from PIL import Image
 
 from app import cache, db
 from app.branding import branding_for
-from app.models import DomainBranding, Language, Site, SiteDomain
+from app.models import DomainConfig, Language, Site, SiteDomain
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import get_setting, set_setting
 from tests.conftest import forget_login
 from tests.factories import grant_permissions, INSTANCE_SETTINGS, grant_permission, make_instance, make_user
 from tests.test_admin_site_profile import HOSTILE_SVG, SVG, csrf, login
+from tests.factories import config_of
+from app.domain_config import own_config
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -63,9 +65,9 @@ def flashes(admin) -> list:
         return session.pop('_flashes', [])
 
 
-def own_row(domain) -> DomainBranding | None:
+def own_row(domain) -> DomainConfig | None:
     db.session.expire_all()
-    return db.session.get(DomainBranding, domain.id)
+    return own_config(domain.id)
 
 
 def media_files(media) -> set[str]:
@@ -105,7 +107,7 @@ def test_default_row_redirects_to_site_settings(admin_domain_branding_admin, adm
     assert response.headers['Location'].endswith('/admin/site')
     response = save(admin_domain_branding_admin, admin_domain_branding_domains['first'], name='Never stored')
     assert response.status_code == 302 and response.headers['Location'].endswith('/admin/site')
-    assert db.session.query(DomainBranding).count() == 0
+    assert db.session.query(DomainConfig).filter(DomainConfig.site_domain_id.isnot(None)).count() == 0
 
 
 def test_unknown_domain_is_404(admin_domain_branding_admin, admin_domain_branding_domains):
@@ -299,10 +301,9 @@ def test_a_domain_with_no_logo_of_its_own_has_the_first_domains_icons(app, admin
 
 def own_logo(domain, **paths):
     """`domain`'s row naming these logo paths, as a past upload (or a hand edit of the row) left it."""
-    row = own_row(domain) or DomainBranding(site_domain_id=domain.id)
+    row = config_of(domain)
     for field in LOGO_FIELDS:
         setattr(row, field, paths.get(field, ''))
-    db.session.add(row)
     db.session.commit()
 
 

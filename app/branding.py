@@ -1,8 +1,8 @@
 """What each domain looks like: its name, description, logos, theme, CSS, sidebar and about text, and the order of
 its sidebars' boxes (project 4).
 
-A domain's `DomainBranding` row holds only what it sets. Every field it leaves NULL or blank is the first domain's,
-which is `Site` row 1's; the first domain itself is exactly `Site`'s values.
+A domain's branding is part of its configuration (app.domain_config): a sister domain's `DomainConfig` row holds only
+what it sets, and every field it leaves NULL or blank is the first domain's.
 """
 from __future__ import annotations
 
@@ -16,10 +16,11 @@ from bs4 import BeautifulSoup
 from bs4.element import Stylesheet
 from flask import current_app
 
-from app import cache, db, shaped_memo_name
+from app import db
 from app.log_scrub import ONION_SAFE   # these lines name the site's own settings and host, never a visitor
 # The modules, not the names: app.storefront imports this module to clear its memo, so whichever of the two is imported
 # first finds the other mid-import (import cycle: storefront)
+import app.domain_config as domain_config
 import app.models as models
 import app.storefront as storefront
 
@@ -72,45 +73,22 @@ def _header_image(logo: str, logo_152: str) -> str:
     return logo if logo.lower().endswith('.svg') else logo_152
 
 
-def own_branding(domain: storefront.DomainInfo) -> models.DomainBranding | None:
-    """The row `domain` stores its own values in, or None. Not memoised: the admin form and federation read it."""
-    return db.session.get(models.DomainBranding, domain.id)
+def own_branding(domain: storefront.DomainInfo) -> models.DomainConfig | None:
+    """The row sister domain `domain` stores its own values in, or None (the first domain's are the site's)."""
+    return None if domain.is_default else domain_config.own_config(domain.id)
 
 
 def own_value(domain: storefront.DomainInfo, field: str) -> str:
     """`domain`'s own non-blank `field`, else ''. What other servers and clients read (spec §3.3) publishes a sister
     domain's own value where it set one and today's otherwise. The first domain has none: its branding is Site's."""
-    row = None if domain.is_default else own_branding(domain)
+    row = own_branding(domain)
     return (getattr(row, field) if row is not None else None) or ''
 
 
-# A logo's sized copies: a domain with a logo of its own shows only its own (spec §5, how a blank logo falls back)
-_ICON_FIELDS = frozenset({'logo_180', 'logo_152', 'logo_32', 'logo_16'})
-# A domain with a logo or a dark logo of its own never shows the first domain's dark logo: a blank one is its own logo
-_DARK_FIELDS = frozenset({'logo_dark', 'logo_dark_152'})
-
-
-@cache.memoize(timeout=300, make_name=shaped_memo_name)
-def _effective(site_domain_id: int | None, is_default: bool) -> Branding:
-    """Each field the row sets, else Site's. A row with its own `logo` takes its icon sizes from itself alone: a
-    blank size is PieFed's default, as the manifest's icons are, never the first domain's icon beside the domain's
-    logo. Its dark logo likewise: a row with its own logo or dark logo takes its dark logo from itself alone, a blank one
-    being its logo in dark mode."""
-    site = db.session.get(models.Site, 1)
-    row = None if is_default else db.session.get(models.DomainBranding, site_domain_id)
-    own_logo = bool(getattr(row, 'logo', None))
-    own_dark = own_logo or bool(getattr(row, 'logo_dark', None))
-
-    def value(field):
-        if (own_logo and field in _ICON_FIELDS) or (own_dark and field in _DARK_FIELDS):
-            return getattr(row, field) or ''
-        return getattr(row, field, None) or getattr(site, field) or ''
-    return Branding(*(value(field) for field in Branding._fields))
-
-
 def branding_for(domain: storefront.DomainInfo) -> Branding:
-    """The values `domain` shows: its own where it set one, else Site row 1's. Memoised per domain id."""
-    return _effective(domain.id, domain.is_default)
+    """The values `domain` shows: its configuration's (app.domain_config), each blank one ''."""
+    values = domain_config.effective(domain)
+    return Branding(*(values[field] or '' for field in Branding._fields))
 
 
 def current_branding() -> Branding:

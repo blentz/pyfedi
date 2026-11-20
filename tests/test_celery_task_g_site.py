@@ -28,7 +28,7 @@ def test_a_site_left_in_g_by_an_earlier_task_cannot_be_read(app):
     with app.app_context():
         g.site = _site_left_by_an_earlier_task()
         with pytest.raises(DetachedInstanceError):
-            site_language_id()
+            g.site.blocked_phrases   # a column Site still has; site_language_id reads the first domain's row
 
 
 def test_each_task_starts_without_the_previous_tasks_site(app):

@@ -19,7 +19,7 @@ from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, Complimentar
     LinkOfferForm, MembershipForm, OfferForm, PaymentSettingsForm, PaypalCredentialsForm, PaypalOfferForm, ReferralCodeForm, \
     StripeCredentialsForm
 from app.complimentary import KIND as COMPLIMENTARY, complimentary_offer, end_complimentary, grant_complimentary
-from app.models import MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, PromoCode, PromoCodeUse, \
+from app.models import DomainConfig, MemberSubscription, Offer, OfferDomain, Payment, PaymentProvider, PromoCode, PromoCodeUse, \
     Role, SiteDomain, User, utcnow
 from app.local_names import local_named, split_local_name
 from app.payments.adapters import adapter_for
@@ -696,7 +696,7 @@ def _domain_choices() -> list[tuple[int, str]]:
 
 
 def _names_a_paid_domain(offer: Offer) -> bool:
-    return SiteDomain.query.filter_by(registration_offer_id=offer.id).first() is not None
+    return DomainConfig.query.filter_by(registration_offer_id=offer.id).first() is not None
 
 
 def _save_offer(form: OfferForm, offer: Offer) -> bool:

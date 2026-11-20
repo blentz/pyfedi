@@ -6159,64 +6159,25 @@ class IpBan(db.Model):
 
 
 class Site(db.Model):
+    """The server: what is one thing for every domain it answers on (spec 2026-11-20-multitenant-domain-config-design.md).
+    What each domain configures for itself is its `DomainConfig`; the first domain's is the row with no domain, and the
+    names it had here still read and write it (`TENANT_COLUMNS`, below), so `site.enable_nsfw` is the first domain's."""
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(256))
-    description = db.Column(db.String(256))
     icon_id = db.Column(db.Integer, db.ForeignKey('file.id'))
-    sidebar = db.Column(db.Text, default='')
-    sidebar_html = db.Column(db.Text, default='')
-    legal_information = db.Column(db.Text, default='')
-    legal_information_html = db.Column(db.Text, default='')
-    tos_url = db.Column(db.String(256))
-    source_url = db.Column(db.String(256), default='')         # where this server's source is (AGPL §13; app/project_links.py)
-    bug_report_url = db.Column(db.String(256), default='')     # where bugs are reported: '' for upstream PieFed's
-    get_involved_url = db.Column(db.String(256), default='')   # how to get involved: '' for upstream PieFed's
     public_key = db.Column(db.Text)
     private_key = db.Column(db.Text)
-    enable_downvotes = db.Column(db.Boolean, default=True)
-    enable_gif_reply_rep_decrease = db.Column(db.Boolean, default=False)
-    enable_chan_image_filter = db.Column(db.Boolean, default=False)
-    enable_this_comment_filter = db.Column(db.Boolean, default=False)
-    allow_local_image_posts = db.Column(db.Boolean, default=True)
     remote_image_cache_days = db.Column(db.Integer, default=30)
-    enable_nsfw = db.Column(db.Boolean, default=False)
-    enable_nsfl = db.Column(db.Boolean, default=False)
-    community_creation_admin_only = db.Column(db.Boolean, default=False)
-    reports_email_admins = db.Column(db.Boolean, default=True)
-    registration_mode = db.Column(db.String(20), default='Closed')  # possible values: Open, RequireApplication, Closed
-    application_question = db.Column(db.Text, default='')
     allow_or_block_list = db.Column(db.Integer, default=2)  # 1 = allow list, 2 = block list
     allowlist = db.Column(db.Text, default='')
     blocklist = db.Column(db.Text, default='')
     blocked_phrases = db.Column(db.Text, default='')  # discard incoming content with these phrases
-    auto_decline_referrers = db.Column(db.Text, default='rdrama.net\nahrefs.com\nkiwifarms.net\nkiwifarms.st')  # automatically decline registration requests if the referrer is one of these
     created_at = db.Column(db.DateTime, default=utcnow)
     updated = db.Column(db.DateTime, default=utcnow)
     last_active = db.Column(db.DateTime, default=utcnow)
     log_activitypub_json = db.Column(db.Boolean, default=False)
-    default_theme = db.Column(db.String(20), default='')
-    default_filter = db.Column(db.String(20), default='')
-    contact_email = db.Column(db.String(255), default='')
-    about = db.Column(db.Text, default='')
-    about_html = db.Column(db.Text, default='')
-    logo = db.Column(db.String(40), default='')
-    logo_180 = db.Column(db.String(40), default='')
-    logo_152 = db.Column(db.String(40), default='')
-    logo_32 = db.Column(db.String(40), default='')
-    logo_16 = db.Column(db.String(40), default='')
-    logo_dark = db.Column(db.String(40), default='')       # what dark mode shows instead of logo, '' for logo itself
-    logo_dark_152 = db.Column(db.String(40), default='')   # and instead of logo_152
-    home_sidebar = db.Column(db.Text, default='')        # the home page sidebar's boxes in order (app/sidebar.py)
-    community_sidebar = db.Column(db.Text, default='')   # and the community pages'
-    show_inoculation_block = db.Column(db.Boolean, default=True)
-    additional_css = db.Column(db.Text)
-    additional_js = db.Column(db.Text)
-    private_instance = db.Column(db.Boolean, default=True)
-    language_id = db.Column(db.Integer)
     honeypot = db.Column(db.Boolean, default=True)
     allowlist_mode = db.Column(db.Integer, default=0)   # 0 = weak, 1 = strong, 2 = intense
     require_signed_fetch = db.Column(db.Boolean, default=False, server_default='false', nullable=False)  # S6 secure mode: refuse unsigned AP GETs
-
 
     @staticmethod
     def admins() -> List[User]:
@@ -6291,7 +6252,6 @@ class SiteDomain(db.Model):
     """One row per domain the site answers on (a storefront). Exactly one row is the default."""
     __tablename__ = 'site_domain'
     __table_args__ = (
-        CheckConstraint("registration IN ('anyone','closed','paid')", name='ck_site_domain_registration'),
         Index('ix_site_domain_one_default', 'is_default', unique=True, postgresql_where=text('is_default')),
         db.UniqueConstraint('instance_id', name='uq_site_domain_instance_id'),
     )
@@ -6299,13 +6259,6 @@ class SiteDomain(db.Model):
     domain = db.Column(db.String(255), unique=True, nullable=False)  # lower-case host name, no scheme or port
     scheme = db.Column(db.String(5), nullable=False, default='https')  # https or http
     federates = db.Column(db.Boolean, nullable=False, default=True, server_default='true')
-    registration = db.Column(db.String(10), nullable=False, default='anyone', server_default='anyone')  # anyone, closed, paid: whether the public may sign up, and whether it costs
-    registration_offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', name='fk_site_domain_registration_offer'))   # paid: what the first fee is for
-    login_required = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())   # the default domain's is Site.private_instance
-    # In referral-code mode, whether a valid code opens signup here while `registration` is 'closed' (spec RC11, RC11a)
-    referral_codes = db.Column(db.Boolean, nullable=False, default=True, server_default=db.true())
-    lapse_grace_days = db.Column(db.Integer, nullable=False, default=7, server_default='7')   # paid: how long access outlasts a member's subscription
-    paid_since = db.Column(db.DateTime)   # when it began charging: accounts made before it are grandfathered (plan M2)
     is_default = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     is_onion = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     # Its own instance row (spec 2026-10-19 §3.1): row 1 for the default. Set on insert, below.
@@ -6314,6 +6267,22 @@ class SiteDomain(db.Model):
     # whose instance actor signs with Site row 1's. Read on demand by app.federation_urls, never cached.
     public_key = db.Column(db.Text)
     private_key = db.Column(db.Text)
+    # Its configuration (DomainConfig): a sister domain's own row; the default domain's is the first domain's row
+    own_config = db.relationship('DomainConfig', uselist=False, cascade='all, delete-orphan', passive_deletes=True)
+
+    def __init__(self, **kwargs):
+        # Whether it is the default decides which configuration row the other arguments write: set it first
+        if 'is_default' in kwargs:
+            self.is_default = kwargs.pop('is_default')
+        super().__init__(**kwargs)
+
+    def config(self) -> 'DomainConfig':
+        """The row this domain's configuration is in, made empty (inheriting everything) the first time it is needed."""
+        if self.is_default:
+            return first_config()
+        if self.own_config is None:
+            self.own_config = DomainConfig()
+        return self.own_config
 
     @validates('domain')
     def _set_is_onion(self, key, domain):
@@ -6345,31 +6314,156 @@ def refuse_a_federating_onion(target) -> None:
             raise ValueError(ONION_NEVER_FEDERATES)
 
 
-class DomainBranding(db.Model):
-    """What a domain sets of its own branding. NULL or '' in a column inherits Site row 1's value (app.branding)."""
-    __tablename__ = 'domain_branding'
-    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_domain_branding_site_domain_id',
-                                                         ondelete='CASCADE'), primary_key=True)
+class DomainConfig(db.Model):
+    """One domain's configuration: the site is multitenant, each domain a tenant (spec 2026-11-20-multitenant-domain-
+    config-design.md, MT1). The one row with no `site_domain_id` is the first domain's, whether or not a
+    `site_domain` row names it, as local rows with no domain are the first domain's. Every other row is a sister
+    domain's: a NULL (or, in a text column, '') there is the first domain's value (MT3), except in `OWN_COLUMNS`, which
+    each domain holds for itself. Read through `app.domain_config`."""
+    __tablename__ = 'domain_config'
+    __table_args__ = (
+        # One row with no domain: the first domain's
+        Index('ix_domain_config_first', text('(site_domain_id IS NULL)'), unique=True,
+              postgresql_where=text('site_domain_id IS NULL')),
+        CheckConstraint("registration IN ('anyone','closed','paid')", name='ck_domain_config_registration'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_domain_config_site_domain_id',
+                                                         ondelete='CASCADE'), unique=True)
+    # Profile
     name = db.Column(db.String(256))
     description = db.Column(db.String(256))
+    sidebar = db.Column(db.Text)
+    sidebar_html = db.Column(db.Text)
+    about = db.Column(db.Text)
+    about_html = db.Column(db.Text)
+    legal_information = db.Column(db.Text)
+    legal_information_html = db.Column(db.Text)
+    tos_url = db.Column(db.String(256))
+    source_url = db.Column(db.String(256))         # where this server's source is (AGPL §13; app/project_links.py)
+    bug_report_url = db.Column(db.String(256))     # where bugs are reported: '' for upstream PieFed's
+    get_involved_url = db.Column(db.String(256))   # how to get involved: '' for upstream PieFed's
+    contact_email = db.Column(db.String(255))
     logo = db.Column(db.String(40))
     logo_180 = db.Column(db.String(40))
     logo_152 = db.Column(db.String(40))
     logo_32 = db.Column(db.String(40))
     logo_16 = db.Column(db.String(40))
-    logo_192 = db.Column(db.String(40))   # the PWA manifest's icons: Site keeps its own in settings of these names
+    logo_192 = db.Column(db.String(40))   # the PWA manifest's icons: the first domain's are still in settings
     logo_512 = db.Column(db.String(40))
-    logo_dark = db.Column(db.String(40))       # what dark mode shows instead of logo
-    logo_dark_152 = db.Column(db.String(40))
+    logo_dark = db.Column(db.String(40))       # what dark mode shows instead of logo, '' for logo itself
+    logo_dark_152 = db.Column(db.String(40))   # and instead of logo_152
+    # Look
     default_theme = db.Column(db.String(20))
+    default_filter = db.Column(db.String(20))
     additional_css = db.Column(db.Text)
-    sidebar = db.Column(db.Text)
-    sidebar_html = db.Column(db.Text)
-    about = db.Column(db.Text)
-    about_html = db.Column(db.Text)
-    home_sidebar = db.Column(db.Text)        # the sidebars' boxes in order (app/sidebar.py)
-    community_sidebar = db.Column(db.Text)
+    additional_js = db.Column(db.Text)
+    home_sidebar = db.Column(db.Text)        # the home page sidebar's boxes in order (app/sidebar.py)
+    community_sidebar = db.Column(db.Text)   # and the community pages'
+    language_id = db.Column(db.Integer)
+    show_inoculation_block = db.Column(db.Boolean)
+    # Joining
+    registration_mode = db.Column(db.String(20))   # Open, RequireApplication, Closed, ReferralCode
+    application_question = db.Column(db.Text)
+    auto_decline_referrers = db.Column(db.Text)   # decline registration requests from these referrers
+    private_instance = db.Column(db.Boolean)
+    # Content
+    enable_downvotes = db.Column(db.Boolean)
+    enable_gif_reply_rep_decrease = db.Column(db.Boolean)
+    enable_chan_image_filter = db.Column(db.Boolean)
+    enable_this_comment_filter = db.Column(db.Boolean)
+    allow_local_image_posts = db.Column(db.Boolean)
+    enable_nsfw = db.Column(db.Boolean)
+    enable_nsfl = db.Column(db.Boolean)
+    community_creation_admin_only = db.Column(db.Boolean)
+    reports_email_admins = db.Column(db.Boolean)
+    # Each domain's own, never inherited (OWN_COLUMNS): a sister domain's storefront settings (plan S4, S24)
+    registration = db.Column(db.String(10))   # anyone, closed, paid: whether the public may sign up, and whether it costs
+    registration_offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', name='fk_domain_config_registration_offer'))   # paid: what the first fee is for
+    login_required = db.Column(db.Boolean)   # the first domain's is private_instance
+    # In referral-code mode, whether a valid code opens signup here while `registration` is 'closed' (spec RC11, RC11a)
+    referral_codes = db.Column(db.Boolean)
+    lapse_grace_days = db.Column(db.Integer)   # paid: how long access outlasts a member's subscription
+    paid_since = db.Column(db.DateTime)   # when it began charging: accounts made before it are grandfathered (plan M2)
 
+
+# What each domain holds for itself: never the first domain's. NULL is the default here.
+OWN_COLUMNS = {'registration': 'anyone', 'registration_offer_id': None, 'login_required': False, 'referral_codes': True,
+               'lapse_grace_days': 7, 'paid_since': None}
+
+# What the first domain starts with: these were Site's defaults. A sister domain's row starts empty, inheriting all.
+FIRST_DEFAULTS = {
+    'name': None, 'description': None, 'sidebar': '', 'sidebar_html': '', 'about': '', 'about_html': '',
+    'legal_information': '', 'legal_information_html': '', 'tos_url': None, 'source_url': '', 'bug_report_url': '',
+    'get_involved_url': '', 'contact_email': '', 'logo': '', 'logo_180': '', 'logo_152': '', 'logo_32': '',
+    'logo_16': '', 'logo_192': None, 'logo_512': None, 'logo_dark': '', 'logo_dark_152': '', 'default_theme': '',
+    'default_filter': '', 'additional_css': None, 'additional_js': None, 'home_sidebar': '', 'community_sidebar': '',
+    'language_id': None, 'show_inoculation_block': True, 'registration_mode': 'Closed', 'application_question': '',
+    'auto_decline_referrers': 'rdrama.net\nahrefs.com\nkiwifarms.net\nkiwifarms.st', 'private_instance': True,
+    'enable_downvotes': True, 'enable_gif_reply_rep_decrease': False, 'enable_chan_image_filter': False,
+    'enable_this_comment_filter': False, 'allow_local_image_posts': True, 'enable_nsfw': False, 'enable_nsfl': False,
+    'community_creation_admin_only': False, 'reports_email_admins': True, **OWN_COLUMNS,
+}
+
+# The columns a sister domain inherits from the first domain when it leaves them NULL (or '')
+TENANT_COLUMNS = tuple(name for name in FIRST_DEFAULTS if name not in OWN_COLUMNS)
+# The ones Site had, which its instances still read and write as the first domain's (logo_192 and 512 were settings)
+SITE_TENANT_COLUMNS = tuple(name for name in TENANT_COLUMNS if name not in ('logo_192', 'logo_512'))
+
+_FIRST_CONFIG = 'first_domain_config'
+
+
+def first_config() -> DomainConfig:
+    """The first domain's configuration row, made with FIRST_DEFAULTS the first time it is needed. A row made and not
+    yet flushed is kept on the session, so that two writes before a flush land on the same row; a stored one is found
+    by its id in the session's identity map, so a row deleted since (or rolled back) is never handed out."""
+    session = db.session()
+    kept = session.info.get(_FIRST_CONFIG)
+    with session.no_autoflush:
+        if isinstance(kept, DomainConfig):
+            if kept in session and inspect(kept).pending:
+                return kept
+            kept = inspect(kept).identity[0] if inspect(kept).identity else None
+        row = session.get(DomainConfig, kept) if kept is not None else None
+        if row is None or row.site_domain_id is not None:
+            row = session.query(DomainConfig).filter(DomainConfig.site_domain_id.is_(None)).first()
+    if row is None:
+        row = DomainConfig(**FIRST_DEFAULTS)
+        session.add(row)
+        session.info[_FIRST_CONFIG] = row
+    else:
+        session.info[_FIRST_CONFIG] = row.id
+    return row
+
+
+def _forward(name: str, config):
+    """A property for column `name` of the DomainConfig `config(self)` returns."""
+    def read(self):
+        return getattr(config(self), name)
+
+    def write(self, value):
+        setattr(config(self), name, value)
+    return property(read, write, doc=f'DomainConfig.{name}')
+
+
+for _name in SITE_TENANT_COLUMNS:
+    setattr(Site, _name, _forward(_name, lambda site: first_config()))
+
+
+def _own_value(name: str):
+    """A property for SiteDomain's own column `name`: its configuration row's value, or the default when unset."""
+    def read(self):
+        row = first_config() if self.is_default else self.own_config
+        value = getattr(row, name) if row is not None else None
+        return OWN_COLUMNS[name] if value is None else value
+
+    def write(self, value):
+        setattr(self.config(), name, value)
+    return property(read, write, doc=f'DomainConfig.{name}')
+
+
+for _name in OWN_COLUMNS:
+    setattr(SiteDomain, _name, _own_value(_name))
 
 class CustomTheme(db.Model):
     """A theme a domain's theme holders made by copying another: CSS plus uploaded files (custom themes spec §3.1).

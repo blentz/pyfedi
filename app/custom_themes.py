@@ -1,6 +1,6 @@
 """Custom themes per domain (docs/superpowers/specs/2026-11-18-custom-themes-design.md).
 
-A theme column (`User.theme`, `Community.theme`, `Site.default_theme`, `DomainBranding.default_theme`) holds a shipped
+A theme column (`User.theme`, `Community.theme`, `Site.default_theme`, `DomainConfig.default_theme`) holds a shipped
 theme's directory name, `piefed`, or `custom:<id>` for a `CustomTheme`. A custom theme counts only on the domain that
 owns it (CT3); a shipped theme or `piefed` counts everywhere."""
 from __future__ import annotations
@@ -20,6 +20,7 @@ from PIL import Image
 
 from app import db
 from app.permissions import user_access
+import app.domain_config as domain_config
 import app.models as models
 import app.storefront as storefront
 
@@ -241,7 +242,7 @@ def uses(theme) -> dict:
     users and communities. A theme with any use cannot be deleted (CT7)."""
     identifier = custom_identifier(theme.id)
     site = db.session.get(models.Site, 1)
-    branding = db.session.get(models.DomainBranding, theme.site_domain_id)
+    branding = domain_config.own_config(theme.site_domain_id)
     return {
         'domain_default': (branding is not None and branding.default_theme == identifier) or
                           (site is not None and site.default_theme == identifier),

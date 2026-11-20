@@ -27,7 +27,8 @@ from sqlalchemy import text
 from app.constants import MICROBLOGS_COMMUNITY_NAME, POST_TYPE_LINK, POST_TYPE_IMAGE, POST_TYPE_ARTICLE, POST_TYPE_VIDEO, POST_TYPE_POLL, \
     SUBSCRIPTION_MODERATOR, SUBSCRIPTION_MEMBER, SUBSCRIPTION_OWNER, SUBSCRIPTION_PENDING, VERSION, \
     POST_TYPE_EVENT, POST_TYPE_GALLERY, AP_MEDIA_TYPES, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO
-from app.models import Site, utcnow
+from app.domain_config import site_view
+from app.models import utcnow
 from app.onion import is_onion_request, stamp_activity
 from app.onion_guard import require_onion_session, resolve_onion_api_rate_key
 from app.hidden_routes import refuse_hidden_route, unread_shown
@@ -266,8 +267,8 @@ def register_request_hooks(app):
         g.locale = str(get_locale())
         g.low_bandwidth = request.cookies.get('low_bandwidth', '0') == '1'
         if request.path != '/inbox' and not request.path.startswith('/static/'):        # do not load g.site on shared inbox, to increase chance of duplicate detection working properly
-            site = get_site_as_dict()
-            g.site = Site(**site)
+            # Site's instance-wide columns with this domain's configuration over them (app.domain_config)
+            g.site = site_view(get_site_as_dict(), current_storefront())
             g.admin_ids = get_setting('admin_ids')    # get_setting is cached in redis
             if g.admin_ids is None:
                 g.admin_ids = list(db.session.execute(

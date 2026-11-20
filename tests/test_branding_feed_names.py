@@ -9,11 +9,12 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from app import cache, db
-from app.models import Domain, DomainBranding, Feed, Site, Tag, Topic
+from app.models import Domain, DomainConfig, Feed, Site, Tag, Topic
 from app.storefront import clear_domain_cache
 from tests.factories import make_post
 from tests.test_per_domain_actor_documents import SHOP_BASE, site_named_first
 from tests.two_domains import FIRST
+from tests.factories import configure
 
 SHOP = 'shop.example'
 SITE_NAME = 'First Domain Site'
@@ -41,7 +42,7 @@ def rows(app, shop_rows):
 
 
 def brand(domain, **values):
-    db.session.add(DomainBranding(site_domain_id=domain.id, **values))
+    configure(domain, **values)
     db.session.commit()
     clear_domain_cache()
     cache.clear()

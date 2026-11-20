@@ -136,9 +136,9 @@ def test_hosted_instance_ids_are_cached_with_the_domain_rows(app, db_session, tw
     clear_domain_cache()
     before = hosted_instance_ids()
     db.session.add(SiteDomain(domain='shop.example', federates=False))
-    db.session.commit()
-    assert hosted_instance_ids() == before
-    clear_domain_cache()
+    db.session.flush()
+    assert hosted_instance_ids() == before   # cached until the commit
+    db.session.commit()   # which clears it (app.domain_config)
     assert hosted_instance_ids() == before | {domain_for_host('shop.example').instance_id}
 
 

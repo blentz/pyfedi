@@ -344,12 +344,12 @@ class TestTheWidthCutoffAndTheMissingSite:
         assert Notification.query.filter_by(
             subtype='post_with_suspicious_image').all() != []
 
-    def test_an_instance_with_no_site_row_does_not_scan(self, filtered):
-        """`if site is None: site = Site()` -- an unsaved Site has `enable_chan_image_filter`
-        unset, so the filter is off. The row exists because the alternative is
-        `AttributeError` on None inside a celery task, where nothing would see it, and
-        because the task runs in its OWN session: a Site row this session holds is not
-        necessarily one that session can see.
+    def test_an_instance_with_no_site_row_still_reads_the_first_domains_setting(self, filtered):
+        """`if site is None: site = Site()` -- the fallback exists because the alternative is
+        `AttributeError` on None inside a celery task, where nothing would see it. The filter
+        setting is the first domain's configuration, not a Site column
+        (2026-11-20-multitenant-domain-config), so an unsaved Site reads it as any Site does:
+        the filter is on, and the image is scanned.
         """
         from app.activitypub import util
 
@@ -375,4 +375,4 @@ class TestTheWidthCutoffAndTheMissingSite:
                 with patch.object(util, 'get_task_session', return_value=session):
                     util.make_image_sizes_async(filtered.image.id, 50, 120, 'posts', True)
 
-        assert ocr.call_count == 0
+        assert ocr.call_count > 0

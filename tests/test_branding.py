@@ -11,9 +11,11 @@ from cachelib import SimpleCache
 
 from app import cache, db
 from app.branding import Branding, branding_for, current_branding, own_branding
-from app.models import DomainBranding, SiteDomain
+from app.models import DomainConfig, SiteDomain
 from app.storefront import clear_domain_cache
 from tests.two_domains import default_request, onion_request
+from tests.factories import config_of
+from app.domain_config import own_config
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -36,10 +38,9 @@ def site_values(site):
 
 
 def set_branding(domain, **values):
-    row = db.session.get(DomainBranding, domain.id) or DomainBranding(site_domain_id=domain.id)
+    row = config_of(domain)
     for field, value in values.items():
         setattr(row, field, value)
-    db.session.add(row)
     db.session.commit()
     clear_domain_cache()
 
@@ -90,10 +91,11 @@ def test_own_values_win(two_domains, site_values):
     assert branding_for(onion)._asdict() == ONION_VALUES
 
 
-def test_a_default_row_is_ignored(two_domains, site_values):
-    default, _onion = two_domains.domains
-    set_branding(default, name='Not used')
-    assert branding_for(default).name == site_values['name']
+def test_the_default_domains_configuration_is_the_sites(two_domains, site, site_values):
+    default, onion = two_domains.domains
+    set_branding(default, name='Shared')
+    db.session.expire_all()
+    assert (branding_for(default).name, branding_for(onion).name, site.name) == ('Shared', 'Shared', 'Shared')
 
 
 def test_no_site_values_is_blank(two_domains, site):
@@ -114,16 +116,16 @@ def test_current_branding_follows_the_storefront(app, two_domains, site_values):
     assert current_branding().name == site_values['name']
 
 
-def test_saved_change_is_seen_after_clear_domain_cache(app, two_domains, site_values, monkeypatch):
+def test_a_saved_change_is_seen_once_committed(app, two_domains, site_values, monkeypatch):
     monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
     clear_domain_cache()
     onion = two_domains.domains[1]
     assert branding_for(onion).name == site_values['name']
-    db.session.add(DomainBranding(site_domain_id=onion.id, name='Later'))
+    config_of(onion).name = 'Later'
+    db.session.flush()
+    assert branding_for(onion).name == site_values['name']   # memoised until the commit
     db.session.commit()
-    assert branding_for(onion).name == site_values['name']   # memoised
-    clear_domain_cache()
-    assert branding_for(onion).name == 'Later'
+    assert branding_for(onion).name == 'Later'   # a commit that writes a configuration clears it
 
 
 def test_deleting_a_domain_deletes_its_branding(two_domains, site_values):
@@ -132,7 +134,7 @@ def test_deleting_a_domain_deletes_its_branding(two_domains, site_values):
     db.session.expire_all()
     db.session.query(SiteDomain).filter_by(id=onion.id).delete()
     db.session.commit()
-    assert db.session.get(DomainBranding, onion.id) is None
+    assert own_config(onion.id) is None
 
 
 def load_migration(pattern):
@@ -159,12 +161,14 @@ def test_migration_creates_and_drops_the_table(db_session):
     icons = load_migration('*_domain_branding_icons.py')
     dark = load_migration('*_dark_mode_logo.py')
     sidebar = load_migration('*_sidebar_box_order.py')
+    later = load_migration('*_domain_config.py')
     db.session.commit()
 
     def columns():
         return {column['name'] for column in inspect(db.session.connection()).get_columns('domain_branding')}
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            later.downgrade()   # the table was folded into domain_config
             sidebar.downgrade()
             dark.downgrade()
             icons.downgrade()
@@ -179,6 +183,7 @@ def test_migration_creates_and_drops_the_table(db_session):
             assert {'logo_dark', 'logo_dark_152'} <= columns()
             sidebar.upgrade()
             assert {'home_sidebar', 'community_sidebar'} <= columns()
+            later.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()

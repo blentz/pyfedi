@@ -199,6 +199,7 @@ def test_the_site_profile_shows_the_links_and_upstreams_as_placeholders(admin_si
 
 def test_the_migration_adds_and_drops_the_link_columns(db_session):
     migration = load_migration('*_project_links.py')
+    later = load_migration('*_domain_config.py')   # it moved these columns to domain_config
     db.session.commit()
     names = {'source_url', 'bug_report_url', 'get_involved_url'}
 
@@ -206,10 +207,12 @@ def test_the_migration_adds_and_drops_the_link_columns(db_session):
         return {column['name'] for column in inspect(db.session.connection()).get_columns('site')}
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            later.downgrade()
             migration.downgrade()
             assert names.isdisjoint(columns())
             migration.upgrade()
             assert names <= columns()
+            later.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()

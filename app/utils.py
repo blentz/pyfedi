@@ -83,7 +83,7 @@ from app.models import CronJobLog, Settings, Domain, Instance, BannedInstances, 
     RevokedToken, CommunityFavorite, UserFollower, CommunityFlairBlock, s3_key_from_url, Role, RolePermission, \
     ServerViewMember, federation_base, served_path
 from app.local_names import local_named
-from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, DomainInfo, current_storefront, canonicalise_links, canonicalise_text, domain_base_url, \
+from app.storefront import ON_DOMAIN_PARAM, URL_STRIPPED_BY_BROWSERS, DomainInfo, current_storefront, default_domain, canonicalise_links, canonicalise_text, domain_base_url, \
     act_in_this_request, acting_as_default, acting_domain, domain_authority, \
     boosted_order_by, boosted_top_sql, domain_by_id, hosted_instance_ids, is_hosted_uri, is_local_host, is_local_link, on_domain, storefront_host, storefront_html, storefront_url
 from app.branding import branding_for
@@ -5262,12 +5262,9 @@ def current_theme():
     if current_user.is_authenticated and current_user.theme and \
             (custom_theme_id(current_user.theme) is None or theme_counts(current_user.theme, domain)):
         return current_user.theme
-    if hasattr(g, 'site'):
-        site = g.site
-    else:
-        site = db.session.get(Site, 1)
-    domain_theme = '' if domain.is_default else branding_for(domain).default_theme   # the default's is the site's
-    return next((theme for theme in (domain_theme, site.default_theme) if theme_counts(theme, domain)), 'piefed')
+    # The domain's own default theme, else the first domain's (app.domain_config): one value for the first domain
+    themes = (branding_for(domain).default_theme, branding_for(default_domain()).default_theme)
+    return next((theme for theme in themes if theme_counts(theme, domain)), 'piefed')
 
 
 def theme_preview(domain) -> str | None:

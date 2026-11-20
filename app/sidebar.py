@@ -1,6 +1,6 @@
 """The boxes the home page and community page sidebars show, in the order admins set, each domain its own.
 
-A sidebar's stored value (`Site.home_sidebar`, `Site.community_sidebar` and the same columns of `DomainBranding`) is
+A sidebar's stored value (`Site.home_sidebar`, `Site.community_sidebar` and the same columns of `DomainConfig`) is
 its box names, comma-separated, in the order they show, a hidden box's name after a '-'. A domain whose value is blank
 shows the site's (app/branding.py). A blank value, a name no box has, or a box the value leaves out are read so that
 every box is there once: unknown names and repeats are dropped, and a missing box is shown after the others, in its
@@ -38,7 +38,7 @@ BOXES = {
         'community_feeds': _l('Feeds'),
     },
 }
-# The Site and DomainBranding column (and Branding field) each sidebar is stored in
+# The Site and DomainConfig column (and Branding field) each sidebar is stored in
 FIELDS = {HOME: 'home_sidebar', COMMUNITY: 'community_sidebar'}
 
 Layout = list[tuple[str, bool]]   # every box of a sidebar in order, and whether it is shown

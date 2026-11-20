@@ -21,7 +21,7 @@ from alembic.operations import Operations
 
 from app import db
 from app.branding import Branding, branding_for, onion_safe
-from app.models import DomainBranding, Site
+from app.models import DomainConfig, Site
 from app.request_hooks import BrandingOnUse
 from app.storefront import clear_domain_cache
 from tests.conftest import forget_login
@@ -30,6 +30,7 @@ from tests.test_admin_site_profile import HOSTILE_SVG, SVG
 from tests.test_branding import load_migration
 from tests.test_branding_pages import onion_branding, page
 from tests.two_domains import onion_request
+from tests.factories import config_of, configure
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -100,7 +101,7 @@ def site_dark(two_domains, site):
 
 
 def set_row(domain, **values):
-    db.session.add(DomainBranding(site_domain_id=domain.id, **values))
+    configure(domain, **values)
     db.session.commit()
     clear_domain_cache()
 
@@ -309,7 +310,7 @@ def test_a_dark_logo_the_site_names_is_never_removed(admin_domain_branding_admin
 
 def test_the_onion_refuses_a_stored_offsite_dark_logo(admin_domain_branding_admin, admin_domain_branding_domains, admin_domain_branding_media):
     onion = admin_domain_branding_domains['onion']
-    db.session.add(DomainBranding(site_domain_id=onion.id, logo_dark=f'{ELSEWHERE}/dark.png'))
+    config_of(onion).logo_dark = f'{ELSEWHERE}/dark.png'
     db.session.commit()
     with patch('app.admin.routes.render_template', return_value='rendered') as render:
         assert save(admin_domain_branding_admin, onion).status_code == 200
@@ -333,18 +334,21 @@ def test_the_branding_page_shows_the_dark_logo(admin_domain_branding_admin, admi
 
 def test_the_migration_adds_and_drops_the_dark_logo_columns(db_session):
     migration = load_migration('*_dark_mode_logo.py')
+    later = load_migration('*_domain_config.py')   # it folded these columns into domain_config
     db.session.commit()
 
     def columns(table):
         return {column['name'] for column in inspect(db.session.connection()).get_columns(table)}
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            later.downgrade()
             migration.downgrade()
             for table in ('site', 'domain_branding'):
                 assert {'logo_dark', 'logo_dark_152'}.isdisjoint(columns(table))
             migration.upgrade()
             for table in ('site', 'domain_branding'):
                 assert {'logo_dark', 'logo_dark_152'} <= columns(table)
+            later.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()

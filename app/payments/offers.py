@@ -6,7 +6,7 @@ from flask_babel import get_locale, ngettext
 from flask_login import current_user
 
 from app import cache, db
-from app.models import MemberSubscription, Offer, OfferDomain, Payment, SiteDomain
+from app.models import DomainConfig, MemberSubscription, Offer, OfferDomain, Payment, SiteDomain
 from app.onion import is_onion_request
 from app.payments.adapters import adapter_for
 from app.storefront import current_storefront
@@ -33,7 +33,7 @@ def offers_on(domain_id: int | None, onion: bool) -> list[Offer]:
 def membership_groups() -> frozenset[str]:
     """The offer groups some domain's membership is paid for with (plan 2026-11-16 DM1)."""
     return frozenset(db.session.execute(db.select(Offer.offer_group).join(
-        SiteDomain, SiteDomain.registration_offer_id == Offer.id)).scalars())
+        DomainConfig, DomainConfig.registration_offer_id == Offer.id)).scalars())
 
 
 def is_tier(offer: Offer | None, groups: frozenset[str] | None = None) -> bool:

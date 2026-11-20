@@ -19,12 +19,13 @@ from flask_wtf.csrf import generate_csrf
 from jinja2 import ChoiceLoader, DictLoader
 
 from app import cache, db
-from app.models import CmsPage, DomainBranding, Instance, Language, Site
+from app.models import CmsPage, DomainConfig, Instance, Language, Site
 from app.storefront import clear_domain_cache
 from app.utils import current_theme
 from tests.conftest import forget_login
 from tests.factories import grant_permission
 from tests.two_domains import FIRST, ONION, onion_request
+from tests.factories import configure
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -52,7 +53,7 @@ PAGES = {'index.html': '/', 'about.html': '/about', 'community.html': '/c/goldar
 
 
 def onion_branding(two_domains, **values):
-    db.session.add(DomainBranding(site_domain_id=two_domains.domains[1].id, **values))
+    configure(two_domains.domains[1], **values)
     db.session.commit()
     clear_domain_cache()
 

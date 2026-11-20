@@ -11,7 +11,7 @@ from alembic.operations import Operations
 
 from app import db
 from app.branding import branding_for
-from app.models import DomainBranding, Site
+from app.models import DomainConfig, Site
 from app.sidebar import BOXES, COMMUNITY, HOME, layout, moved, shown_boxes, sidebar_boxes, stored, toggled
 from app.storefront import clear_domain_cache
 from tests.conftest import forget_login
@@ -21,6 +21,8 @@ from tests.test_admin_site_profile import csrf, login
 from tests.test_branding import load_migration
 from tests.test_branding_pages import onion_branding, page
 from tests.two_domains import default_request, onion_request
+from tests.factories import config_of
+from app.domain_config import own_config
 
 pytestmark = pytest.mark.usefixtures('site')
 
@@ -91,7 +93,7 @@ def test_a_domain_without_its_own_order_shows_the_sites(app, two_domains, site):
 def test_a_domains_own_order_is_its_alone(app, two_domains, site):
     first, onion = two_domains.domains
     site.community_sidebar = '-actions'
-    db.session.add(DomainBranding(site_domain_id=onion.id, community_sidebar='related_communities'))
+    config_of(onion).community_sidebar = 'related_communities'
     db.session.commit()
     clear_domain_cache()
     with onion_request(app):
@@ -194,9 +196,9 @@ def site_row() -> Site:
     return db.session.get(Site, 1)
 
 
-def own_row(domain) -> DomainBranding | None:
+def own_row(domain) -> DomainConfig | None:
     db.session.expire_all()
-    return db.session.get(DomainBranding, domain.id)
+    return own_config(domain.id)
 
 
 def test_the_site_page_lists_both_sidebars_boxes(admin_domain_branding_admin, admin_domain_branding_domains):
@@ -292,7 +294,7 @@ def test_a_domain_goes_back_to_the_sites_order(admin_domain_branding_admin, admi
 
 def test_a_domain_keeps_its_other_branding(admin_domain_branding_admin, admin_domain_branding_domains):
     shop = admin_domain_branding_domains['shop']
-    db.session.add(DomainBranding(site_domain_id=shop.id, name='Shop name'))
+    config_of(shop).name = 'Shop name'
     db.session.commit()
     press(admin_domain_branding_admin, f'/admin/domains/{shop.id}/sidebar', 'home:toggle:about')
     assert own_row(shop).name == 'Shop name' and own_row(shop).home_sidebar
@@ -337,18 +339,21 @@ def page_on(admin, domains) -> str:
 
 def test_the_migration_adds_and_drops_the_sidebar_columns(db_session):
     migration = load_migration('*_sidebar_box_order.py')
+    later = load_migration('*_domain_config.py')   # it folded domain_branding and these columns into domain_config
     db.session.commit()
 
     def columns(table):
         return {column['name'] for column in inspect(db.session.connection()).get_columns(table)}
     try:
         with Operations.context(MigrationContext.configure(db.session.connection())):
+            later.downgrade()
             migration.downgrade()
             for table in ('site', 'domain_branding'):
                 assert {'home_sidebar', 'community_sidebar'}.isdisjoint(columns(table))
             migration.upgrade()
             for table in ('site', 'domain_branding'):
                 assert {'home_sidebar', 'community_sidebar'} <= columns(table)
+            later.upgrade()
         db.session.commit()
     finally:
         db.session.rollback()

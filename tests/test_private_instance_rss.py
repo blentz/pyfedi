@@ -335,20 +335,19 @@ class TestTheCachedRoutes:
         assert response.status_code == 200
         assert SECRET in response.get_data(as_text=True)
 
-    def test_the_site_row_itself_is_memoized_for_a_minute(self, app, seeded):
-        """The window this round does NOT close, pinned so nobody mistakes it for one that
-        is. `get_site_as_dict` is memoized for 60 seconds, so without dropping that memo a
-        freshly privatised instance keeps serving -- through this guard and through every
-        other one in the app. Fixing it means changing a global caching decision, which is
-        a separate argument with its own evidence."""
+    def test_a_privatised_instance_is_private_on_the_next_request(self, app, seeded):
+        """The window `get_site_as_dict`'s 60-second memo left open is closed: whether the
+        instance is private is the first domain's configuration, whose memo goes with the
+        commit that changes it (2026-11-20-multitenant-domain-config), so no request after
+        that commit serves it as public."""
         self._set_privacy(seeded.site, False)
         client = app.test_client()
         assert client.get('/community/general/feed').status_code == 200
 
-        seeded.site.private_instance = True   # deliberately WITHOUT dropping the memo
+        seeded.site.private_instance = True   # deliberately WITHOUT dropping the memo by hand
         db.session.commit()
 
-        assert client.get('/tag/thetag/feed').status_code == 200
+        assert client.get('/tag/thetag/feed').status_code != 200
 
 
 def test_the_guard_runs_before_any_lookup_or_rate_limit():

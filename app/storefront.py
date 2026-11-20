@@ -30,6 +30,7 @@ from sqlakeyset import InvalidPage
 from sqlalchemy import and_, case, desc, func, or_, tuple_
 from sqlakeyset.results import unserialize_bookmark
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import aliased, joinedload
 
 from app import cache, db, shaped_memo_name
 from app.onion import onion_proxy_address
@@ -37,8 +38,7 @@ from app.onion_media import MEDIA_SUFFIXES, proxy_url
 # The module, not the name: app.models imports this module for File's media URLs, so whichever of the two is
 # imported first finds the other mid-import (import cycle: models)
 import app.models as models
-# The module: it imports this one for DomainInfo (import cycle: branding)
-import app.branding as branding
+import app.domain_config as domain_config
 
 
 class DomainInfo(NamedTuple):
@@ -147,18 +147,30 @@ def _synthesised_default() -> DomainInfo:
 
 @cache.memoize(timeout=300, make_name=shaped_memo_name)
 def domain_rows() -> tuple[DomainInfo, ...]:
-    rows = db.session.query(models.SiteDomain).order_by(models.SiteDomain.id).all()
+    # One statement: each row with its configuration, the default row's being the first domain's (app.domain_config)
+    first = aliased(models.DomainConfig)
+    rows = db.session.query(models.SiteDomain, first) \
+        .outerjoin(first, and_(models.SiteDomain.is_default, first.site_domain_id.is_(None))) \
+        .options(joinedload(models.SiteDomain.own_config)).order_by(models.SiteDomain.id).all()
     if not rows:
         return (_synthesised_default(),)
-    return tuple(DomainInfo(r.domain, r.scheme, r.federates, r.registration, r.is_default, r.is_onion, r.id,
-                            r.instance_id, r.login_required, r.registration_offer_id, r.lapse_grace_days, r.paid_since,
-                            r.referral_codes)
-                 for r in rows)
+
+    def own(config, name):
+        value = getattr(config, name) if config is not None else None
+        return models.OWN_COLUMNS[name] if value is None else value
+
+    def info(row, first_config):
+        config = first_config if row.is_default else row.own_config
+        return DomainInfo(row.domain, row.scheme, row.federates, own(config, 'registration'), row.is_default,
+                          row.is_onion, row.id, row.instance_id, own(config, 'login_required'),
+                          own(config, 'registration_offer_id'), own(config, 'lapse_grace_days'),
+                          own(config, 'paid_since'), own(config, 'referral_codes'))
+    return tuple(info(row, config) for row, config in rows)
 
 
 def clear_domain_cache() -> None:
     cache.delete_memoized(domain_rows)
-    cache.delete_memoized(branding._effective)
+    domain_config.clear()
     _hosted_destinations.cache_clear()
 
 

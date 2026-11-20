@@ -13,12 +13,13 @@ from markupsafe import escape
 from app import db
 from app.custom_themes import (THEMES_DIR, copy_theme, custom_identifier, rewrite_relative_urls, shipped_css,
                                shipped_name, shipped_themes, storefront, theme_version)
-from app.models import CustomTheme, DomainBranding, ModLog, Role, RolePermission, Site, User
+from app.models import CustomTheme, DomainConfig, ModLog, Role, RolePermission, Site, User
 from app.storefront import clear_domain_cache
 from tests.factories import grant_permission, grant_role, limit_role
 from tests.conftest import forget_login
 from tests.test_branding_pages import PROXY, page, visit
 from tests.two_domains import FIRST
+from tests.factories import config_of
 
 pytestmark = pytest.mark.usefixtures('site')
 BASE = f'https://{FIRST}'
@@ -257,7 +258,7 @@ def test_theme_actions_are_admin_only_in_the_modlog(custom_themes_admin_world):
 # --- Delete (CT7, Review Focus 6) ---
 
 def use_as_domain_default(world, theme):
-    db.session.add(DomainBranding(site_domain_id=world['onion'].id, default_theme=custom_identifier(theme.id)))
+    config_of(world['onion']).default_theme = custom_identifier(theme.id)
 
 
 def use_by_a_user(world, theme):
@@ -395,7 +396,7 @@ def test_markup_in_css_is_served_as_css_and_never_put_in_a_page(app, custom_them
     saved = db.session.get(CustomTheme, night.id)
     served = visit(app, f'/theme/{night.id}/styles.css?v={theme_version(saved)}', onion=True)
     assert served.mimetype == 'text/css'
-    db.session.add(DomainBranding(site_domain_id=onion.id, default_theme=custom_identifier(night.id)))
+    config_of(onion).default_theme = custom_identifier(night.id)
     db.session.commit()
     clear_domain_cache()
     assert '<script>alert(1)</script>' not in page(app, '/', onion=True)
