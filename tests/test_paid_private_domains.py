@@ -18,6 +18,7 @@ from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCod
 from app.payments.core import apply_event, cancel_subscription
 from app.payments.events import Paid, SubscriptionEnded, SubscriptionStarted
 from app.payments.registration import registration_offer, remove_unpaid_registrations
+from app.payments.gifts import REFERRAL_BENEFIT_SETTING
 from app.referral import GENERATORS_SETTING, generate_code
 from app.storefront import clear_domain_cache
 from app.utils import set_setting
@@ -246,6 +247,47 @@ class TestJoiningWithAReferralCode:
         monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
         page = env.client.get(f'/auth/register?ref={referrer.referral_code}', base_url=PAID).get_data(as_text=True)
         assert 'Referral or gift code' in page and referrer.referral_code in page
+
+    def elsewhere(self, env):
+        """A subscription sold on the public domain only."""
+        offer = Offer(provider_kind='stripe', kind='subscription', title='Elsewhere', offer_group='other',
+                      provider_price_id='price_e', amount_minor=900, currency='usd', interval='month')
+        db.session.add(offer)
+        db.session.flush()
+        db.session.add(OfferDomain(offer_id=offer.id, site_domain_id=env.public.id))
+        db.session.commit()
+        return offer
+
+    def test_a_default_gift_of_a_tier_not_sold_there_gives_its_own_cheapest(self, env, referrer, stripe_session):
+        """Security review 2026-11-20: never a membership of a tier the domain does not sell."""
+        set_setting(REFERRAL_BENEFIT_SETTING, {'kind': 'gift', 'offer_id': self.elsewhere(env).id, 'periods': 12})
+        register(env, question=referrer.referral_code)
+        gift = MemberSubscription.query.filter_by(user_id=joiner().id, provider_kind='gift').one()
+        assert gift.offer_id == env.offer.id and not stripe_session.called
+
+    def test_its_own_gift_of_a_tier_not_sold_there_is_refused(self, env, referrer, stripe_session, monkeypatch):
+        """A code at home on the paid domain, its own gift a tier sold elsewhere: no free account (security review
+        2026-11-20)."""
+        monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
+        referrer.site_domain_id = env.paid.id
+        row = PromoCode.query.filter_by(owner_id=referrer.id).one()
+        row.benefit, row.offer_id, row.periods = 'gift', self.elsewhere(env).id, 12
+        db.session.commit()
+        register(env, question=referrer.referral_code, csrf_token=csrf(env))
+        assert joiner() is None and not stripe_session.called
+
+    def test_the_api_refuses_a_gift_of_a_tier_not_sold_there(self, env, referrer, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'ENABLE_ALPHA_API', 'true')
+        referrer.site_domain_id = env.paid.id
+        row = PromoCode.query.filter_by(owner_id=referrer.id).one()
+        row.benefit, row.offer_id, row.periods = 'gift', self.elsewhere(env).id, 12
+        db.session.commit()
+        with patch('app.auth.util.send_email_verification'), patch('app.auth.util.captcha_enabled', return_value=False):
+            response = env.client.post('/api/alpha/user/register', base_url=PAID, json={
+                'username': 'joiner', 'email': 'joiner@example.com', 'password': 'a-good-password',
+                'password_verify': 'a-good-password', 'answer': referrer.referral_code})
+        assert response.status_code == 400 and 'invalid_referral_code' in response.get_data(as_text=True)
+        assert joiner() is None
 
     def test_a_domain_that_refuses_codes_refuses_it(self, env, referrer, stripe_session, monkeypatch):
         monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)

@@ -16,7 +16,7 @@ from sqlalchemy import func
 from app import db
 from app.models import PromoCode, PromoCodeUse, Referral, User, utcnow
 from app.payments.gifts import GiftUnavailable, default_referral_benefit, referral_benefit, referral_gift_code, \
-    start_gift, usable
+    start_gift, tier_sold_on, usable
 from app.storefront import REFERRAL_MODE, DomainInfo, current_storefront, domain_base_url, open_registrations, \
     paid_registration, signup_open_to  # noqa: F401 (re-exported)
 from app.utils import get_setting
@@ -125,9 +125,14 @@ def benefit_on(referrer: User, code: PromoCode, domain: DomainInfo):
     """What `referrer`'s code row gives someone joining `domain` (RC10, 2026-11-19): its own gift or discount on the
     referrer's home domain, where it was chosen from that domain's tiers; on any other, the site's default there,
     worked out without being kept, so the code's own choice survives a use elsewhere."""
-    if domain.id == referrer.home_domain().id:
-        return referral_benefit(code, domain)
-    return default_referral_benefit(domain)
+    benefit = referral_benefit(code, domain) if domain.id == referrer.home_domain().id \
+        else default_referral_benefit(domain)
+    # A gift admits as a membership of `domain`: of a tier not sold there it gives nothing, and the signup is refused,
+    # rather than an account made for free on a paid domain (security review 2026-11-20). Not stored: a tier missing
+    # for a while (its provider down) must not replace the code's own choice.
+    if benefit is not None and benefit.offer is not None and not tier_sold_on(benefit.offer, domain):
+        return None
+    return benefit
 
 
 def record_referral(referrer: User, referred: User) -> Referral:

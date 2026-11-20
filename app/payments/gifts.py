@@ -116,8 +116,18 @@ def referral_benefit(row: PromoCode, domain) -> Benefit | None:
 
 
 def default_referral_benefit(domain) -> Benefit | None:
-    """What a new referral code on `domain` would get: the default, without making the code."""
-    return _resolve(default_referral_choice(), domain)
+    """What a new referral code on `domain` would get: the default, without making the code. A default gift of a tier
+    not sold on `domain` gives what automatic gives there (security review 2026-11-20): a gift is a membership of the
+    domain it admits to."""
+    benefit = _resolve(default_referral_choice(), domain)
+    if benefit is not None and benefit.offer is not None and not tier_sold_on(benefit.offer, domain):
+        return _benefit_of(AUTO, None, None, None, domain)
+    return benefit
+
+
+def tier_sold_on(offer: Offer, domain) -> bool:
+    """Whether `offer` is one of `domain`'s membership tiers (`tiers_on`): what a gift that admits there must be."""
+    return offer.id in {tier.id for tier in tiers_on(domain)}
 
 
 def _resolve(chosen: dict, domain) -> Benefit | None:
@@ -210,7 +220,8 @@ def sold_on(code: PromoCode, domain) -> bool:
         return False
     if code.kind in DISCOUNT_KINDS and code.offer_id is None:
         return True
-    return code.offer_id in {offer.id for offer in tiers_on(domain)}
+    offer = db.session.get(Offer, code.offer_id) if code.offer_id else None
+    return offer is not None and tier_sold_on(offer, domain)
 
 
 def join_domain(code: PromoCode):
