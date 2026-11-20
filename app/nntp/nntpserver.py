@@ -260,7 +260,7 @@ class NNTPServer(abc.ABC, socketserver.ThreadingMixIn, socketserver.TCPServer):
         self.auth = auth
         self.certfile = certfile
         self.keyfile = keyfile
-        self.ssl_version = None
+        self.ssl_context = None
         self.can_post = can_post
         if use_ssl:
             if not certfile or not keyfile:
@@ -271,20 +271,17 @@ class NNTPServer(abc.ABC, socketserver.ThreadingMixIn, socketserver.TCPServer):
                 raise ValueError(
                     "You set use_ssl to True but the ssl module could not be imported."
                 )
-            self.ssl_version = ssl.PROTOCOL_TLS
+            # One context for every connection, its certificate loaded now so a bad path fails at start-up rather than
+            # at the first client. ssl.wrap_socket and PROTOCOL_TLS, which this used, are gone (Python 3.12) and
+            # deprecated respectively: every TLS connection raised AttributeError.
+            self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self.ssl_context.load_cert_chain(certfile, keyfile)
         super().__init__(*args, **kwargs)
 
     def get_request(self) -> typing.Tuple[typing.Any, typing.Tuple[str, int]]:
-        if self.ssl_version:
+        if self.ssl_context is not None:
             newsocket, fromaddr = self.socket.accept()
-            connstream = ssl.wrap_socket(
-                newsocket,
-                server_side=True,
-                certfile=self.certfile,
-                keyfile=self.keyfile,
-                ssl_version=self.ssl_version,
-            )
-            return connstream, fromaddr
+            return self.ssl_context.wrap_socket(newsocket, server_side=True), fromaddr
         return super().get_request()
 
     @abc.abstractmethod
@@ -530,7 +527,7 @@ class NNTPConnectionHandler(socketserver.BaseRequestHandler):
         if not self._authed and self.server.auth:
             if (
                 self.server.auth & NNTPAuthSetting.SECUREONLY
-            ) and not self.server.ssl_version:
+            ) and self.server.ssl_context is None:
                 pass
             else:
                 show_auth = True

@@ -246,7 +246,7 @@ class _StubServer:
     """The NNTPServer interface the handler reads, served from memory."""
 
     overview_format = _DEFAULT_OVERVIEW_FMT
-    ssl_version = None
+    ssl_context = None
     debugging = False
     help = None
 
