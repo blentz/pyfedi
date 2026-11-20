@@ -646,9 +646,15 @@ def test_a_community_made_on_the_shop_and_its_wiki_are_on_the_shop(app, onion_ro
     db.session.get(Site, 1).community_creation_admin_only = False
     db.session.commit()
     client, token = signed_in(app, sam)
+    with client.session_transaction(base_url=SHOP_BASE) as session:   # signed in on the shop too: it is made there
+        session['_user_id'], session['_fresh'] = str(sam.id), True
+    with client.session_transaction() as session:
+        raw = session['csrf_token']
+    with client.session_transaction(base_url=SHOP_BASE) as session:
+        session['csrf_token'] = raw
     with patch('app.community.routes.render_template', return_value='rendered'), \
             patch('app.community.routes.task_selector'):
-        response = client.post('/community/add_local', content_type='multipart/form-data',
+        response = client.post('/community/add_local', content_type='multipart/form-data', base_url=SHOP_BASE,
                                data=_community_payload(token, url='stall', description=f'see {ONION_LINK}'))
         assert response.status_code == 302, response.status_code
         assert Community.query.filter_by(name='stall').first(), response.headers.get('Location')

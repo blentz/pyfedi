@@ -166,11 +166,11 @@ def test_a_community_name_on_one_domain_does_not_block_the_other(app, db_session
     _seed_und_language()
     clearnet = _api_creator('clearnetter', default)
     onionite = _api_creator('onionite', onion)
-    make_community(_api_input(name='pets'), SRC_API, bearer(clearnet))
-    make_community(_api_input(name='Pets'), SRC_API, bearer(onionite))
+    _make_on(app, default, 'pets', clearnet)
+    _make_on(app, onion, 'Pets', onionite)
     assert sorted(c.site_domain_id for c in Community.query.filter_by(name='pets')) == sorted([default.id, onion.id])
     with pytest.raises(Exception, match='already exists'):
-        make_community(_api_input(name='PETS'), SRC_API, bearer(onionite))
+        _make_on(app, onion, 'PETS', clearnet)   # taken on the onion, whoever asks there
     assert Community.query.filter_by(name='pets').count() == 2
 
 
@@ -180,18 +180,26 @@ def test_a_user_name_on_one_domain_does_not_block_a_community_on_the_other(app, 
     _seed_und_language()
     clearnet = _api_creator('clearnetter', default)
     onionite = _api_creator('onionite', onion)
-    make_community(_api_input(name='ONIONITE'), SRC_API, bearer(clearnet))
+    _make_on(app, default, 'ONIONITE', onionite)   # the onion's user name, free on the default domain
     assert Community.query.filter_by(name='onionite', site_domain_id=default.id).count() == 1
     with pytest.raises(Exception, match='User with that name'):
-        make_community(_api_input(name='onionite'), SRC_API, bearer(onionite))
+        _make_on(app, onion, 'onionite', clearnet)
     assert Community.query.filter_by(name='onionite').count() == 1
 
 
-def _community_form(app, user, url):
-    """The refusal messages `AddCommunityForm.validate` gives `user` for `url`, over a request on user's domain."""
+def _make_on(app, domain, name, user):
+    """The API's make_community for `user`, over a request on `domain`."""
+    with app.test_request_context(base_url=f'{domain.scheme}://{domain.domain}'):
+        app.preprocess_request()
+        make_community(_api_input(name=name), SRC_API, bearer(user))
+
+
+def _community_form(app, user, url, domain):
+    """The refusal messages `AddCommunityForm.validate` gives `user` for `url`, over a request on `domain`."""
     data = MultiDict({'community_name': 'A Name', 'url': url, 'description': '', 'posting_warning': '',
                       'theme': '', 'invitations': '0'})
-    with app.test_request_context('/', method='POST', data=data):
+    with app.test_request_context('/', method='POST', data=data, base_url=f'{domain.scheme}://{domain.domain}'):
+        app.preprocess_request()
         login_user(user)
         form = AddCommunityForm(formdata=data)
         form.theme.choices = [('', 'None')]
@@ -200,17 +208,20 @@ def _community_form(app, user, url):
         return accepted, [str(message) for message in form.url.errors]
 
 
-def test_the_add_community_form_checks_the_creators_home_domain(app, two_domains):
+def test_the_add_community_form_checks_the_domain_it_is_on(app, two_domains):
+    """Owner 2026-11-19: the community is made where the form is, so its name is checked there, not on the
+    creator's home domain."""
     first, onion = two_domains.domains
     two_domains.local_community('pets', first)
     two_domains.local_user('wakko', first)
-    creator = two_domains.local_user('creator', onion)
-    assert _community_form(app, creator, 'pets') == (True, [])
-    assert _community_form(app, creator, 'wakko') == (True, [])
+    creator = two_domains.local_user('creator', first)   # a first-domain account, on the onion
+    assert _community_form(app, creator, 'pets', onion) == (True, [])
+    assert _community_form(app, creator, 'wakko', onion) == (True, [])
     two_domains.local_community('toys', onion)
     two_domains.local_user('yakko', onion)
-    assert _community_form(app, creator, 'toys') == (False, ['A community with this url already exists.'])
-    assert _community_form(app, creator, 'YAKKO') == (False, ['This name is in use already.'])
+    assert _community_form(app, creator, 'toys', onion) == (False, ['A community with this url already exists.'])
+    assert _community_form(app, creator, 'YAKKO', onion) == (False, ['This name is in use already.'])
+    assert _community_form(app, creator, 'pets', first) == (False, ['A community with this url already exists.'])
 
 
 def test_a_moved_community_url_is_checked_on_the_default_domain(app, two_domains):

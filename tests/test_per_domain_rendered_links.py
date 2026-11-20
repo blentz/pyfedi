@@ -159,22 +159,23 @@ def community_shown(app, world, host, path) -> set[str]:
 
 
 def test_creating_a_community_on_the_onion_lands_on_the_new_community(app, per_domain_html_routes_world, two_domains):
-    """A first-domain account creating on the onion makes a first-domain community: the redirect names the first domain."""
+    """A first-domain account creating on the onion makes an onion community (owner 2026-11-19), and the redirect
+    lands on it, not on the first domain's community of the same name."""
     creator = per_domain_html_routes_world.viewers[FIRST]
     able_to_create(creator)
-    two_domains.local_community('fresh', two_domains.domains[1]).title = 'Onion fresh'
+    two_domains.local_community('fresh', two_domains.domains[0]).title = 'First fresh'
     db.session.add_all([Language(code='und', name='Undetermined'), Language(code='en', name='English')])
     db.session.get(Site, 1).community_creation_admin_only = False
     db.session.commit()
     visitor = signed_in(app, creator, ONION)
     with patch('app.community.routes.task_selector'):
         response = visitor.client.post('/community/add_local', base_url=visitor.base,
-                                       data=add_payload(visitor.token, url='fresh', community_name='First fresh'),
+                                       data=add_payload(visitor.token, url='fresh', community_name='Onion fresh'),
                                        content_type='multipart/form-data')
-    made = Community.query.filter_by(title='First fresh').one()
-    assert made.site_domain_id == two_domains.domains[0].id
+    made = Community.query.filter_by(title='Onion fresh').one()
+    assert made.site_domain_id == two_domains.domains[1].id
     page = visitor.get(response.headers['Location']).get_data(as_text=True)
-    assert 'First fresh' in page and 'Onion fresh' not in page
+    assert 'Onion fresh' in page and 'First fresh' not in page
 
 
 @pytest.mark.parametrize('host', [ONION, FIRST])

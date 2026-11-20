@@ -593,20 +593,25 @@ def test_a_clearnet_users_post_and_reply_keep_the_default_instance(app, db_sessi
     assert onion_post.instance_id == onion.instance_id
 
 
-def test_a_clearnet_community_belongs_to_the_default_instance(app, db_session, site, creators, per_domain_creation_domains):
+def test_a_community_belongs_to_the_instance_of_the_domain_it_is_created_on(app, db_session, site, creators,
+                                                                           per_domain_creation_domains):
     default, onion = per_domain_creation_domains
     founder, other = creators
-    assert _create(app, founder, 'abc.onion', url='clearnet').instance_id == 1
+    assert _create(app, other, default.domain, url='clearnet').instance_id == 1
+    assert _create(app, founder, 'abc.onion', url='hidden').instance_id == onion.instance_id
 
 
-def test_the_api_makes_an_onion_creators_community_on_the_onion_instance(app, db_session, site, per_domain_creation_domains):
+def test_the_api_makes_a_community_on_the_onion_instance_when_asked_on_the_onion(app, db_session, site,
+                                                                                 per_domain_creation_domains):
     default, onion = per_domain_creation_domains
     make_user(db.session.get(Instance, 1), 'founder', local=True)
     _seed_und_language()
     user = make_user(db.session.get(Instance, 1), 'onionite', local=True, with_keys=True)
     user.site_domain_id = onion.id
     db.session.commit()
-    make_community_api(_api_input(name='hidden'), SRC_API, bearer(user))
+    with app.test_request_context(base_url='http://abc.onion'):
+        app.preprocess_request()
+        make_community_api(_api_input(name='hidden'), SRC_API, bearer(user))
     assert Community.query.filter_by(name='hidden').one().instance_id == onion.instance_id
 
 
