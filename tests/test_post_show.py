@@ -251,6 +251,52 @@ def test_an_events_more_info_url_is_a_link_on_the_page(app, env):
     assert b'More info' in response.data
 
 
+def test_an_event_without_an_end_time_shows_only_its_start(app, env):
+    """A peer may federate an event with no `endTime`; the page must not 500."""
+    from datetime import datetime
+    anon, community, post, mod, author, outsider = env
+    post.type = POST_TYPE_EVENT
+    db.session.add(Event(post_id=post.id, start=datetime(2030, 6, 1, 12, 0),
+                         end=None, timezone='UTC', location={}))
+    db.session.commit()
+
+    response = anon.get(f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert b'2030-06-01T12:00:00Z</time>' in response.data
+    assert b'</time> -' not in response.data
+
+
+def test_an_event_without_a_start_time_shows_only_its_end(app, env):
+    from datetime import datetime
+    anon, community, post, mod, author, outsider = env
+    post.type = POST_TYPE_EVENT
+    db.session.add(Event(post_id=post.id, start=None,
+                         end=datetime(2030, 6, 1, 13, 0), timezone='UTC', location={}))
+    db.session.commit()
+
+    response = anon.get(f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert b'2030-06-01T13:00:00Z</time>' in response.data
+    assert b'</time> -' not in response.data
+
+
+def test_an_event_with_both_times_shows_them_as_a_range(app, env):
+    from datetime import datetime
+    anon, community, post, mod, author, outsider = env
+    post.type = POST_TYPE_EVENT
+    db.session.add(Event(post_id=post.id, start=datetime(2030, 6, 1, 12, 0),
+                         end=datetime(2030, 6, 1, 13, 0), timezone='UTC', location={}))
+    db.session.commit()
+
+    response = anon.get(f'/post/{post.id}')
+
+    assert response.status_code == 200
+    assert b'2030-06-01T12:00:00Z</time> -' in response.data
+    assert b'2030-06-01T13:00:00Z</time>' in response.data
+
+
 def test_a_post_deleted_by_a_moderator_is_not_found(app, env):
     anon, community, post, mod, author, outsider = env
     post.deleted = True

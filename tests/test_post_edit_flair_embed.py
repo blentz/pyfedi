@@ -18,6 +18,7 @@ Sub-project 82, slice C. Six defects, all measured:
 * the validation-error fragment was not an f-string, so its id was literal and
   htmx had nothing to swap (D1094).
 """
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -1144,6 +1145,31 @@ def test_an_event_post_arrives_in_its_own_timezone(app, env):
     assert form.online_link.data == 'https://example.com/call'
     assert form.more_info_url.data == 'https://example.com/more'  # R223
     assert kwargs['event_online'] is True
+
+
+@pytest.mark.parametrize('start, end', [
+    (datetime(2026, 6, 1, 12, 0), None),
+    (None, datetime(2026, 6, 1, 13, 0)),
+])
+def test_an_event_missing_a_time_still_opens_for_editing(app, env, start, end):
+    """A federated event may lack `startTime` or `endTime`; the missing one
+    arrives empty instead of crashing the edit page."""
+    anon, community, post, mod, author, outsider = env
+    post.type = POST_TYPE_EVENT
+    db.session.add(Event(post_id=post.id, start=start, end=end,
+                         timezone='Europe/Berlin', online=True))
+    db.session.commit()
+
+    with patch('app.post.routes.render_template',
+               return_value='rendered') as render:
+        response = as_user(app, author).get(f'/post/{post.id}/edit')
+
+    assert response.status_code == 200
+    form = render.call_args.kwargs['form']
+    shifted = {datetime(2026, 6, 1, 12, 0): datetime(2026, 6, 1, 14, 0),
+               datetime(2026, 6, 1, 13, 0): datetime(2026, 6, 1, 15, 0)}
+    assert form.start_datetime.data == shifted.get(start)
+    assert form.end_datetime.data == shifted.get(end)
 
 
 def test_an_event_in_a_place_arrives_with_its_address(app, env):

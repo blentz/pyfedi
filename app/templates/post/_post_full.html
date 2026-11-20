@@ -234,8 +234,13 @@
                 <p>
                     <strong>{{ _('When') }}:</strong>
                     <br>
-                    <time class="convert_to_local">{{ event.start.strftime('%Y-%m-%dT%H:%M:%SZ') }}</time> -
-                    <time class="convert_to_local">{{ event.end.strftime('%Y-%m-%dT%H:%M:%SZ') }}</time>
+                    {# a federated event may arrive without a startTime or an endTime -#}
+                    {% if event.start -%}
+                        <time class="convert_to_local">{{ event.start.strftime('%Y-%m-%dT%H:%M:%SZ') }}</time>{% if event.end %} -{% endif %}
+                    {% endif -%}
+                    {% if event.end -%}
+                        <time class="convert_to_local">{{ event.end.strftime('%Y-%m-%dT%H:%M:%SZ') }}</time>
+                    {%- endif %}
                 </p>
                 {% if event.online -%}
                     <p>

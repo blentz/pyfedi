@@ -1321,6 +1321,13 @@ def post_source(post_id: int, state: str):
         return render_template("post/_post_source_swap.html", post_body=post_body, state="hide", post_id=post_id)
 
 
+def _in_event_timezone(moment: datetime | None, event_tz: ZoneInfo) -> datetime | None:
+    """A naive-UTC event time as the naive wall-clock time in `event_tz`; None stays None."""
+    if moment is None:
+        return None
+    return moment.replace(tzinfo=ZoneInfo('UTC')).astimezone(event_tz).replace(tzinfo=None)
+
+
 @bp.route('/post/<int:post_id>/edit', methods=['GET', 'POST'])
 @login_required
 def post_edit(post_id: int):
@@ -1480,8 +1487,9 @@ def post_edit(post_id: int):
                 event = Event.query.filter_by(post_id=post.id).first()
                 # event.start / event.end are stored as naive UTC - show them in the event's timezone
                 event_tz = ZoneInfo(event.timezone) if event.timezone else ZoneInfo('UTC')
-                form.start_datetime.data = event.start.replace(tzinfo=ZoneInfo('UTC')).astimezone(event_tz).replace(tzinfo=None)
-                form.end_datetime.data = event.end.replace(tzinfo=ZoneInfo('UTC')).astimezone(event_tz).replace(tzinfo=None)
+                # a federated event may lack either time; the field is then left empty
+                form.start_datetime.data = _in_event_timezone(event.start, event_tz)
+                form.end_datetime.data = _in_event_timezone(event.end, event_tz)
                 form.event_timezone.data = event.timezone
                 form.max_attendees.data = event.max_attendees
                 form.more_info_url.data = event.more_info_url  # R223
