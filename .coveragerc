@@ -1,6 +1,11 @@
 [run]
 branch = True
 source = app
+# Code tests/test_error_counts.py compiles under these names in app/, so that a traceback's innermost app/ frame is
+# a known file:line. There is no such file to report on, and coverage warned that it could not parse it.
+omit =
+    app/fake_module.py
+    app/fake_onion_module.py
 
 [report]
 exclude_lines =
