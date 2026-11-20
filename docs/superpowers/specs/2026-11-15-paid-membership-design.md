@@ -68,6 +68,13 @@ of kind `gift`; using it still records a `Referral`.
 - Each use is recorded (`promo_code_use`: code, user, payment or subscription), so `max_uses` holds and the ledger
   shows what was discounted. A discounted payment is not a mismatch: core checks it against the offer's price less
   the discount.
+- **Where a code is taken** (owner 2026-11-20): an admin's gift or discount code admits at signup on any domain where
+  joining is paid for and that sells the tier it gives or takes money off (`sold_on`: one of the domain's membership
+  tiers, `tiers_on`); a discount for any offer, on every such domain. Elsewhere it is refused ("That code cannot be
+  used on this site"). This holds on the default domain too, which took any gift before. A member's referral code is
+  still taken on the default domain only (G4). The link to join with a code made for a member (their referral page)
+  names the domain they are viewing it on when the code admits there, else the first that it admits to, the default
+  domain first (`join_domain`); none where it admits nowhere.
 - **Deleting a gift code** (owner 2026-11-19): an admin (Admin → Payments → Codes, or the code's own page) and the
   member an admin made it for (their referral page) can delete a gift code. It stops working at once and leaves every
   list. Whoever used it keeps the period it gave: a gift subscription names no code. Its `promo_code_use` rows go with

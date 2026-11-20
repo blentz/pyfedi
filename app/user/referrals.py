@@ -7,13 +7,13 @@ from app import db
 from app.models import Offer, PromoCode, PromoCodeUse
 from app.payments.discounts import DISCOUNT_KINDS, usable as discount_usable
 from app.payments.gifts import Benefit, default_referral_benefit, deletable as gift_deletable, delete_gift_code, \
-    referral_gift_code, usable as gift_usable
+    join_domain, referral_gift_code, usable as gift_usable
 from app.payments.offers import money, period_text
 from app.permissions import user_access
 from app.referral import (assigned_codes, benefit_on, caps, generate_code, lifetime_referrals, referral_domain,
                           referral_link, referral_page_available, referral_qr_png, referral_qr_svg, referrals_available,
                           remaining_signups, uses_of_current_code)
-from app.storefront import default_domain, domain_base_url, paid_registration
+from app.storefront import domain_base_url, paid_registration
 from app.user import bp
 from app.utils import get_setting, login_required, render_template
 
@@ -55,11 +55,11 @@ def user_referrals():
 
 
 def _assigned_link(row: PromoCode) -> str | None:
-    """Where a code made for the member is used to join: /register on the default domain, the only place a gift or
-    discount code is taken at registration (G4), and only while joining there is paid for. None otherwise: a member
-    enters it on their Subscription page instead."""
-    home = default_domain()
-    return domain_base_url(home) + url_for('auth.register', code=row.code) if paid_registration(home) else None
+    """Where a code made for the member is used to join: /register on the domain they are on when the code admits
+    there, else on one it does (`join_domain`, owner 2026-11-20). None when it admits nowhere: a member enters it on
+    their Subscription page instead."""
+    domain = join_domain(row)
+    return domain_base_url(domain) + url_for('auth.register', code=row.code) if domain is not None else None
 
 
 def _assigned(row: PromoCode) -> dict:

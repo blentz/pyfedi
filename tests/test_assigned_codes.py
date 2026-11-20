@@ -10,10 +10,10 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import MemberSubscription, Offer, PromoCode, PromoCodeUse, Site, SiteDomain, utcnow
-from app.payments.gifts import delete_gift_code
+from app.models import MemberSubscription, Offer, OfferDomain, PromoCode, PromoCodeUse, Site, SiteDomain, utcnow
+from app.payments.gifts import delete_gift_code, join_domain, sold_on
 from app.referral import GENERATORS_SETTING, REFERRAL_MODE, generate_code
-from app.storefront import clear_domain_cache
+from app.storefront import clear_domain_cache, default_domain
 from app.utils import set_setting
 from tests.factories import make_user
 
@@ -49,8 +49,8 @@ def member(env, name='holder'):
     return user
 
 
-def login(env, user):
-    with env.client.session_transaction() as session:
+def login(env, user, base=None):
+    with env.client.session_transaction(**({'base_url': base} if base else {})) as session:
         session['_user_id'] = str(user.id)
         session['_fresh'] = True
 
@@ -337,3 +337,82 @@ def test_a_member_without_referral_codes_cannot_generate_one(env):
     login(env, holder)
     assert post(env, f'{PAGE}/generate').status_code == 404
     assert db.session.get(type(holder), holder.id).referral_code is None
+
+
+class TestItsLinkIsOnTheDomainItWorksOn:
+    """Owner 2026-11-20: the link to join with a code names the domain the member is on when the code admits there,
+    else one it does."""
+
+    SECOND = 'https://second.example'
+
+    @pytest.fixture
+    def second(self, env):
+        row = SiteDomain(domain='second.example', scheme='https', federates=True, registration='paid',
+                         registration_offer_id=env.knight.id)
+        db.session.add(row)
+        db.session.commit()
+        clear_domain_cache()
+        return row
+
+    def link_on(self, env, row, base):
+        response = env.client.get(PAGE, base_url=base)
+        shown = BeautifulSoup(response.get_data(as_text=True), 'html.parser').find(id=f'assigned-{row.id}')
+        field = shown.find('input', id=f'assigned-link-{row.id}')
+        return field['value'] if field is not None else None
+
+    def test_on_another_domain_the_link_is_that_domains(self, env, second):
+        holder = member(env)
+        row = code_for(env, holder)
+        login(env, holder)
+        login(env, holder, self.SECOND)
+        assert self.link_on(env, row, self.SECOND) == f'{self.SECOND}/auth/register?code=hand-out-one'
+        assert self.link_on(env, row, env.base) == f'{env.base}/auth/register?code=hand-out-one'
+
+    def test_where_its_tier_is_not_sold_the_link_is_a_domain_where_it_is(self, env, second):
+        own = Offer(provider_kind='stripe', kind='subscription', title='Second only', offer_group='second',
+                    provider_price_id='price_s', amount_minor=100, currency='usd', interval='month')
+        db.session.add(own)
+        db.session.flush()
+        db.session.add(OfferDomain(offer_id=own.id, site_domain_id=second.id))
+        second.registration_offer_id = own.id   # the second domain sells its own tier only
+        db.session.commit()
+        clear_domain_cache()
+        holder = member(env)
+        row = code_for(env, holder)   # Furcas: the default domain's
+        login(env, holder, self.SECOND)
+        assert self.link_on(env, row, self.SECOND) == f'{env.base}/auth/register?code=hand-out-one'
+
+    def test_a_tier_sold_nowhere_gets_no_link(self, env):
+        holder = member(env)
+        retired = Offer(provider_kind='stripe', kind='subscription', title='Retired', offer_group='tiers',
+                        provider_price_id='price_r', amount_minor=100, currency='usd', interval='month', active=False)
+        db.session.add(retired)
+        db.session.commit()
+        row = code_for(env, holder, offer_id=retired.id)
+        login(env, holder)
+        assert self.link_on(env, row, env.base) is None
+
+
+class TestSoldOn:
+    def test_nowhere_joining_is_free(self, env):
+        env.home.registration = 'anyone'
+        db.session.commit()
+        clear_domain_cache()
+        row = code_for(env, None)
+        with env.app.test_request_context():
+            assert not sold_on(row, default_domain()) and join_domain(row) is None
+
+    def test_a_discount_for_any_offer_wherever_joining_is_paid_for(self, env):
+        row = code_for(env, None, kind='percent', percent=10, offer_id=None, periods=None)
+        with env.app.test_request_context():
+            assert sold_on(row, default_domain())
+
+    def test_a_discount_for_one_tier_where_that_tier_is_sold(self, env):
+        other = Offer(provider_kind='stripe', kind='subscription', title='Other', offer_group='elsewhere',
+                      provider_price_id='price_o', amount_minor=100, currency='usd', interval='month', active=False)
+        db.session.add(other)
+        db.session.commit()
+        on_knight = code_for(env, None, text='knight-off-ten', kind='percent', percent=10, periods=None)
+        on_other = code_for(env, None, text='other-off-ten', kind='percent', percent=10, offer_id=other.id, periods=None)
+        with env.app.test_request_context():
+            assert sold_on(on_knight, default_domain()) and not sold_on(on_other, default_domain())

@@ -38,7 +38,7 @@ from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_
 from app.payments.code_text import normalise
 from app.payments.offers import money
 from app.payments.discounts import discounted, find_discount_code, usable as discount_usable
-from app.payments.gifts import GiftUnavailable, checking_codes, find_gift_code, start_gift
+from app.payments.gifts import GiftUnavailable, checking_codes, find_gift_code, sold_on, start_gift
 from app.payments.registration import registration_checkout, registration_offer, registration_tiers
 from app.utils import RESERVED_USER_NAMES, USER_NAME_CHARSET_RE, banned_ip_addresses, blocked_referrers, captcha_enabled, \
     finalize_user_setup, get_request, get_setting, gibberish, \
@@ -233,19 +233,19 @@ def register_on_paid_domain(form):
     """/register where it costs a first fee (M10), for any of the domain's tiers (paid membership plan M3). The site's
     mode closes it and nothing else: payment is the gate, so no application question applies, and money isn't taken for
     an application an admin may refuse (plan S10). Nor does it reach OAuth, LDAP or a directory's password (C10, S11).
-    On the default domain with referral codes on, a code still admits for free, and an empty one means paying (M4)."""
+    An admin's gift code admits for free on any of them that sells its tier, a discount code takes money off, and on the
+    default domain with referral codes on, a referral code admits too (M4); an empty one means paying."""
     offer = registration_offer()
     tiers = registration_tiers()
-    codes = current_storefront().is_default   # a gift code here, and with referral codes on, a referral code (G4)
-    referral = codes and referral_mode_on(g.site)
+    # An admin's gift or discount code, on any paid domain that sells its tier (owner 2026-11-20); a referral code on the
+    # default domain, with referral codes on (G4)
+    here = current_storefront()
+    referral = here.is_default and referral_mode_on(g.site)
     if g.site.registration_mode != 'Closed' and offer is not None:
-        if codes:
-            form.question.validators = [Optional(), Length(max=512)]
-            form.question.flags.required = False   # set when the form was made, and the browser checks it first
-            form.question.label = Label('question', _('Referral or gift code, if you have one. Leave it empty to pay instead.')
-                                        if referral else _('Gift code, if you have one. Leave it empty to pay instead.'))
-        else:
-            del form.question
+        form.question.validators = [Optional(), Length(max=512)]
+        form.question.flags.required = False   # set when the form was made, and the browser checks it first
+        form.question.label = Label('question', _('Referral or gift code, if you have one. Leave it empty to pay instead.')
+                                    if referral else _('Gift code, if you have one. Leave it empty to pay instead.'))
         if not g.site.tos_url or not g.site.tos_url.strip():
             del form.terms
         form.tier.choices = [(tier.id, _('%(tier)s, %(price)s for a %(period)s', tier=tier.title,
@@ -254,15 +254,18 @@ def register_on_paid_domain(form):
         if request.method == 'GET':
             asked = request.args.get('offer', type=int)
             form.tier.data = asked if any(tier.id == asked for tier in tiers) else offer.id
-            if codes:   # a referral link (RC9) or a gift or discount code's link fills the code in
-                form.question.data = normalise(request.args.get('ref') or request.args.get('code'))
+            # a referral link (RC9) or a gift or discount code's link fills the code in
+            form.question.data = normalise(request.args.get('ref') or request.args.get('code'))
         if request.method == 'POST' and not onion_proof_refused(form) and form.validate_on_submit():
-            if codes and (form.question.data or '').strip():
+            if (form.question.data or '').strip():
                 with checking_codes():
                     gift = find_gift_code(form.question.data)
                 discount = find_discount_code(form.question.data) if gift is None else None
-                if gift is not None:
+                if gift is not None and sold_on(gift, here):
                     return process_registration_form(form, gift=gift)
+                if gift is not None:
+                    form.question.errors = list(form.question.errors) + [_('That code cannot be used on this site.')]
+                    return render_registration_form(form, paid_offer=offer, tiers=tiers)
                 if discount is not None:   # taken off the first payment of the tier chosen (plan phase 3 D1)
                     chosen = registration_offer(form.tier.data) if form.tier.data else offer
                     if chosen.id == (form.tier.data or offer.id) and discounted(discount, chosen) is not None:
@@ -272,7 +275,6 @@ def register_on_paid_domain(form):
                 if referral:
                     # A referral code that gives a discount admits a paying account with it held (plan 2026-11-16 R4,
                     # R5); any other goes the referral path: free, with its gift, or refused if the code is wrong
-                    here = current_storefront()
                     referrer = referrer_for(form.question.data, here)
                     discount = referral_discount(referrer, here) if referrer is not None else None
                     if discount is not None:

@@ -84,7 +84,7 @@
                 <div class="mb-3 referral_qr">{{ item.qr_svg | safe }}</div>
                 <p><a href="{{ url_for('user.user_assigned_code_qr_png', code_id=row.id) }}" class="btn btn-outline-secondary">{{ _('Download QR code (PNG)') }}</a></p>
                 {% else -%}
-                <p class="small text-muted">{{ _('Joining is free at the moment, so there is no link to join with. A member enters the code under Settings, Subscription.') }}</p>
+                <p class="small text-muted">{{ _('No site here sells what this code gives to people joining, so there is no link to join with. A member enters the code under Settings, Subscription.') }}</p>
                 {% endif -%}
                 {% if item.deletable -%}
                 <form method="post" action="{{ url_for('user.user_assigned_code_delete', code_id=row.id) }}">

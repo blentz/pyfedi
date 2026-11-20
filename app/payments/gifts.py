@@ -14,6 +14,7 @@ from app.tier_roles import sync_tier_roles
 from app.payments.discounts import DISCOUNT_KINDS
 from app.payments.holding import held_until
 from app.payments.offers import tiers_on
+from app.storefront import current_storefront, default_domain, domain_rows, paid_registration
 from app.utils import get_setting
 
 # What a new member's referral code gets as its own (plan 2026-11-16 R3, X1): {'kind': AUTO | 'gift' | 'discount',
@@ -199,3 +200,22 @@ def delete_gift_code(code: PromoCode) -> None:
     if locked is not None:
         db.session.delete(locked)
         db.session.flush()
+
+
+def sold_on(code: PromoCode, domain) -> bool:
+    """Whether an admin's gift or discount code `code` admits to `domain` at signup (owner 2026-11-20): joining there
+    is paid for, and the tier it gives, or takes money off, is one of its membership tiers (`tiers_on`). A discount
+    for any offer is taken wherever joining is paid for; whether it fits the tier chosen is asked at signup."""
+    if not paid_registration(domain):
+        return False
+    if code.kind in DISCOUNT_KINDS and code.offer_id is None:
+        return True
+    return code.offer_id in {offer.id for offer in tiers_on(domain)}
+
+
+def join_domain(code: PromoCode):
+    """The domain a link to join with `code` names: the one this request is on when the code admits there, else the
+    first that it admits to, the default domain first; None when it admits nowhere. An onion only for a request on it."""
+    here = current_storefront()
+    candidates = [here, default_domain(), *(domain for domain in domain_rows() if not domain.is_onion)]
+    return next((domain for domain in candidates if sold_on(code, domain)), None)

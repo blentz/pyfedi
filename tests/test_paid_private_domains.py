@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from bs4 import BeautifulSoup
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import text
@@ -13,7 +14,7 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import MemberSubscription, Offer, Payment, Site, SiteDomain, User, utcnow
+from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCode, Site, SiteDomain, User, utcnow
 from app.payments.core import apply_event, cancel_subscription
 from app.payments.events import Paid, SubscriptionEnded, SubscriptionStarted
 from app.payments.registration import registration_offer, remove_unpaid_registrations
@@ -150,7 +151,7 @@ class TestRegistering:
         assert joiner() is None
 
     @pytest.mark.parametrize('mode', ['RequireApplication', 'ReferralCode'], ids=['application', 'referral'])
-    def test_no_question_or_code_is_asked(self, env, stripe_session, mode):
+    def test_no_application_answer_or_referral_code_is_needed(self, env, stripe_session, mode):
         env.site.registration_mode = mode
         env.site.application_question = 'Why?'
         db.session.commit()
@@ -169,6 +170,63 @@ class TestRegistering:
 def _provider_error():
     from app.payments.adapters.base import ProviderError
     return ProviderError('no')
+
+
+class TestJoiningWithAnAdminsCode:
+    """Owner 2026-11-20: an admin's gift or discount code admits on any domain that charges for joining and sells its
+    tier there, not only on the default domain."""
+
+    def code(self, kind='gift', offer=None, **values):
+        row = PromoCode(code='paid-gift-code', kind=kind, offer_id=offer.id if offer else None, **values)
+        db.session.add(row)
+        db.session.commit()
+        return row
+
+    def test_a_gift_for_its_tier_admits_for_free(self, env, stripe_session):
+        self.code(offer=env.offer, periods=1)
+        register(env, question='PAID-GIFT-CODE')
+        user = joiner()
+        assert user is not None and user.registration_pending_since is None and not stripe_session.called
+        gift = MemberSubscription.query.filter_by(user_id=user.id, provider_kind='gift').one()
+        assert gift.offer_id == env.offer.id and user.site_domain_id == env.paid.id
+
+    def test_a_gift_for_a_tier_not_sold_there_is_refused(self, env, stripe_session, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
+        elsewhere = Offer(provider_kind='stripe', kind='subscription', title='Elsewhere', offer_group='other',
+                          provider_price_id='price_e', amount_minor=900, currency='usd', interval='month')
+        db.session.add(elsewhere)
+        db.session.flush()
+        db.session.add(OfferDomain(offer_id=elsewhere.id, site_domain_id=env.public.id))
+        db.session.commit()
+        self.code(offer=elsewhere, periods=1)
+        body = register(env, question='paid-gift-code', csrf_token=csrf(env)).get_data(as_text=True)
+        assert joiner() is None and not stripe_session.called
+        assert 'That code cannot be used on this site.' in body
+
+    def test_a_discount_for_any_tier_is_held_for_the_first_payment(self, env, stripe_session):
+        discount = self.code(kind='percent', percent=20)
+        assert pay_link(register(env, question='paid-gift-code')) == CHECKOUT
+        assert joiner().pending_promo_code_id == discount.id
+
+    def test_the_link_fills_the_code_in(self, env, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
+        env.site.registration_mode = 'ReferralCode'   # referral codes stay the default domain's
+        db.session.commit()
+        page = BeautifulSoup(env.client.get('/auth/register?code=Paid-Gift-Code', base_url=PAID).get_data(as_text=True),
+                             'html.parser')
+        field = page.find(attrs={'name': 'question'})
+        assert field.get_text().strip() == 'paid-gift-code' and not field.has_attr('required')
+        assert 'Gift code, if you have one' in page.get_text() and 'Referral or gift code' not in page.get_text()
+
+
+def csrf(env):
+    with env.app.test_request_context():
+        g.pop('csrf_token', None)
+        token = generate_csrf()
+        raw = flask_session['csrf_token']
+    with env.client.session_transaction(base_url=PAID) as session:
+        session['csrf_token'] = raw
+    return token
 
 
 class TestEveryOtherWayIn:
