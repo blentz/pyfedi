@@ -8,8 +8,7 @@ from random import randint
 import flask
 from markupsafe import Markup, escape
 from pyld import jsonld
-from sqlalchemy import Integer, all_, and_, func, literal, or_, select
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy import or_, and_, func, select
 from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
@@ -49,7 +48,7 @@ from app.shared.tasks.maintenance import refresh_instance_chooser
 from app.translation import LibreTranslateAPI
 from app.feed_domains import feed_view_domain, listed_feeds_clause
 from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
-from app.plain_names import duplicate_community_ids, instance_details_shown, plain_communities
+from app.plain_names import instance_details_shown, plain_communities, plain_list_clause
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_domain_clause, modlog_local_only_clause, modlog_open_clause, \
     visible_to_clause
@@ -623,10 +622,9 @@ def list_communities():
         elif nsfw == 'yes':
             communities = communities.filter(and_(Community.nsfw == True))
 
-    # Without instance details each name is listed once (spec 2026-11-19, plain community names): the community the
-    # name resolves to among these stands for the rest. One array parameter, however many are left out.
-    if duplicates := duplicate_community_ids(communities):
-        communities = communities.filter(Community.id != all_(literal(duplicates, ARRAY(Integer))))
+    # Without instance details each name is listed once (spec 2026-11-19, plain community names), in the database
+    if (plain := plain_list_clause(communities)) is not None:
+        communities = communities.filter(plain)
 
     # dict used for pagination query parameters
     args_dict = dict()

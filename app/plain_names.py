@@ -13,7 +13,8 @@ import re
 from flask import before_render_template, g, has_request_context, template_rendered
 from flask_login import current_user
 from markupsafe import escape
-from sqlalchemy import and_, desc, false, func
+from sqlalchemy import Integer, and_, any_, desc, false, func, literal, select
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import utils   # its names are read at call time: it imports this module too
@@ -189,8 +190,9 @@ def _member_ids() -> set:
 
 def name_key(text: str) -> str:
     """A community name or title as a reader tells them apart: any case, with `_`, `-` and runs of white space all
-    one space. "World News", "world_news" and "WORLD  news" are one name."""
-    return ' '.join(_SEPARATORS_RE.sub(' ', text or '').casefold().split())
+    one space. "World News", "world_news" and "WORLD  news" are one name. `lower()`, not `casefold()`: `_key_sql`
+    reads it in the database, whose lower() is the one both must agree with."""
+    return ' '.join(_SEPARATORS_RE.sub(' ', text or '').lower().split())
 
 
 _SEPARATORS_RE = re.compile(r'[_\-\s]+')
@@ -274,15 +276,28 @@ def plain_choices(which_community: dict, facts: dict, others: str = 'Others') ->
     return plain
 
 
-def duplicate_community_ids(community_query) -> list:
-    """The ids in `community_query` that another community in it stands for, for a reader without instance details
-    (grouped and ranked as in plain_communities); [] otherwise. Leaving them out of the query lists each name once."""
+def plain_list_clause(community_query):
+    """For a reader without instance details, a clause that keeps, of the communities `community_query` selects, the
+    one `_rank`'s order puts first for each title and for each name (`name_key`, as `_key_sql` reads it); None with
+    details. A community kept is first for its title and for its name, so no two kept read the same or lead to the
+    same /c/<name>. Computed by the database with window functions, so a list of any length costs one query and is
+    still paginated there: nothing is loaded to be grouped here. It differs from `_duplicate_groups` only where titles
+    and names chain (A shares a title with B, which shares a name with C), and never shows a name twice."""
     if instance_details_shown():
-        return []
-    rows = community_query.order_by(None).with_entities(Community.id, Community.name, Community.title, _here_sql(),
-                                                        Community.subscriptions_count)
-    winners = _winners({row[0]: tuple(row[1:]) for row in rows}, _member_ids())
-    return [community_id for community_id, winner in winners.items() if community_id != winner]
+        return None
+    members = sorted(_member_ids())
+    is_member = func.coalesce(Community.id == any_(literal(members, ARRAY(Integer))), false())
+    order = (desc(_here_sql()), desc(is_member), desc(func.coalesce(Community.subscriptions_count, 0)), Community.id)
+    ranked = community_query.order_by(None).with_entities(
+        Community.id.label('id'),
+        func.row_number().over(partition_by=_key_sql(Community.title), order_by=order).label('by_title'),
+        func.row_number().over(partition_by=_key_sql(Community.name), order_by=order).label('by_name')).subquery()
+    return Community.id.in_(select(ranked.c.id).where(ranked.c.by_title == 1, ranked.c.by_name == 1))
+
+
+def _key_sql(column):
+    """`name_key` as a column expression."""
+    return func.lower(func.btrim(func.regexp_replace(func.coalesce(column, ''), _SEPARATORS_RE.pattern, ' ', 'g')))
 
 
 def _winners(facts: dict, members: set) -> dict:

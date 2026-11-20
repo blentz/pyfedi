@@ -8,13 +8,14 @@ import re
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import String, literal, select
 from sqlalchemy.exc import SQLAlchemyError
 from flask import render_template_string
 from flask_login import login_user
 
 from app import cache, db, utils
 from app.models import Community, CommunityMember, InstanceBlock, Site
-from app.plain_names import HIDE_DOMAINS_FLAG, community_href, duplicate_community_ids, here, community_links, community_label, instance_details_shown, plain_choices, \
+from app.plain_names import HIDE_DOMAINS_FLAG, _key_sql, community_href, here, name_key, plain_list_clause, community_links, community_label, instance_details_shown, plain_choices, \
     plain_communities, plain_community_mentions, plain_rendering, resolve_community_name, theme_community
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance, make_user
@@ -648,28 +649,51 @@ class TestCommunityList:
 
         assert sorted(browse_labels(html)) == ['Technology@a.example', 'Technology@b.example', 'Technology@c.example']
 
-    def test_no_duplicates_are_named_with_details(self, app, world):
-        remote_community('technology', 'a.example')
-        remote_community('technology', 'b.example')
+    def test_no_clause_with_details(self, app, world):
         world.show_instance_details = True
         db.session.commit()
         ctx = as_user(app, world)
         try:
-            assert duplicate_community_ids(Community.query) == []
+            assert plain_list_clause(Community.query) is None
         finally:
             ctx.pop()
 
-    def test_duplicates_are_every_one_but_the_winner(self, app, world):
+    def test_the_winner_of_each_title_and_name_is_kept(self, app, world):
         winner = remote_community('technology', 'a.example', subscribers=9)
-        losers = [remote_community('technology', 'b.example'), remote_community('Technology', 'c.example')]
+        losers = [remote_community('technology', 'b.example'), remote_community('Technology', 'c.example', title='x'),
+                  remote_community('tech', 'd.example', title='TECHNOLOGY')]
         apart = remote_community('cats', 'a.example')
-        ctx = as_user(app, world)
-        try:
-            dropped = duplicate_community_ids(Community.query.filter(Community.id.in_(
-                [winner.id, apart.id] + [c.id for c in losers])))
-        finally:
-            ctx.pop()
-        assert sorted(dropped) == sorted(c.id for c in losers)
+        kept = kept_ids(app, world, Community.query.filter(Community.id.in_([winner.id, apart.id] + [c.id for c in losers])))
+        assert kept == sorted([winner.id, apart.id])
+
+    def test_a_joined_community_is_kept_over_a_more_popular_one(self, app, world):
+        remote_community('technology', 'big.example', subscribers=900)
+        joined = remote_community('technology', 'small.example', subscribers=1)
+        join(world, joined)
+        assert kept_ids(app, world, Community.query.filter(Community.name == 'technology')) == [joined.id]
+
+    def test_a_chain_lists_no_name_twice(self, app, world):
+        """A shares B's title and B shares C's name: whatever is kept, no two kept read the same or share a name."""
+        a = remote_community('alpha', 'a.example', subscribers=1, title='Shared')
+        b = remote_community('beta', 'b.example', subscribers=2, title='Shared')
+        c = remote_community('beta', 'c.example', subscribers=3, title='Other')
+        kept = kept_ids(app, world, Community.query.filter(Community.id.in_([a.id, b.id, c.id])))
+        rows = [db.session.get(Community, community_id) for community_id in kept]
+        assert len({name_key(r.title) for r in rows}) == len(rows) == len({name_key(r.name) for r in rows})
+        assert c.id in kept   # the first in `_rank`'s order is always kept
+
+    @pytest.mark.parametrize('text', ['World News', 'world_news', 'WORLD  news', ' world-_- news ', 'Ünïcode Ä', '', None])
+    def test_the_database_reads_a_name_as_name_key_does(self, app, text):
+        assert db.session.scalar(select(_key_sql(literal(text, String)))) == name_key(text)
+
+
+def kept_ids(app, user, query):
+    """The ids of `query` that `plain_list_clause` keeps for `user`."""
+    ctx = as_user(app, user)
+    try:
+        return sorted(c.id for c in query.filter(plain_list_clause(query)))
+    finally:
+        ctx.pop()
 
 
 class TestStorefronts:
@@ -693,9 +717,10 @@ class TestStorefronts:
 
     @pytest.mark.parametrize('on', ['first', 'onion'])
     def test_the_list_keeps_this_domains_community(self, app, arts, on):
-        loser = arts.onion_art if on == 'first' else arts.first_art
+        winner = arts.first_art if on == 'first' else arts.onion_art
+        query = Community.query.filter(Community.name == 'art')
         with request_on(app, getattr(arts, on)):
-            assert duplicate_community_ids(Community.query.filter(Community.name == 'art')) == [loser.id]
+            assert [c.id for c in query.filter(plain_list_clause(query))] == [winner.id]
 
     def test_here(self, app, arts):
         remote = SimpleNamespace(ap_id='art@lemmy.example', site_domain_id=None)
