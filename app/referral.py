@@ -115,8 +115,7 @@ def referrer_for(text: str | None, storefront: DomainInfo) -> User | None:
     if user is None or not may_generate(user):
         return None
     # RC10 (2026-11-19): a code works on any storefront that takes one, and the account is made there. Checked here,
-    # not left to callers: the API's gate lets a paid domain other than the default through with a code, where the
-    # web form sends it to payment (security review 2026-11-19)
+    # not left to callers, so the API and the web form refuse alike (security review 2026-11-19)
     if not takes_referral_codes(storefront):
         return None
     return user if under_caps(user) else None
@@ -177,9 +176,10 @@ def referral_discount_refused(referrer: User, domain: DomainInfo) -> bool:
 
 
 def takes_referral_codes(storefront: DomainInfo) -> bool:
-    """Whether a referral code can be used to join on `storefront`: one whose signup a code opens (RC11, RC11a), and
-    of the paid domains only the default, the one whose /register takes a code (G4)."""
-    return signup_open_to(storefront, True) and (storefront.is_default or not paid_registration(storefront))
+    """Whether a referral code can be used to join on `storefront`: one whose signup a code opens (RC11, RC11a). A
+    domain where joining is paid for takes one too (owner 2026-11-20; was the default domain alone, G4): there it
+    admits with what it gives on that domain (`benefit_on`), and one that gives nothing there admits nobody."""
+    return signup_open_to(storefront, True)
 
 
 def referral_domain(user: User) -> DomainInfo:

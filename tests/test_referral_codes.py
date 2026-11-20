@@ -296,20 +296,34 @@ def test_a_code_works_on_any_domain(people):
 
 
 def test_a_code_is_refused_where_codes_are_not_taken(people):
-    """No code on a domain that refuses them (RC11a), nor on a paid domain other than the default, whose joining is
-    paid for (security review 2026-11-19: the API's gate let it through)."""
-    shop = _shop('paid')
+    """No code on a domain that refuses them (RC11a), paid for or not."""
+    shop = _shop('closed')
+    shop.referral_codes = False
+    db.session.commit()
+    clear_domain_cache()
     admin = people['admin']
     code = _code(admin)
     assert referrer_for(code, domain_by_id(shop.id)) is None
-    shop.registration, shop.referral_codes = 'closed', False
+    shop.registration = 'paid'
     db.session.commit()
     clear_domain_cache()
     assert referrer_for(code, domain_by_id(shop.id)) is None
 
 
-def test_the_api_refuses_a_code_on_a_paid_domain(app, people, monkeypatch):
-    """The API signup on a paid domain other than the default: a valid code does not make a free account."""
+def test_a_paid_domain_that_takes_codes_takes_one(people):
+    """Owner 2026-11-20 (was the default domain alone, G4): a paid domain with codes on takes a referral code, and its
+    link names that domain."""
+    shop = _shop('paid')
+    admin = people['admin']
+    code = _code(admin)
+    assert referrer_for(code, domain_by_id(shop.id)).id == admin.id
+    with patch('app.referral.current_storefront', return_value=domain_by_id(shop.id)):
+        assert referral_domain(admin) == domain_by_id(shop.id)
+
+
+def test_the_api_refuses_a_code_that_gives_nothing_on_a_paid_domain(app, people, monkeypatch):
+    """The API signup on a paid domain: a code that has nothing to give there (no tier on offer) does not make a free
+    account (R5, X2)."""
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
     _shop('paid')
     code = _code(people['admin'])

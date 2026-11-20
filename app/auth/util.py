@@ -32,7 +32,7 @@ from app.models import IpBan, Notification, Site, User, UserRegistration, utcnow
 from app.onion import apply_audit, is_onion_request, stamp_activity
 from app.log_scrub import log_ldap_sync_failure
 from app.referral import REFERRAL_MODE, record_referral, referral_discount, referral_discount_refused, \
-    referral_mode_on, referrer_for
+    referral_mode_on, referrer_for, takes_referral_codes
 from app.onion_account import audit_country, audit_ip, is_onion_account
 from app.onion_guard import onion_login_gate, onion_login_succeeded, onion_wait_message, onion_proof_refused, prepare_onion_proof
 from app.payments.code_text import normalise
@@ -233,14 +233,14 @@ def register_on_paid_domain(form):
     """/register where it costs a first fee (M10), for any of the domain's tiers (paid membership plan M3). The site's
     mode closes it and nothing else: payment is the gate, so no application question applies, and money isn't taken for
     an application an admin may refuse (plan S10). Nor does it reach OAuth, LDAP or a directory's password (C10, S11).
-    An admin's gift code admits for free on any of them that sells its tier, a discount code takes money off, and on the
-    default domain with referral codes on, a referral code admits too (M4); an empty one means paying."""
+    An admin's gift code admits for free on any of them that sells its tier, a discount code takes money off, and with
+    referral codes on, a referral code admits with what it gives there (M4, RC10); an empty one means paying."""
     offer = registration_offer()
     tiers = registration_tiers()
-    # An admin's gift or discount code, on any paid domain that sells its tier (owner 2026-11-20); a referral code on the
-    # default domain, with referral codes on (G4)
+    # An admin's gift or discount code, on any paid domain that sells its tier; a referral code, with referral codes on,
+    # on any that takes them (owner 2026-11-20)
     here = current_storefront()
-    referral = here.is_default and referral_mode_on(g.site)
+    referral = referral_mode_on(g.site) and takes_referral_codes(here)
     if g.site.registration_mode != 'Closed' and offer is not None:
         form.question.validators = [Optional(), Length(max=512)]
         form.question.flags.required = False   # set when the form was made, and the browser checks it first

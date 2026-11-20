@@ -14,11 +14,13 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
-from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCode, Site, SiteDomain, User, utcnow
+from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCode, Referral, Site, SiteDomain, User, utcnow
 from app.payments.core import apply_event, cancel_subscription
 from app.payments.events import Paid, SubscriptionEnded, SubscriptionStarted
 from app.payments.registration import registration_offer, remove_unpaid_registrations
+from app.referral import GENERATORS_SETTING, generate_code
 from app.storefront import clear_domain_cache
+from app.utils import set_setting
 from tests.factories import grant_permission, make_user, pay_link
 
 PAID = 'https://paid.example'
@@ -210,13 +212,48 @@ class TestJoiningWithAnAdminsCode:
 
     def test_the_link_fills_the_code_in(self, env, monkeypatch):
         monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
-        env.site.registration_mode = 'ReferralCode'   # referral codes stay the default domain's
-        db.session.commit()
         page = BeautifulSoup(env.client.get('/auth/register?code=Paid-Gift-Code', base_url=PAID).get_data(as_text=True),
                              'html.parser')
         field = page.find(attrs={'name': 'question'})
         assert field.get_text().strip() == 'paid-gift-code' and not field.has_attr('required')
         assert 'Gift code, if you have one' in page.get_text() and 'Referral or gift code' not in page.get_text()
+
+
+class TestJoiningWithAReferralCode:
+    """Owner 2026-11-20: a paid domain other than the default takes a referral code (was the default domain alone, G4),
+    and admits with what it gives there: the site's default for that domain (RC10)."""
+
+    @pytest.fixture
+    def referrer(self, env):
+        env.site.registration_mode = 'ReferralCode'
+        db.session.commit()
+        set_setting(GENERATORS_SETTING, 'all')
+        user = make_user(env.baseline.instance_local, 'referrer', local=True)
+        user.verified = True
+        generate_code(user)
+        db.session.commit()
+        return user
+
+    def test_it_admits_for_free_with_the_gift_it_gives_there(self, env, referrer, stripe_session):
+        register(env, question=referrer.referral_code)
+        user = joiner()
+        assert user is not None and user.registration_pending_since is None and not stripe_session.called
+        assert user.site_domain_id == env.paid.id
+        assert MemberSubscription.query.filter_by(user_id=user.id, provider_kind='gift').one().offer_id == env.offer.id
+        assert Referral.query.filter_by(referred_id=user.id).one().referrer_id == referrer.id
+
+    def test_the_form_asks_for_a_referral_or_gift_code(self, env, referrer, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
+        page = env.client.get(f'/auth/register?ref={referrer.referral_code}', base_url=PAID).get_data(as_text=True)
+        assert 'Referral or gift code' in page and referrer.referral_code in page
+
+    def test_a_domain_that_refuses_codes_refuses_it(self, env, referrer, stripe_session, monkeypatch):
+        monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
+        env.paid.referral_codes = False
+        db.session.commit()
+        clear_domain_cache()
+        body = register(env, question=referrer.referral_code, csrf_token=csrf(env)).get_data(as_text=True)
+        assert joiner() is None and not stripe_session.called and 'Invalid code' in body
 
 
 def csrf(env):
