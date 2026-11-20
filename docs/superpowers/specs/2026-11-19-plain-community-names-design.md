@@ -30,7 +30,9 @@ or blocked. "Most subscribed" means the community's subscribers **on this instan
 we count ourselves); ties go to the oldest (lowest id). A remote server's reported total
 (`total_subscriptions_count`) is never used: a squatter could inflate it to take over a popular bare name. `_rank`
 repeats this order in memory for lists that are already loaded, so a menu and the page its link opens pick the same
-community.
+community. Its "local" is `here()`: local to this request's storefront, as `local_clause` means it. On one of
+several domains an install serves, a community local to a sister domain ranks as any other, never as this domain's
+own.
 
 ## What changes when the setting is off
 
@@ -43,6 +45,7 @@ community.
 | Mentions in posts and comments | The `community_links` filter (applied when rendering) shows a handle (`!name@domain`, as text or as a peer's link) as `!name`, but **the link still goes to the community the handle names**: `/c/<handle>` when we know it, otherwise the lookup page (for text) or the peer's own href (for a link). A handle never resolves to another community of the same name. A bare `!name` is linked to `/c/name` only when it resolves. Lookups are memoized per request, and new ones are capped at `MENTION_LOOKUPS` (100) per request; past the cap a handle links to the lookup page and a bare name stays text, without a query. Code blocks are left alone. Stored `body_html` is never changed. |
 | Community theme | `base.html` and the side pane take the theme (and the per-user "allow theme" toggle) from `theme_community(c)`, the community that `c.name` resolves to. |
 | Navbar communities menu and topics menu | Each name is listed once across Favorites, Moderating and Joined, in the first section that holds it. Two communities count as one name when their titles read the same (what the menu shows) or their URL names do (where `/c/<name>` leads). Both comparisons ignore case and treat `_`, `-` and runs of spaces as one space (`name_key`), and the grouping is transitive (`_duplicate_groups`). The community `_resolve`'s order ranks first stands in for the whole group. The `@domain` duplicate marker is gone. |
+| All communities list (`/communities`, and the communities search, which redirects there) | Each name is listed once, grouped as in the menu among the communities the filters and search leave: `duplicate_community_ids()` names the rest, which the query leaves out, so the count and the pages follow the shorter list. The one `_rank` puts first stands for its group (local, then joined, then most subscribed here). Server view rows are not listed, as every one reads "microblogs"; the microblogs community stands for them. |
 | Server views (`microblogs@<host>`) | Their headings and post links show plain "microblogs". |
 
 ## Not changed

@@ -8,7 +8,8 @@ from random import randint
 import flask
 from markupsafe import Markup, escape
 from pyld import jsonld
-from sqlalchemy import or_, and_, func, select
+from sqlalchemy import Integer, all_, and_, func, literal, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import joinedload
 from ua_parser import parse as uaparse
 
@@ -48,7 +49,7 @@ from app.shared.tasks.maintenance import refresh_instance_chooser
 from app.translation import LibreTranslateAPI
 from app.feed_domains import feed_view_domain, listed_feeds_clause
 from app.local_only import hidden_here, hidden_here_sql, shown_here, without_local_only, without_local_only_actors
-from app.plain_names import plain_communities
+from app.plain_names import duplicate_community_ids, instance_details_shown, plain_communities
 from app.local_names import local_named, split_local_name
 from app.visibility import listable_clause, modlog_domain_clause, modlog_local_only_clause, modlog_open_clause, \
     visible_to_clause
@@ -622,6 +623,11 @@ def list_communities():
         elif nsfw == 'yes':
             communities = communities.filter(and_(Community.nsfw == True))
 
+    # Without instance details each name is listed once (spec 2026-11-19, plain community names): the community the
+    # name resolves to among these stands for the rest. One array parameter, however many are left out.
+    if duplicates := duplicate_community_ids(communities):
+        communities = communities.filter(Community.id != all_(literal(duplicates, ARRAY(Integer))))
+
     # dict used for pagination query parameters
     args_dict = dict()
     args_dict["search"] = search_param
@@ -637,17 +643,15 @@ def list_communities():
     # Server views (/c/microblogs@<host>) join the list as rows (spec 2026-10-08, server views in the list)
     microblogs = None
     view_rows = None
-    if server_view_list.view_side_allowed(home_select=home_select, subscribe_select=subscribe_select,
-                                          topic_id=topic_id, language_id=language_id, feed_id=feed_id,
-                                          platform=platform, nsfw=nsfw):
+    # Every server view reads "microblogs" without instance details, so they are listed only with them (plain
+    # community names): the microblogs community stands for them. Instance details are a signed-in viewer's setting.
+    if instance_details_shown() and server_view_list.view_side_allowed(
+            home_select=home_select, subscribe_select=subscribe_select, topic_id=topic_id, language_id=language_id,
+            feed_id=feed_id, platform=platform, nsfw=nsfw):
         microblogs = find_microblogging_community()
-        keywords = ()
-        hidden_communities = set()
-        blocked = ()
-        if current_user.is_authenticated:
-            blocked = blocked_or_banned_instances(current_user.id)
-            keywords = [keyword.strip() for keyword in (current_user.community_keyword_filter or '').split(',')]
-            hidden_communities = set(blocked_community_ids) | set(banned_from) | set(filtered_out_community_ids)
+        blocked = blocked_or_banned_instances(current_user.id)
+        keywords = [keyword.strip() for keyword in (current_user.community_keyword_filter or '').split(',')]
+        hidden_communities = set(blocked_community_ids) | set(banned_from) | set(filtered_out_community_ids)
         if microblogs.id not in hidden_communities:
             view_rows = server_view_list.server_view_select(
                 microblogs.id, search_param, instance, blocked, keywords,

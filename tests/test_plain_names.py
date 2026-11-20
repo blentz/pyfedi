@@ -4,6 +4,8 @@ the web view names communities by name alone, and a bare name resolves local fir
 Spec: docs/superpowers/specs/2026-11-19-plain-community-names-design.md
 """
 import inspect
+import re
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
@@ -12,11 +14,12 @@ from flask_login import login_user
 
 from app import cache, db, utils
 from app.models import Community, CommunityMember, InstanceBlock, Site
-from app.plain_names import HIDE_DOMAINS_FLAG, community_href, community_links, community_label, instance_details_shown, plain_choices, \
+from app.plain_names import HIDE_DOMAINS_FLAG, community_href, duplicate_community_ids, here, community_links, community_label, instance_details_shown, plain_choices, \
     plain_communities, plain_community_mentions, plain_rendering, resolve_community_name, theme_community
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance, make_user
 from tests.test_microblog_live import local_instance, login
+from tests.two_domains import request_on
 
 # fresh_cache: blocked_instances and the rest are memoized by user id, and ids repeat across tests
 pytestmark = pytest.mark.usefixtures('db_session', 'site', 'fresh_cache')
@@ -570,6 +573,139 @@ class TestCommunityPage:
 
         assert response.status_code == 404
 
+
+
+def browse_labels(html):
+    """The rows of the All Communities list, by the label of the link to each."""
+    return re.findall(r'aria-label="Browse ([^"]*)"', html)
+
+
+class TestCommunityList:
+    """/communities lists each name once, the community `_rank` puts first standing for the rest."""
+
+    def test_a_search_lists_a_shared_name_once(self, client, world):
+        hosts = [f'host{n}.example' for n in range(7)]
+        communities = [remote_community('technology', host, subscribers=n, title='Technology')
+                       for n, host in enumerate(hosts)]
+
+        html = client.get('/communities?search=Technology').get_data(as_text=True)
+
+        assert browse_labels(html) == ['Technology']
+        assert f'/community/{communities[-1].link()}/subscribe' in html   # the most subscribed here stands for all
+
+    def test_titles_and_names_alike_in_any_case_are_one_row(self, client, world):
+        remote_community('technology', 'a.example', subscribers=5, title='Technology')
+        remote_community('tech', 'b.example', title='TECHNOLOGY')
+        remote_community('Technology', 'c.example', title='Tech talk')
+
+        assert browse_labels(client.get('/communities?search=tech').get_data(as_text=True)) == ['Technology']
+
+    def test_the_local_community_stands_for_its_name(self, client, world):
+        make_community('technology').title = 'Technology'
+        db.session.commit()
+        remote_community('technology', 'big.example', subscribers=900, title='Technology')
+
+        html = client.get('/communities?search=technology').get_data(as_text=True)
+
+        assert browse_labels(html) == ['Technology']
+        assert '/community/technology/subscribe' in html and 'technology@big.example' not in html
+
+    def test_a_joined_community_stands_for_its_name(self, client, world):
+        remote_community('technology', 'big.example', subscribers=900, title='Technology')
+        joined = remote_community('technology', 'small.example', subscribers=1, title='Technology')
+        join(world, joined)
+        login(client, world)
+
+        html = client.get('/communities?search=technology').get_data(as_text=True)
+
+        assert browse_labels(html) == ['Technology']
+        assert 'technology@small.example' in html and 'technology@big.example' not in html
+
+    def test_different_names_are_all_listed(self, client, world):
+        remote_community('technology', 'a.example', title='Technology')
+        remote_community('technews', 'a.example', title='Technology news')
+
+        html = client.get('/communities?search=technology').get_data(as_text=True)
+
+        assert sorted(browse_labels(html)) == ['Technology', 'Technology news']
+
+    def test_the_count_and_pages_follow_the_deduplicated_list(self, client, world):
+        for n in range(60):
+            remote_community('technology', f'host{n}.example', title='Technology')
+
+        html = client.get('/communities?search=technology').get_data(as_text=True)
+
+        assert browse_labels(html) == ['Technology'] and 'page=2' not in html
+
+    def test_with_details_every_community_is_listed(self, client, world):
+        world.show_instance_details = True
+        db.session.commit()
+        for host in ('a.example', 'b.example', 'c.example'):
+            remote_community('technology', host, title='Technology')
+        login(client, world)
+
+        html = client.get('/communities?search=technology').get_data(as_text=True)
+
+        assert sorted(browse_labels(html)) == ['Technology@a.example', 'Technology@b.example', 'Technology@c.example']
+
+    def test_no_duplicates_are_named_with_details(self, app, world):
+        remote_community('technology', 'a.example')
+        remote_community('technology', 'b.example')
+        world.show_instance_details = True
+        db.session.commit()
+        ctx = as_user(app, world)
+        try:
+            assert duplicate_community_ids(Community.query) == []
+        finally:
+            ctx.pop()
+
+    def test_duplicates_are_every_one_but_the_winner(self, app, world):
+        winner = remote_community('technology', 'a.example', subscribers=9)
+        losers = [remote_community('technology', 'b.example'), remote_community('Technology', 'c.example')]
+        apart = remote_community('cats', 'a.example')
+        ctx = as_user(app, world)
+        try:
+            dropped = duplicate_community_ids(Community.query.filter(Community.id.in_(
+                [winner.id, apart.id] + [c.id for c in losers])))
+        finally:
+            ctx.pop()
+        assert sorted(dropped) == sorted(c.id for c in losers)
+
+
+class TestStorefronts:
+    """On one of several domains this install serves, "local" is local to that domain, as `local_clause` reads a bare
+    name: a community on a sister domain does not stand for the name there."""
+
+    @pytest.fixture
+    def arts(self, two_domains):
+        first, onion = two_domains.domains
+        first_art = two_domains.local_community('art', first)   # older, and more subscribed
+        first_art.subscriptions_count = 900
+        onion_art = two_domains.local_community('art', onion)
+        db.session.commit()
+        return SimpleNamespace(first=first, onion=onion, first_art=first_art, onion_art=onion_art)
+
+    @pytest.mark.parametrize('on', ['first', 'onion'])
+    def test_the_menu_keeps_this_domains_community(self, app, arts, on):
+        with request_on(app, getattr(arts, on)):
+            kept = plain_communities([arts.first_art, arts.onion_art])
+        assert [c.id for c in kept] == [getattr(arts, f'{on}_art').id]
+
+    @pytest.mark.parametrize('on', ['first', 'onion'])
+    def test_the_list_keeps_this_domains_community(self, app, arts, on):
+        loser = arts.onion_art if on == 'first' else arts.first_art
+        with request_on(app, getattr(arts, on)):
+            assert duplicate_community_ids(Community.query.filter(Community.name == 'art')) == [loser.id]
+
+    def test_here(self, app, arts):
+        remote = SimpleNamespace(ap_id='art@lemmy.example', site_domain_id=None)
+        unstamped = SimpleNamespace(ap_id=None, site_domain_id=None)
+        with request_on(app, arts.first):
+            assert (here(arts.first_art), here(arts.onion_art), here(unstamped), here(remote)) == \
+                (True, False, True, False)   # the default domain's own include the rows no domain was stamped on
+        with request_on(app, arts.onion):
+            assert (here(arts.first_art), here(arts.onion_art), here(unstamped), here(remote)) == \
+                (False, True, False, False)
 
 
 def test_community_display_name_reads_the_flag_plain_names_sets():

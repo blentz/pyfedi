@@ -16,6 +16,7 @@ from app.utils import utcnow
 from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance, make_post, make_user
 from tests.test_microblog_live import login
+from tests.test_microblog_server_views import with_instance_details
 
 pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 
@@ -266,6 +267,11 @@ VIEW_LINK = 'href="/c/microblogs@mastodon.example"'
 
 
 class TestTheList:
+    """The list with instance details on: without them the server views are not listed (TestWithoutInstanceDetails)."""
+
+    @pytest.fixture(autouse=True)
+    def details(self, site, microblog_live_client, live):
+        with_instance_details(microblog_live_client, live)
 
     def test_search_microblogs_lists_every_server_view(self, microblog_live_client, live):
         live.toot()
@@ -365,8 +371,8 @@ class TestTheList:
         assert microblog_live_client.get('/communities', query_string={'sort_by': sort_by}).status_code == 200
 
     def test_pagination_crosses_from_communities_to_views(self, microblog_live_client, live):
-        for n in range(60):
-            community(f'c{n:02d}', 100 + n)
+        for n in range(110):   # a signed-in page holds 100
+            community(f'c{n:03d}', 100 + n)
         live.toot()
 
         first = microblog_live_client.get('/communities?sort_by=post_count desc').get_data(as_text=True)
@@ -409,3 +415,24 @@ class TestTheList:
         login(microblog_live_client, live.viewer)
 
         assert VIEW_LINK not in microblog_live_client.get('/communities?search=microblogs').get_data(as_text=True)
+
+
+class TestWithoutInstanceDetails:
+    """Spec 2026-11-19, plain community names: every server view reads "microblogs", so none is listed."""
+
+    def test_a_visitor_sees_no_server_view(self, microblog_live_client, live):
+        live.toot()
+        server(live, 'infosec.exchange')
+
+        html = microblog_live_client.get('/communities?search=microblogs').get_data(as_text=True)
+
+        assert 'href="/c/microblogs@' not in html
+        assert 'href="/c/microblogs"' in html   # the microblogs community stands for them
+
+    def test_a_viewer_without_details_sees_no_server_view(self, microblog_live_client, live):
+        live.toot()
+        live.viewer.private_key = 'a key'
+        db.session.commit()
+        login(microblog_live_client, live.viewer)
+
+        assert 'href="/c/microblogs@' not in microblog_live_client.get('/communities').get_data(as_text=True)

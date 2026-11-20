@@ -7216,7 +7216,7 @@ def possible_communities(plain: bool = True):
         if c.id not in already_added:
             comms.append((c.id, c.display_name()))
             already_added.add(c.id)
-            facts[c.id] = (c.name, c.title, c.ap_id is None, plain_names.subscribers(c))
+            facts[c.id] = (c.name, c.title, plain_names.here(c), plain_names.subscribers(c))
     if len(comms) > 0:
         which_community['Favorites'] = comms
     comms = []
@@ -7224,7 +7224,7 @@ def possible_communities(plain: bool = True):
         if c.id not in already_added:
             comms.append((c.id, c.display_name()))
             already_added.add(c.id)
-            facts[c.id] = (c.name, c.title, c.ap_id is None, plain_names.subscribers(c))
+            facts[c.id] = (c.name, c.title, plain_names.here(c), plain_names.subscribers(c))
     if len(comms) > 0:
         which_community['Moderating'] = comms
     comms = []
@@ -7232,7 +7232,7 @@ def possible_communities(plain: bool = True):
         if c.id not in already_added:
             comms.append((c.id, c.display_name()))
             already_added.add(c.id)
-            facts[c.id] = (c.name, c.title, c.ap_id is None, plain_names.subscribers(c))
+            facts[c.id] = (c.name, c.title, plain_names.here(c), plain_names.subscribers(c))
     if len(comms) > 0:
         which_community['Joined communities'] = comms
     comms = []
@@ -7244,7 +7244,8 @@ def possible_communities(plain: bool = True):
     # matching authorisation check; the form field is client-supplied, so hiding
     # them here is not on its own enough.
     others = db.session.query(Community.id, Community.ap_id, Community.title, Community.ap_domain, Community.name,
-                              Community.subscriptions_count, Community.total_subscriptions_count).\
+                              Community.site_domain_id, Community.subscriptions_count,
+                              Community.total_subscriptions_count).\
         filter(Community.banned == False).join(Instance, Instance.id == Community.instance_id).\
         filter(Instance.gone_forever == False, Community.name != MICROBLOGS_COMMUNITY_NAME).\
         filter(or_(Community.private == False,
@@ -7258,7 +7259,7 @@ def possible_communities(plain: bool = True):
                 display_name = f"{c.title}@{c.ap_domain}"
             comms.append((c.id, display_name))
             already_added.add(c.id)
-            facts[c.id] = (c.name, c.title, c.ap_id is None, plain_names.subscribers(c))
+            facts[c.id] = (c.name, c.title, plain_names.here(c), plain_names.subscribers(c))
     if len(comms) > 0:
         which_community['Others'] = comms
     return plain_names.plain_choices(which_community, facts) if plain else which_community

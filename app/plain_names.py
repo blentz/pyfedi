@@ -13,13 +13,14 @@ import re
 from flask import before_render_template, g, has_request_context, template_rendered
 from flask_login import current_user
 from markupsafe import escape
-from sqlalchemy import desc, func
+from sqlalchemy import and_, desc, false, func
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import utils   # its names are read at call time: it imports this module too
 from app.local_names import local_clause, named_by_actor
 from app.local_only import hidden_here
 from app.models import Community, CommunityMember
+from app.storefront import current_storefront, on_domain
 
 # Templates whose output leaves the web view: an email goes to a recipient, not the reader of the page that sent it.
 _NOT_WEB_VIEW_TEMPLATES = ('email/',)
@@ -160,6 +161,20 @@ def subscribers(community) -> int:
     return community.subscriptions_count or 0
 
 
+def here(community) -> bool:
+    """Whether `community` (a Community, or a row with its `ap_id` and `site_domain_id`) is local to this request's
+    storefront, the community a bare name means first (`local_clause`). One local to another of our domains is not."""
+    if community.ap_id is not None:
+        return False
+    domain = current_storefront()
+    return community.site_domain_id == domain.id or (domain.is_default and community.site_domain_id is None)
+
+
+def _here_sql():
+    """`here` as a column expression."""
+    return func.coalesce(and_(Community.ap_id.is_(None), on_domain(current_storefront(), Community)), false())
+
+
 def _rank(is_local: bool, is_member: bool, subscriber_count: int, community_id: int) -> tuple:
     """`_resolve`'s order, for a group already in hand: local first, then one the reader joined, then the most
     subscribed here, then the oldest."""
@@ -207,26 +222,19 @@ def plain_communities(*sections) -> list:
     them held. One list in, one list out; several in, a list of lists out."""
     sections = [list(section or []) for section in sections]
     if not instance_details_shown():
-        members = _member_ids()
         everyone = {community.id: community for section in sections for community in section}
-        groups = _duplicate_groups([(c.id, c.name, c.title) for c in everyone.values()])
-        best = {}
-        for community in everyone.values():
-            rank = _rank(community.ap_id is None, community.id in members, subscribers(community), community.id)
-            group = groups[community.id]
-            if group not in best or rank < best[group][0]:
-                best[group] = (rank, community)
+        winners = _winners({community.id: (community.name, community.title, here(community),
+                                           subscribers(community)) for community in everyone.values()}, _member_ids())
         seen = set()
         plain = []
         for section in sections:
             kept = []
             for community in section:
-                group = groups[community.id]
-                if group not in seen:
-                    seen.add(group)
-                    winner = best[group][1]
-                    winner.is_duplicate = False
-                    kept.append(winner)
+                winner = winners[community.id]
+                if winner not in seen:
+                    seen.add(winner)
+                    everyone[winner].is_duplicate = False
+                    kept.append(everyone[winner])
             plain.append(kept)
         sections = plain
     return sections[0] if len(sections) == 1 else sections
@@ -251,15 +259,7 @@ def plain_choices(which_community: dict, facts: dict, others: str = 'Others') ->
                  if community_id not in own_ids and not own_keys & set(_keys(*facts[community_id][:2]))]
     winners = {}
     for population in (own_ids, strangers):
-        groups = _duplicate_groups([(community_id, *facts[community_id][:2]) for community_id in population])
-        best = {}
-        for community_id in population:
-            _name, _title, is_local, subscriber_count = facts[community_id]
-            rank = _rank(is_local, community_id in members, subscriber_count, community_id)
-            group = groups[community_id]
-            if group not in best or rank < best[group][0]:
-                best[group] = (rank, community_id)
-        winners.update({community_id: best[groups[community_id]][1] for community_id in population})
+        winners.update(_winners({community_id: facts[community_id] for community_id in population}, members))
     seen = set()
     plain = {}
     for section, choices in which_community.items():
@@ -272,6 +272,31 @@ def plain_choices(which_community: dict, facts: dict, others: str = 'Others') ->
         if kept:
             plain[section] = kept
     return plain
+
+
+def duplicate_community_ids(community_query) -> list:
+    """The ids in `community_query` that another community in it stands for, for a reader without instance details
+    (grouped and ranked as in plain_communities); [] otherwise. Leaving them out of the query lists each name once."""
+    if instance_details_shown():
+        return []
+    rows = community_query.order_by(None).with_entities(Community.id, Community.name, Community.title, _here_sql(),
+                                                        Community.subscriptions_count)
+    winners = _winners({row[0]: tuple(row[1:]) for row in rows}, _member_ids())
+    return [community_id for community_id, winner in winners.items() if community_id != winner]
+
+
+def _winners(facts: dict, members: set) -> dict:
+    """{id: the id standing for its group} for `facts` of {id: (name, title, is_local, subscriber_count)}: grouped by
+    `_duplicate_groups`, the one `_rank` puts first (`members` are the reader's communities) stands for each group."""
+    groups = _duplicate_groups([(community_id, name, title) for community_id, (name, title, _local, _subs)
+                                in facts.items()])
+    best = {}
+    for community_id, (_name, _title, is_local, subscriber_count) in facts.items():
+        rank = _rank(is_local, community_id in members, subscriber_count, community_id)
+        group = groups[community_id]
+        if group not in best or rank < best[group][0]:
+            best[group] = (rank, community_id)
+    return {community_id: best[groups[community_id]][1] for community_id in facts}
 
 
 def _keys(name: str, title: str) -> tuple:

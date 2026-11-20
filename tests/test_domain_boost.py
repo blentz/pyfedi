@@ -366,6 +366,7 @@ def test_a_tie_on_every_key_does_not_cost_a_keyset_page_its_rows(tied, mixed, do
 def test_the_communities_page_lists_its_own_domains_community_first(app, two_domains, domain):
     first, onion = two_domains.domains
     viewer = two_domains.local_user('reader', first if domain == 'first' else onion)
+    viewer.show_instance_details = True   # both are titled 'same': without details they are listed once (plain names)
     stamp = utcnow()
     for name, home in (('a_onion', onion), ('b_first', first)):
         community = two_domains.local_community(name, home)

@@ -14,7 +14,7 @@ from tests.discovery_fixtures import fresh_cache  # noqa: F401
 from tests.factories import make_community, make_instance_block, make_post
 from tests.test_feed_lifecycle_routes import csrf
 from tests.test_microblog_live import login, teaser_ids
-from tests.test_microblog_server_views import VIEW, other_toot, real_microblogs
+from tests.test_microblog_server_views import VIEW, other_toot, real_microblogs, with_instance_details
 
 pytestmark = pytest.mark.usefixtures('site', 'fresh_cache')
 
@@ -230,6 +230,11 @@ class TestPage:
 
 
 class TestCommunityList:
+    """With instance details on: without them server views are not listed (test_server_views_in_community_list)."""
+
+    @pytest.fixture(autouse=True)
+    def details(self, site, microblog_live_client, live):
+        with_instance_details(microblog_live_client, live)
 
     def page(self, microblog_live_client):
         return microblog_live_client.get('/communities?home_select=any').get_data(as_text=True)
