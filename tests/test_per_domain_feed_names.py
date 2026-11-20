@@ -125,7 +125,7 @@ def test_a_feed_name_does_not_block_a_user_or_community_on_another_domain(app, t
     with request_on(app, d.first):
         assert registration_error('news') is None
     firster = d.account('firster', d.first)
-    assert _community_form(app, firster, 'news') == (True, [])
+    assert _community_form(app, firster, 'news', d.first) == (True, [])
 
 
 def test_an_onion_feed_name_blocks_no_first_domain_name(app, three_domains):
@@ -136,7 +136,7 @@ def test_an_onion_feed_name_blocks_no_first_domain_name(app, three_domains):
     with request_on(app, d.first):
         assert registration_error('Secret') is None
     firster = d.account('firster', d.first)
-    assert _community_form(app, firster, 'secret') == (True, [])
+    assert _community_form(app, firster, 'secret', d.first) == (True, [])
     assert _feed_form(app, firster, 'secret') == (True, [])
 
 
@@ -147,7 +147,7 @@ def test_a_feed_name_still_blocks_a_user_and_community_on_its_own_domain(app, th
     with request_on(app, d.shop):
         assert registration_error('News') == 'This name is in use already.'
     shopper = d.account('shopper', d.shop)
-    assert _community_form(app, shopper, 'news') == (False, ['This name is in use already.'])
+    assert _community_form(app, shopper, 'news', d.shop) == (False, ['This name is in use already.'])
 
 
 def test_a_rename_is_checked_on_the_feeds_own_domain(app, three_domains):

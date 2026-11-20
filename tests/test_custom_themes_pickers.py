@@ -169,8 +169,10 @@ def test_the_admin_pickers_offer_their_domains_themes(app, two_domains, themes):
     assert custom_identifier(themes['own'].id) in offered and custom_identifier(themes['onion'].id) not in offered
 
 
-def test_the_new_community_form_offers_the_creators_home_domains_themes(app, two_domains, themes):
-    creator = two_domains.local_user('creator', two_domains.domains[0])
+def test_the_new_community_form_offers_the_themes_of_the_domain_it_is_on(app, two_domains, themes):
+    """The community is made where the form is (owner 2026-11-19), so it offers that domain's themes: an onion account
+    on the first domain sees the first domain's, not its own home's."""
+    creator = two_domains.local_user('creator', two_domains.domains[1])
     able_to_create(creator)
     db.session.commit()
     client = as_user(app, creator)
