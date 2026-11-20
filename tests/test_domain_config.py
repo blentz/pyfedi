@@ -1,6 +1,7 @@
 """Each domain's configuration (spec 2026-11-20-multitenant-domain-config-design.md): the first domain's row, a sister's
 row inheriting what it leaves blank (MT3), `Site` and `SiteDomain` reading and writing their old names through it,
 `g.site` as the request's domain's view, and migration b9e4d2a7c1f6, which moved the values into it."""
+import gc
 import importlib.util
 from datetime import datetime
 from pathlib import Path
@@ -10,13 +11,13 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from cachelib import SimpleCache
 from flask import g
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 
 from app import cache, db
 from app.domain_config import _CHANGED as CHANGED, SiteView, effective, own_config, resolve, site_view
 from app.models import FIRST_DEFAULTS, OWN_COLUMNS, SETTING_COLUMNS, TENANT_COLUMNS, DomainConfig, Settings, Site, \
     SiteDomain, first_config
-from app.storefront import clear_domain_cache, default_domain, domain_by_id
+from app.storefront import clear_domain_cache, default_domain, domain_by_id, domain_rows
 from app.utils import get_setting, get_site_as_dict, set_setting
 from tests.factories import config_of, configure
 from tests.two_domains import FIRST, ONION, request_on
@@ -61,6 +62,57 @@ def test_a_rolled_back_first_row_is_made_again(site):
     assert first_config().name is None   # a new row, with the defaults
     db.session.commit()
     assert db.session.query(DomainConfig).count() == 1
+
+
+def _statements():
+    """The SQL each statement run inside the `with` block sent, in order."""
+    sent = []
+
+    def note(conn, cursor, statement, parameters, context, executemany):
+        sent.append(statement)
+
+    class Listening:
+        def __enter__(self):
+            event.listen(db.engine, 'before_cursor_execute', note)
+            return sent
+
+        def __exit__(self, *exc):
+            event.remove(db.engine, 'before_cursor_execute', note)
+    return Listening()
+
+
+def test_the_first_domains_row_is_read_once_per_session(site):
+    """The identity map holds rows weakly: a first row nothing else held was collected and read again on every call."""
+    first_config()
+    db.session.commit()
+    db.session.close()
+    with _statements() as sent:
+        first_config()
+        gc.collect()
+        first_config()
+    assert len(sent) == 1
+
+
+def test_a_first_row_deleted_since_it_was_kept_is_not_handed_out(site):
+    first_config().name = 'Kept'
+    db.session.commit()   # expired: the next read refreshes it
+    with db.engine.begin() as connection:
+        connection.execute(text('DELETE FROM domain_config'))
+    assert first_config().name is None   # a new row, with the defaults
+    db.session.rollback()
+
+
+def test_the_domain_list_reads_only_the_columns_it_holds(site):
+    """One join of domain_config, unaliased (an alias of the wide table rebuilds every column per call), reading the
+    own columns alone, not two whole configuration rows."""
+    db.session.add(SiteDomain(domain=ONION, scheme='http', federates=False))
+    db.session.commit()
+    with _statements() as sent:
+        cache.delete_memoized(domain_rows)
+        rows = domain_rows()
+    assert len(rows) == 1 and len(sent) == 1
+    assert 'domain_config_1' not in sent[0] and 'domain_config.name' not in sent[0]
+    assert all(f'domain_config.{name}' in sent[0] for name in OWN_COLUMNS)
 
 
 def test_only_one_row_may_be_the_first_domains(site):

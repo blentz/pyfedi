@@ -30,7 +30,6 @@ from sqlakeyset import InvalidPage
 from sqlalchemy import and_, case, desc, func, or_, tuple_
 from sqlakeyset.results import unserialize_bookmark
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import aliased, joinedload
 
 from app import cache, db, shaped_memo_name
 from app.onion import onion_proxy_address
@@ -147,25 +146,26 @@ def _synthesised_default() -> DomainInfo:
 
 @cache.memoize(timeout=300, make_name=shaped_memo_name)
 def domain_rows() -> tuple[DomainInfo, ...]:
-    # One statement: each row with its configuration, the default row's being the first domain's (app.domain_config)
-    first = aliased(models.DomainConfig)
-    rows = db.session.query(models.SiteDomain, first) \
-        .outerjoin(first, and_(models.SiteDomain.is_default, first.site_domain_id.is_(None))) \
-        .options(joinedload(models.SiteDomain.own_config)).order_by(models.SiteDomain.id).all()
+    # One statement of plain columns: each row with its own configuration columns, the default row's being the first
+    # domain's (app.domain_config). Only the columns DomainInfo holds, not two whole configuration rows.
+    domain, config = models.SiteDomain, models.DomainConfig   # not aliased: an alias proxies all its columns per call
+    names = tuple(models.OWN_COLUMNS)
+    rows = db.session.query(
+        domain.domain, domain.scheme, domain.federates, domain.is_default, domain.is_onion, domain.id,
+        domain.instance_id, *(getattr(config, name) for name in names)) \
+        .outerjoin(config, or_(and_(domain.is_default, config.site_domain_id.is_(None)),
+                               and_(~domain.is_default, config.site_domain_id == domain.id))) \
+        .order_by(domain.id).all()
     if not rows:
         return (_synthesised_default(),)
 
-    def own(config, name):
-        value = getattr(config, name) if config is not None else None
-        return models.OWN_COLUMNS[name] if value is None else value
-
-    def info(row, first_config):
-        config = first_config if row.is_default else row.own_config
-        return DomainInfo(row.domain, row.scheme, row.federates, own(config, 'registration'), row.is_default,
-                          row.is_onion, row.id, row.instance_id, own(config, 'login_required'),
-                          own(config, 'registration_offer_id'), own(config, 'lapse_grace_days'),
-                          own(config, 'paid_since'), own(config, 'referral_codes'))
-    return tuple(info(row, config) for row, config in rows)
+    def info(row):
+        own = {name: models.OWN_COLUMNS[name] if value is None else value
+               for name, value in zip(names, row[7:])}
+        return DomainInfo(row.domain, row.scheme, row.federates, own['registration'], row.is_default, row.is_onion,
+                          row.id, row.instance_id, own['login_required'], own['registration_offer_id'],
+                          own['lapse_grace_days'], own['paid_since'], own['referral_codes'])
+    return tuple(info(row) for row in rows)
 
 
 def clear_domain_cache() -> None:

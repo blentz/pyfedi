@@ -6458,7 +6458,9 @@ _FIRST_CONFIG = 'first_domain_config'
 def first_config() -> DomainConfig:
     """The first domain's configuration row, made with FIRST_DEFAULTS the first time it is needed. A row made and not
     yet flushed is kept on the session, so that two writes before a flush land on the same row; a stored one is found
-    by its id in the session's identity map, so a row deleted since (or rolled back) is never handed out."""
+    by its id in the session's identity map, so a row deleted since (or rolled back) is never handed out. The session
+    keeps the row itself too: the identity map holds its objects weakly, and a row nothing else holds would be
+    collected and queried again on every call."""
     session = db.session()
     kept = session.info.get(_FIRST_CONFIG)
     with session.no_autoflush:
@@ -6472,9 +6474,7 @@ def first_config() -> DomainConfig:
     if row is None:
         row = DomainConfig(**FIRST_DEFAULTS)
         session.add(row)
-        session.info[_FIRST_CONFIG] = row
-    else:
-        session.info[_FIRST_CONFIG] = row.id
+    session.info[_FIRST_CONFIG] = row
     return row
 
 
