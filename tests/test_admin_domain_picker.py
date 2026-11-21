@@ -7,7 +7,7 @@ import pytest
 
 from app import db
 from app.admin.scope import SESSION_KEY
-from app.models import SiteDomain, first_config
+from app.models import Offer, OfferDomain, SiteDomain, first_config
 from app.storefront import clear_domain_cache, domain_for_host
 from tests.conftest import forget_login
 from tests.factories import grant_permission, make_user
@@ -116,17 +116,92 @@ def test_a_site_with_one_domain_shows_no_picker(app, admin_site_profile_admin_cl
         assert 'id="domain-picker"' not in body and 'js/admin_domain_picker.js' not in body, path
 
 
-def test_an_instance_wide_page_shows_no_picker_to_one_who_cannot_change_instance_settings(
-        app, domains):
+def test_an_instance_wide_page_shows_no_picker_to_one_who_cannot_change_instance_settings(app, domains):
+    user = make_user(domains['instance'], 'mailer', local=True)
+    user.verified = True
+    db.session.commit()
+    grant_permission(user, 'send newsletter')
+    client = app.test_client()
+    login(client, user)
+    body = get(client, '/admin/newsletter')
+    assert 'id="typeTab"' in body   # the admin tabs are there
+    assert 'id="domain-picker"' not in body
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The payments page lists the offers on the picked domain
+
+@pytest.fixture
+def offers(domains):
+    """An offer on every domain (no domains named), one on the federating sister, one on the first domain and the
+    onion, and one on the onion alone."""
+    def offer(title, *on):
+        row = Offer(provider_kind='link', kind='link', title=title, offer_group='links', url='https://pay.example/')
+        db.session.add(row)
+        db.session.flush()
+        db.session.add_all(OfferDomain(offer_id=row.id, site_domain_id=domain.id) for domain in on)
+        return row
+    rows = {'everywhere': offer('Everywhere'), 'fed': offer('Fed only', domains['fed']),
+            'first': offer('First and onion', domains['first'], domains['onion']),
+            'onion': offer('Onion only', domains['onion'])}
+    db.session.commit()
+    return rows
+
+
+@pytest.fixture
+def treasury(admin_domain_branding_admin):
+    """The admin, holding `manage monetization` too: the payments page's permission."""
+    grant_permission(_admin_user(), 'manage monetization')
+    return admin_domain_branding_admin[0]
+
+
+def offer_rows(body):
+    """Each listed offer's title and what its Domains cell says."""
+    return {title: on for title, on in re.findall(
+        r'<tr>\s*<td>([^<]+)</td>\s*<td>links</td>\s*<td>.*?</td>\s*<td>(?:Yes|No)</td>\s*<td>([^<]*)</td>', body, re.S)}
+
+
+def test_all_lists_every_offer_and_names_only_what_may_be_named_here(treasury, domains, offers):
+    body = get(treasury, '/admin/payments?domain=0')
+    first = domains['first'].domain
+    assert picker(body)[0] == 'list'
+    # the onion is local-only: counted, never named off its own domain (F6)
+    assert offer_rows(body) == {'Everywhere': 'All', 'Fed only': FED, 'First and onion': f'{first}, 1 more',
+                                'Onion only': '1 more'}
+    assert domains['onion'].domain not in body
+
+
+def test_a_picked_domain_lists_the_offers_on_it(treasury, domains, offers):
+    client = treasury
+    assert set(offer_rows(get(client, f'/admin/payments?domain={domains["fed"].id}'))) == {'Everywhere', 'Fed only'}
+    assert set(offer_rows(get(client, f'/admin/payments?domain={domains["first"].id}'))) == {'Everywhere',
+                                                                                             'First and onion'}
+    assert set(offer_rows(get(client, '/admin/payments'))) == {'Everywhere', 'First and onion'}   # the pick is kept
+
+
+def test_a_domain_no_offer_is_on_says_so(treasury, domains):
+    client = treasury
+    db.session.add(Offer(provider_kind='link', kind='link', title='Fed only', offer_group='links',
+                         url='https://pay.example/'))
+    db.session.flush()
+    db.session.add(OfferDomain(offer_id=Offer.query.one().id, site_domain_id=domains['fed'].id))
+    db.session.commit()
+    body = get(client, f'/admin/payments?domain={domains["first"].id}')
+    assert 'id="no-offers-here"' in body and 'Fed only' not in body
+    assert 'id="no-offers-here"' not in get(client, '/admin/payments?domain=0')   # "All" lists it
+
+
+def test_the_picker_on_the_payments_page_is_offered_to_a_treasurer(app, domains, offers):
+    """Payments are `manage monetization`'s: its holder picks the domain without changing instance settings."""
     user = make_user(domains['instance'], 'treasurer', local=True)
     user.verified = True
     db.session.commit()
     grant_permission(user, 'manage monetization')
     client = app.test_client()
     login(client, user)
-    body = get(client, '/admin/payments')
-    assert 'id="typeTab"' in body   # the admin tabs are there
-    assert 'id="domain-picker"' not in body
+    kind, options = picker(get(client, '/admin/payments'))
+    assert kind == 'list' and [value for value, _label, _selected in options] == \
+        ['0', str(domains['first'].id), str(domains['fed'].id)]
 
 
 # ---------------------------------------------------------------------------------------------------------------------

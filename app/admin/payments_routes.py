@@ -11,10 +11,11 @@ from flask import abort, current_app, flash, redirect, request, url_for
 from flask_babel import _
 from flask_login import current_user
 from flask_wtf import FlaskForm
-from sqlalchemy import func
+from sqlalchemy import func, or_, select
 
 from app import db
 from app.admin import bp
+from app.admin.scope import scope_for
 from app.admin.forms import BtcpayCredentialsForm, BtcpayOfferForm, ComplimentaryForm, DefaultBenefitForm, GiftCodeForm, \
     LinkOfferForm, MembershipForm, OfferForm, PaymentSettingsForm, PaypalCredentialsForm, PaypalOfferForm, ReferralCodeForm, \
     StripeCredentialsForm
@@ -109,8 +110,33 @@ def _membership_form(row: SiteDomain | None) -> MembershipForm:
     return form
 
 
+def _offers_on_picked() -> tuple[list[Offer], dict[int, str], int | None]:
+    """The offers the page lists: those on the domain the admin picker picked, or every one for "All" (an offer with
+    no domains is on all of them, M2); what domains each is on, as the page says it (none listed: all of them); and the
+    domain picked. A domain the picker may not name here (a local-only one, F6) is counted, never named."""
+    scope = scope_for('manage monetization')   # the picker in the admin navigation, as a list's
+    query = Offer.query.filter(Offer.provider_kind != COMPLIMENTARY)
+    if scope.picked is not None:
+        query = query.filter(or_(Offer.id.not_in(select(OfferDomain.offer_id)), Offer.id.in_(
+            select(OfferDomain.offer_id).where(OfferDomain.site_domain_id == scope.picked))))
+    names = dict(scope.choices)
+    named: dict[int, list[str]] = {}
+    unnamed: dict[int, int] = {}
+    for offer_id, site_domain_id in db.session.execute(db.select(OfferDomain.offer_id, OfferDomain.site_domain_id)
+                                                       .order_by(OfferDomain.site_domain_id)):
+        if site_domain_id in names:
+            named.setdefault(offer_id, []).append(names[site_domain_id])
+        else:
+            unnamed[offer_id] = unnamed.get(offer_id, 0) + 1
+    domains = {offer_id: ', '.join(named.get(offer_id, []) +
+                                   ([_('%(count)d more', count=unnamed[offer_id])] if offer_id in unnamed else []))
+               for offer_id in named.keys() | unnamed.keys()}
+    return query.order_by(Offer.offer_group, Offer.position, Offer.id).all(), domains, scope.picked
+
+
 def _page(stripe_form=None, settings_form=None, btcpay_form=None, paypal_form=None, membership_form=None):
     home = _home_row()
+    offers, offer_domains, offers_picked = _offers_on_picked()
     paypal = PaymentProvider.query.filter_by(kind='paypal').first()
     row = PaymentProvider.query.filter_by(kind='stripe').first()
     btcpay = PaymentProvider.query.filter_by(kind='btcpay').first()
@@ -119,8 +145,8 @@ def _page(stripe_form=None, settings_form=None, btcpay_form=None, paypal_form=No
     return render_template('admin/payments.html', title=_('Payments'), roles_with=roles_with('manage monetization'),
                            key_set=credentials_available(), source=_stripe_source(), stripe_form=stripe_form,
                            complimentary_offer=Offer.query.filter_by(provider_kind=COMPLIMENTARY).order_by(Offer.id).first(),
-                           settings_form=settings_form, offers=Offer.query.filter(Offer.provider_kind != COMPLIMENTARY)
-                           .order_by(Offer.offer_group, Offer.position, Offer.id).all(),
+                           settings_form=settings_form, offers=offers, offer_domains=offer_domains,
+                           offers_picked=offers_picked,
                            import_form=FlaskForm(), currency=get_setting(CURRENCY_SETTING),
                            webhook_url=url_for('payments.payment_webhook', kind='stripe', _external=True),
                            required_events=REQUIRED_EVENTS, retention=get_setting(RETENTION_SETTING),

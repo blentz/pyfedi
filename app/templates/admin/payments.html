@@ -100,7 +100,7 @@
         {% if offers -%}
             <table class="table">
                 <thead>
-                    <tr><th>{{ _('Title') }}</th><th>{{ _('Group') }}</th><th>{{ _('Amount or address') }}</th><th>{{ _('Offered') }}</th><th>{{ _('Shortcode') }}</th><th></th></tr>
+                    <tr><th>{{ _('Title') }}</th><th>{{ _('Group') }}</th><th>{{ _('Amount or address') }}</th><th>{{ _('Offered') }}</th><th>{{ _('Domains') }}</th><th>{{ _('Shortcode') }}</th><th></th></tr>
                 </thead>
                 <tbody>
                     {% for offer in offers -%}
@@ -109,12 +109,15 @@
                             <td>{{ offer.offer_group }}</td>
                             <td>{% if offer.kind == 'link' %}<a href="{{ offer.url }}" rel="noopener noreferrer nofollow">{{ offer.url }}</a>{% elif offer.amount_minor is not none %}{{ money(offer.amount_minor, offer.currency) }}{% if offer.interval %} / {{ offer.interval }}{% endif %}{% else %}{{ _('Not read from Stripe yet') }}{% endif %}</td>
                             <td>{{ _('Yes') if offer.active else _('No') }}</td>
+                            <td>{{ offer_domains[offer.id] if offer.id in offer_domains else _('All') }}</td>
                             <td><code>[checkout {{ offer.id }}]</code></td>
                             <td><a href="{{ url_for('admin.admin_payments_offer_edit', offer_id=offer.id) }}">{{ _('Edit') }}</a>{% if offer.kind == 'subscription' %} · <a href="{{ url_for('admin.admin_payments_offer_roles', offer_id=offer.id) }}">{{ _('Roles') }}</a>{% endif %}</td>
                         </tr>
                     {% endfor -%}
                 </tbody>
             </table>
+        {% elif offers_picked -%}
+            <p id="no-offers-here">{{ _('No offer is on the domain picked. Pick All to see every offer.') }}</p>
         {% endif -%}
         {% if complimentary_offer -%}
             <p><a href="{{ url_for('admin.admin_payments_offer_roles', offer_id=complimentary_offer.id) }}">{{ _('Roles complimentary membership gives') }}</a></p>
