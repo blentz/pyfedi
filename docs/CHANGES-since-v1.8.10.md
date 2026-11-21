@@ -439,6 +439,13 @@ aarch64 wheel, which is why it must stay out of the production install.
   creates or updates pages from that JSON on standard input (by URL, never
   deleting, every page checked before any is stored, each stored as the admin
   editor stores it), so a site can keep its pages in files.
+- `flask themes import` installs a theme export (`.piefed-theme.zip`, on
+  standard input, raw or with `--base64`) as a custom theme of every domain,
+  or of those named with `--domain`. It finds the theme by name, creates it or
+  brings its stylesheet, base theme, script, templates and files up to date,
+  leaves a theme already up to date alone, checks every domain before storing
+  anything, and with `--check` only reports what would change, so a site can
+  keep its themes in files.
 
 ### 2.3 Behaviour changes operators and users will notice
 
