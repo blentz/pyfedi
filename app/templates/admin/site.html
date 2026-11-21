@@ -20,6 +20,7 @@
         {% endif %}
         <form method="post" enctype="multipart/form-data">
             {% if form.csrf_token %}{{ form.csrf_token() }}{% endif %}
+            <input type="hidden" name="domain" value="{{ tenant.id }}">{# a save writes this domain, whatever is picked since #}
             <p>{{ _('Configure the appearance of the instance, by giving it a name, a short slogan, basic info for the sidebar and a logo. This information appears in link previews in social media.') }}</p>
             {{ tenant_field(form.name, tenant, editable, inherited) }}
             {{ tenant_field(form.description, tenant, editable, inherited) }}

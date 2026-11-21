@@ -201,3 +201,55 @@ def test_no_session_value_names_a_row_that_is_gone(admin_domain_branding_admin, 
         session[SESSION_KEY] = 999
     assert 'Site profile: ' not in get(client, '/admin/site')
     assert all(row.id != 999 for row in domain_rows())
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# A save writes the domain its form was shown for
+
+def test_the_form_names_the_domain_it_edits(admin_domain_branding_admin, admin_domain_branding_domains):
+    shop = admin_domain_branding_domains['shop']
+    body = get(admin_domain_branding_admin[0], f'/admin/site?domain={shop.id}')
+    assert f'<input type="hidden" name="domain" value="{shop.id}">' in body
+
+
+def test_a_save_writes_the_domain_its_form_names_whatever_was_picked_since(admin_domain_branding_admin,
+                                                                           admin_domain_branding_domains):
+    """The shop's page is open; another tab, or a link from anywhere, picks the first domain; the shop's page is saved.
+    It writes the shop, not the first domain."""
+    client, token = admin_domain_branding_admin
+    shop, first = admin_domain_branding_domains['shop'], admin_domain_branding_domains['first']
+    get(client, f'/admin/site?domain={shop.id}')
+    get(client, f'/admin/site?domain={first.id}')
+    forget_login()
+    response = client.post('/admin/site', content_type='multipart/form-data', data={
+        'domain': str(shop.id), 'name': 'Saved on the shop', 'csrf_token': token, 'logo': (io.BytesIO(b''), '')})
+    assert response.status_code == 302 and response.headers['Location'].endswith(f'/admin/site?domain={shop.id}')
+    assert own_row(shop).name == 'Saved on the shop'
+    assert db.session.get(Site, 1).name == 'The First Site'
+
+
+def test_a_save_with_no_domain_named_writes_the_first_domain_not_the_picked_one(admin_domain_branding_admin,
+                                                                                admin_domain_branding_domains):
+    client, token = admin_domain_branding_admin
+    shop = admin_domain_branding_domains['shop']
+    get(client, f'/admin/site?domain={shop.id}')
+    forget_login()
+    response = client.post('/admin/site', content_type='multipart/form-data', data={
+        'name': 'The first, again', 'contact_email': 'admin@example.com', 'csrf_token': token,
+        'logo': (io.BytesIO(b''), '')})
+    assert response.status_code == 302
+    assert db.session.get(Site, 1).name == 'The first, again' and own_row(shop) is None
+    with client.session_transaction() as session:
+        assert session[SESSION_KEY] == shop.id   # a save never changes the pick
+
+
+def test_a_save_for_a_domain_the_user_may_not_edit_is_refused_not_redirected(brander, admin_domain_branding_domains):
+    client, token = brander
+    onion = admin_domain_branding_domains['onion']
+    forget_login()
+    for data in ({'domain': str(onion.id)}, {}):   # the onion; the first domain
+        response = client.post('/admin/site', content_type='multipart/form-data', data={
+            **data, 'name': 'Not mine', 'csrf_token': token, 'logo': (io.BytesIO(b''), '')})
+        assert response.status_code == 302 and '/auth/permission_denied' in response.headers['Location']
+    assert own_row(onion) is None and own_row(admin_domain_branding_domains['shop']) is None
+    assert db.session.get(Site, 1).name == 'The First Site'

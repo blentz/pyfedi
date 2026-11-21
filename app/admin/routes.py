@@ -499,7 +499,7 @@ def admin_site():
             flash(_('Settings saved.'))
             flash_offsite_warning(found)
             flash_unfinished_warning(unfinished)
-            return redirect(url_for('admin.admin_site'))
+            return redirect(url_for('admin.admin_site', domain=tenant.id))   # the domain just saved, shown
     elif request.method == 'GET' and stored is not None:
         for field in BRANDING_FIELDS + PROFILE_FIELDS:
             getattr(form, field).data = getattr(stored, field) or ''

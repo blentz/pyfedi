@@ -48,20 +48,34 @@ class Tenant(NamedTuple):
 
 
 def tenant_for(may_edit: Callable[[DomainInfo], bool]) -> Tenant | None:
-    """The tenant a settings page edits, of the domains `may_edit` allows: `?domain=<id>` picks one and is kept for the
-    other pages; otherwise the one picked before, else the first domain, else the first the user may edit. None when
-    the user may edit none.
+    """The tenant a settings page edits, of the domains `may_edit` allows, or None when the user may edit none.
+
+    A page shown (GET) is for the domain `?domain=<id>` picks, which is kept for the other pages; otherwise for the one
+    picked before, else the first domain, else the first the user may edit.
+
+    A save (POST) writes the domain its form was shown for, which the form names (a hidden `domain` field, else the
+    address it was posted to; neither, the first domain), never the session: another tab, or a link from anywhere, may
+    have picked another domain since, and the save would otherwise land on that one. A save for a domain the user may
+    not edit is refused (None), never written to another; it never changes the pick.
 
     The picker offers a local-only domain only on itself (follow-up F6), as the list pickers do; one picked by its id
     (the Domains page, which names every domain to those who manage them, links to each) is offered beside them."""
     rows = [row for row in domain_rows() if may_edit(row)]
     if not rows:
         return None
-    if 'domain' in request.args:
-        session[SESSION_KEY] = request.args.get('domain', 0, type=int)
-    picked = session.get(SESSION_KEY) or None
-    domain = next((row for row in rows if picked is not None and row.id == picked), None) or \
-        next((row for row in rows if row.is_default), rows[0])
+    if request.method == 'POST':
+        named = request.form.get('domain', type=int)
+        named = request.args.get('domain', 0, type=int) if named is None else named
+        domain = next((row for row in rows if row.id == named), None) if named else \
+            next((row for row in rows if row.is_default), None)
+        if domain is None:
+            return None
+    else:
+        if 'domain' in request.args:
+            session[SESSION_KEY] = request.args.get('domain', 0, type=int)
+        picked = session.get(SESSION_KEY) or None
+        domain = next((row for row in rows if picked is not None and row.id == picked), None) or \
+            next((row for row in rows if row.is_default), rows[0])
     offered = {domain_id for domain_id, _domain in domain_choices(None)}
     choices = [(row.id or 0, row.domain) for row in rows if row.id is None or row.id in offered or row == domain]
     tenant = Tenant(domain, choices, default_domain().id or 0)

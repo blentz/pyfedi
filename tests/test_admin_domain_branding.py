@@ -116,7 +116,8 @@ def test_the_old_branding_address_opens_the_site_page_with_the_domain_picked(adm
 def test_the_first_domains_branding_is_the_first_domains_row(admin_domain_branding_admin, admin_domain_branding_domains):
     response = save(admin_domain_branding_admin, admin_domain_branding_domains['first'], name='The first, renamed',
                     contact_email='admin@example.com')
-    assert response.status_code == 302 and response.headers['Location'].endswith('/admin/site')
+    first = admin_domain_branding_domains['first']
+    assert response.status_code == 302 and response.headers['Location'].endswith(f'/admin/site?domain={first.id}')
     assert db.session.query(DomainConfig).filter(DomainConfig.site_domain_id.isnot(None)).count() == 0
     assert db.session.get(Site, 1).name == 'The first, renamed'
 
@@ -139,7 +140,7 @@ def test_admin_sets_and_clears_each_field(app, admin_domain_branding_admin, admi
     shop = admin_domain_branding_domains['shop']
     response = save(admin_domain_branding_admin, shop, logo=(io.BytesIO(png()), 'shop.png'))
     assert response.status_code == 302
-    assert response.headers['Location'].endswith('/admin/site')
+    assert response.headers['Location'].endswith(f'/admin/site?domain={shop.id}')
     row = own_row(shop)
     assert (row.name, row.description, row.default_theme, row.additional_css) == \
         ('Shop Branded', 'The shop tagline', 'forest', '.shop-own { color: teal; }')

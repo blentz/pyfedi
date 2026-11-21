@@ -267,7 +267,7 @@ def test_site_profile_save_shows_on_next_page_load(app, branded, real_cache, set
                                      'sidebar': 'New sidebar', 'legal_information': '', 'tos_url': '',
                                      'announcement': '', 'contact_email': 'admin@example.com', 'submit': 'Save',
                                      'csrf_token': token, 'logo': (b'', '')})
-    assert response.status_code == 302 and response.headers['Location'].endswith('/admin/site')
+    assert response.status_code == 302 and '/admin/site?domain=' in response.headers['Location']
     about = page(app, '/about')
     assert 'About Renamed Site' in about
     assert 'New about' in about
@@ -283,7 +283,7 @@ def test_the_first_domains_look_saved_shows_on_next_page_load(app, branded, real
         response = client.post('/admin/site', content_type='multipart/form-data', data={
             'name': 'Golden Site', 'contact_email': 'admin@example.com', 'default_theme': 'forest',
             'additional_css': '.renamed { color: red; }', 'submit': 'Save', 'csrf_token': token, 'logo': (b'', '')})
-    assert response.status_code == 302 and response.headers['Location'].endswith('/admin/site')
+    assert response.status_code == 302 and '/admin/site?domain=' in response.headers['Location']
     home = page(app, '/')
     assert '.renamed { color: red; }' in home
     assert '.golden-site' not in home
