@@ -3376,7 +3376,7 @@ def process_downvote(user, store_ap_json, request_json, announced):
     if liked is None:
         log_incoming_ap(id, APLOG_DISLIKE, APLOG_FAILURE, saved_json, 'Unfound object ' + ap_id)
         return
-    if can_downvote(user, liked.community) and not instance_banned(user.instance.domain):
+    if can_downvote(user, liked.community, incoming=True) and not instance_banned(user.instance.domain):
         if isinstance(liked, (Post, PostReply)) and user.id not in blocked_users(liked.author.id) and \
                 votes_cast_today(user.id) < current_app.config['VOTE_QUOTA']:
             before = vote_state(liked, user)

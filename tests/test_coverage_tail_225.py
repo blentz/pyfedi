@@ -292,7 +292,7 @@ class TestTheChanImageFilter:
         source = (pathlib.Path(__file__).resolve().parent.parent
                   / 'app' / 'community' / 'forms.py').read_text()
         # the OCR arms of is_chan_screenshot, which the image form's validate calls for every picture (album R5)
-        block = source[source.index('if not site.enable_chan_image_filter:'):]
+        block = source[source.index("if not domain_config.here('enable_chan_image_filter'):"):]
         block = block[:block.index("return 'Anonymous' in image_text")]
 
         assert block.count("image_text = ''") == 3

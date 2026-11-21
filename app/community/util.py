@@ -29,8 +29,9 @@ from app.activitypub.util import find_actor_or_create, actor_json_to_model, \
 from app.community.forms import CreateLinkForm
 from app.constants import SRC_WEB, POST_TYPE_LINK, NOTIF_NEW_POST, AP_FETCH_ACCEPT
 from app.federation_urls import activity_id
-from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, Site, \
+from app.models import Community, File, PostReply, Post, utcnow, CommunityMember, \
     Instance, User, Tag, CommunityFlair, CommunityThemeAllowed, Notification, markdown_source, language_from_ap, _as_dict, _as_url, parse_ap_published
+from app.domain_config import any_domain
 from app.local_names import local_named, named_by_actor
 from app.storefront import domain_for_host, is_hosted_server
 from app.utils import get_request, gibberish, ensure_directory_exists, ap_datetime, instance_banned, get_task_session, \
@@ -225,7 +226,6 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                 # from ourselves (plan C4)
                 if not community or community.is_local():
                     return
-                site = session.get(Site, 1)
 
                 is_peertube = is_guppe = is_wordpress = False
                 mod = None
@@ -312,8 +312,9 @@ def retrieve_mods_and_backfill(community_id: int, server, name, community_json=N
                     community.restricted_to_mods = True
                 session.commit()
 
-                # only backfill nsfw if nsfw communities are allowed
-                if (community.nsfw and not site.enable_nsfw) or (community.nsfl and not site.enable_nsfl):
+                # only backfill nsfw if a domain shows nsfw communities (the storage rule)
+                if (community.nsfw and not any_domain('enable_nsfw')) or \
+                        (community.nsfl and not any_domain('enable_nsfl')):
                     return
 
                 # download 50 old posts (with Celery, or just 2 without). A paginated outbox is

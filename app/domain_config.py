@@ -62,6 +62,32 @@ def clear() -> None:
     cache.delete_memoized(_effective)
 
 
+def here(name: str):
+    """`name` as the domain the request is on has it; outside a request (a Celery task), as the first domain has it.
+    For code that reads a setting about what the user in front of it does or sees, and may run without `g.site`."""
+    import app.storefront as storefront   # cycle: storefront imports this module
+    return effective(storefront.current_storefront())[name]
+
+
+def every_domains(name: str) -> list:
+    """`name` as each domain has it: the first domain's, then each sister's."""
+    import app.storefront as storefront   # cycle: storefront imports this module
+    return [getattr(models.first_config(), name),
+            *(effective(row)[name] for row in storefront.domain_rows() if not row.is_default)]
+
+
+def any_domain(name: str) -> bool:
+    """The storage rule (spec MT2): content that switch `name` lets a domain show (NSFW, NSFL) is stored when any
+    domain shows it. Each domain then shows it, or hides it, by its own switch."""
+    return any(bool(value) for value in every_domains(name))
+
+
+def every_domain(name: str) -> bool:
+    """The storage rule for a filter that drops incoming content (a gif reply, a "this" comment, a chan image): it is
+    dropped only when every domain has the filter on, as a domain without it would show what was dropped."""
+    return all(bool(value) for value in every_domains(name))
+
+
 class SiteView:
     """The request's `g.site`: `Site`'s instance-wide columns with the request's domain's configuration over them, read
     by the names `Site` had. A plain object, never in the session: writing to it changes this request alone."""

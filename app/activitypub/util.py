@@ -37,11 +37,12 @@ from app.custom_themes import federated_theme, received_theme
 from app.activitypub.signature import signed_get_capped, signed_get_request, send_post_request, default_context, RsaKeys
 from app.branding import own_value
 from app.constants import *
+from app.domain_config import any_domain, effective
 from app.local_only import federating_clause, federating_sql
 from app.local_names import local_named
 from app.federation_urls import MissingInstanceKey, activity_id, domain_site_name, instance_actor_public_key, \
     instance_actor_signing, is_federating_url, local_object_for_url, object_base, owner_base, owner_domain
-from app.storefront import DomainInfo, acting_domain, default_domain, domain_authority, domain_base_url, \
+from app.storefront import DomainInfo, acting_domain, default_domain, domain_authority, domain_by_id, domain_base_url, \
     hosted_instance_ids, instance_id_of, is_hosted_uri, link_on, registration_mode_on
 from app.models import User, Post, Community, File, PostReply, Instance, utcnow, vote_lock, \
     PostVote, PostReplyVote, ActivityPubLog, Notification, Site, CommunityMember, InstanceRole, Report, Conversation, \
@@ -1701,10 +1702,10 @@ def refresh_community_profile_task(community_id, activity_json=None):
                     community.nsfw = activity_json['sensitive'] if 'sensitive' in activity_json else False
                     if 'nsfl' in activity_json and activity_json['nsfl']:
                         community.nsfl = activity_json['nsfl']
-                    if not remote:   # R203: the site's switch wins, as on the local edit path (app/shared/community.py)
-                        site = session.get(Site, 1)
-                        community.nsfw = bool(community.nsfw) and getattr(site, 'enable_nsfw', None) is not False
-                        community.nsfl = bool(community.nsfl) and getattr(site, 'enable_nsfl', None) is not False
+                    if not remote:   # R203: its domain's switch wins, as on the local edit path (app/shared/community.py)
+                        own = effective(domain_by_id(community.site_domain_id))
+                        community.nsfw = bool(community.nsfw) and own['enable_nsfw'] is not False
+                        community.nsfl = bool(community.nsfl) and own['enable_nsfl'] is not False
                     # D1374. `activity_json['name'].strip()`. Absent was KeyError,
                     # a non-string was AttributeError and a value wider than
                     # String(256) was DataError -- and this task re-raises after
@@ -2470,10 +2471,10 @@ def actor_json_to_model(activity_json, address, server):
             mods_url = None
 
         # only allow nsfw communities if enabled for this instance
-        site = db.session.get(Site, 1)  # can't use g.site because actor_json_to_model can be called from celery
-        if 'sensitive' in activity_json and activity_json['sensitive'] and not site.enable_nsfw:
+        # stored when any domain shows them; each domain shows or hides them by its own switch (the storage rule)
+        if 'sensitive' in activity_json and activity_json['sensitive'] and not any_domain('enable_nsfw'):
             return None
-        if 'nsfl' in activity_json and activity_json['nsfl'] and not site.enable_nsfl:
+        if 'nsfl' in activity_json and activity_json['nsfl'] and not any_domain('enable_nsfl'):
             return None
 
         # Read before the try, for two reasons. It is the only argument below
@@ -2683,10 +2684,10 @@ def actor_json_to_model(activity_json, address, server):
             owners_url = None
 
         # only allow nsfw communities if enabled for this instance
-        site = db.session.get(Site, 1)  # can't use g.site because actor_json_to_model can be called from celery
-        if 'sensitive' in activity_json and activity_json['sensitive'] and not site.enable_nsfw:
+        # stored when any domain shows them; each domain shows or hides them by its own switch (the storage rule)
+        if 'sensitive' in activity_json and activity_json['sensitive'] and not any_domain('enable_nsfw'):
             return None
-        if 'nsfl' in activity_json and activity_json['nsfl'] and not site.enable_nsfl:
+        if 'nsfl' in activity_json and activity_json['nsfl'] and not any_domain('enable_nsfl'):
             return None
 
         # get the owners list
@@ -3338,12 +3339,8 @@ def make_image_sizes_async(file_id, thumbnail_width, medium_width, directory, to
                                         s3.close()
                                     session.commit()
 
-                                    site = session.get(Site, 1)
-                                    if site is None:
-                                        site = Site()
-
-                                    # Alert regarding fascist meme content
-                                    if site.enable_chan_image_filter and toxic_community and img_width < 2000:  # images > 2000px tend to be real photos instead of 4chan screenshots.
+                                    # Alert regarding fascist meme content: when any domain's admins asked for it
+                                    if any_domain('enable_chan_image_filter') and toxic_community and img_width < 2000:  # images > 2000px tend to be real photos instead of 4chan screenshots.
                                         if os.environ.get('ALLOW_4CHAN', None) is None:
                                             if current_app.config['CHAN_DETECTION_ENDPOINT'] == '':
                                                 try:

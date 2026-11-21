@@ -4999,14 +4999,15 @@ class PostReply(db.Model):
         if reply_already_exists(user_id=user.id, post_id=post.id, parent_id=reply.parent_id, body=reply.body):
             raise PostReplyValidationError(_('Duplicate reply'))
 
-        site = db.session.get(Site, 1)
-        if site is None:
-            site = Site()
+        # A local reply is held to the filters of the domain it is written on; an incoming one is dropped only when
+        # every domain drops it (spec 2026-11-20-multitenant-domain-config, the storage rule)
+        import app.domain_config as domain_config   # cycle: it imports this module
+        filtered = domain_config.here if request_json is None else domain_config.every_domain
 
-        if reply_is_just_link_to_gif_reaction(reply.body) and site.enable_gif_reply_rep_decrease:
+        if reply_is_just_link_to_gif_reaction(reply.body) and filtered('enable_gif_reply_rep_decrease'):
             raise PostReplyValidationError(_('Gif comment ignored'))
 
-        if reply_is_low_effort(reply.body) and site.enable_this_comment_filter:
+        if reply_is_low_effort(reply.body) and filtered('enable_this_comment_filter'):
             raise PostReplyValidationError(_('Low quality reply'))
 
         try:

@@ -15,7 +15,8 @@ from sqlalchemy.orm import object_session
 
 from app import db
 from app.discovery.filters import clean_https_url
-from app.models import Community, CommunityJoinRequest, Instance, Site, User, _as_text, actor_name_from_ap, \
+from app.domain_config import any_domain
+from app.models import Community, CommunityJoinRequest, Instance, User, _as_text, actor_name_from_ap, \
     markdown_source, utcnow
 from app.utils import allowlist_html, html_to_text, markdown_to_html
 
@@ -167,8 +168,7 @@ def ensure_podcast_community(user: User, actor_json: dict) -> Community | None:
     if 'ap_id' not in fields:   # with no ap_id the Community would read as a local one
         return None
     if fields['nsfw']:
-        site = db.session.get(Site, 1)   # not g.site: this runs from Celery too
-        if site is None or not site.enable_nsfw:
+        if not any_domain('enable_nsfw'):   # stored when any domain shows NSFW (the storage rule)
             return None
     instance = db.session.get(Instance, user.instance_id) if user.instance_id else None
     community = Community(name=user.user_name, title=fields['title'],

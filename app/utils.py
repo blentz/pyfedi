@@ -3274,13 +3274,11 @@ def blocked_phrases() -> List[str]:
         return []
 
 
-@cache.memoize(timeout=86400)
 def blocked_referrers() -> List[str]:
-    site = db.session.get(Site, 1)
-    if site.auto_decline_referrers:
-        return [referrer for referrer in site.auto_decline_referrers.split('\n') if referrer != '']
-    else:
-        return []
+    """The referrers the domain the request is on declines registration from (its `auto_decline_referrers`, one per
+    line). Not memoised here: each domain's configuration is (app.domain_config)."""
+    referrers = domain_config.here('auto_decline_referrers')
+    return [referrer for referrer in referrers.split('\n') if referrer != ''] if referrers else []
 
 
 def block_honey_pot():
@@ -4219,16 +4217,22 @@ def guess_mime_type(file_path: str) -> str:
     return guessed_type
 
 
-def can_downvote(user, community: Community, communities_banned_from_list=None) -> bool:
+def can_downvote(user, community: Community, communities_banned_from_list=None, incoming: bool = False) -> bool:
+    """Whether `user` may downvote in `community`. A peer's downvote (`incoming`) is stored when any domain counts
+    downvotes (spec 2026-11-20-multitenant-domain-config, the storage rule); a local user's is the request's domain's."""
     if user is None or community is None or user.banned or user.bot or user.bot_override or community.is_gone():
         return False
 
-    try:
-        site = g.site
-    except:
-        site = db.session.get(Site, 1)
+    if incoming:
+        allowed = domain_config.any_domain('enable_downvotes')
+    else:
+        try:
+            site = g.site
+        except:
+            site = db.session.get(Site, 1)
+        allowed = site.enable_downvotes
 
-    if not site.enable_downvotes:
+    if not allowed:
         return False
 
     if community.local_only and not user.is_local():

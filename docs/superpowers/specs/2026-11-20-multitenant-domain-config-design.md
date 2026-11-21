@@ -1,6 +1,6 @@
 # Domains as tenants: one configuration per domain — design
 
-Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1 built: 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) and 1b (the per-tenant `settings` keys). Phase 2 built: the picker on settings pages; the Site page per domain with Branding folded in (2a); Misc per domain with Domain settings folded in, the first domain's row holding every setting's value (2b); the Sidebar, Chooser and Themes pages (2c). Phase 3 (readers per tenant) next.
+Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1 built: 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) and 1b (the per-tenant `settings` keys). Phase 2 built: the picker on settings pages; the Site page per domain with Branding folded in (2a); Misc per domain with Domain settings folded in, the first domain's row holding every setting's value (2b); the Sidebar, Chooser and Themes pages (2c). Phase 3 in progress: 3a (the storage rule) built.
 
 ## Why
 
@@ -68,8 +68,18 @@ logging, honeypot, the OAuth admin-scope role, ban check servers, statistics, pa
 and relays, emoji filter, admin ids.
 
 A per-tenant content setting that also decides what the server stores (NSFW and NSFL ingestion, uploads) takes, for
-what is stored, the most permissive tenant's value, and for what a tenant shows, its own. Each such setting's reader is
-named in phase 3.
+what is stored, the most permissive tenant's value, and for what a tenant shows, its own. The readers
+(`app.domain_config`: `any_domain`, `every_domain`, `here`):
+
+| Setting | What is stored | What a tenant shows or lets its users do |
+|---|---|---|
+| `enable_nsfw`, `enable_nsfl` | a peer's NSFW or NSFL community, feed or podcast is taken in, and backfilled, when any tenant shows them | each tenant's own listings and forms (`g.site`); a local community's flags are held to its own tenant's switches |
+| `enable_downvotes` | a peer's downvote is stored when any tenant counts downvotes | a local user's, the request's tenant's |
+| `enable_gif_reply_rep_decrease`, `enable_this_comment_filter` | an incoming reply is dropped only when every tenant has the filter on | a local reply, the tenant it is written on |
+| `enable_chan_image_filter` | admins are alerted about a peer's image when any tenant asks for it | a local upload, the tenant it is made on |
+| video and audio uploads and their limits, album size | local uploads only: the tenant the upload is made on | the same |
+
+Outside a request (a Celery task), a setting about what a user does is the first tenant's.
 
 ## Read path
 

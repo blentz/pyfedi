@@ -81,7 +81,7 @@ from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
 from app.utils import canonical_host, render_template, permission_required, permission_held_anywhere, admin_required, set_setting, get_setting, stored_setting, gibberish, markdown_to_html, \
-    moderating_communities, joined_communities, finalize_user_setup, theme_choices, human_filesize, blocked_phrases, blocked_referrers, \
+    moderating_communities, joined_communities, finalize_user_setup, theme_choices, human_filesize, blocked_phrases, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
     LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, PAGE_MAX_BYTES, \
     download_defeds, instance_banned, login_required, referrer, \
@@ -1144,7 +1144,6 @@ def admin_misc():
             if site.id is None:
                 db.session.add(site)
             db.session.commit()   # the commit clears each domain's memoised configuration (app.domain_config)
-            cache.delete_memoized(blocked_referrers)
             cache.delete_memoized(get_site_as_dict)
             flash(_('Settings saved.'))
     elif request.method == 'GET':

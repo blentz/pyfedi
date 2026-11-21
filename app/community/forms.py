@@ -14,12 +14,12 @@ from wtforms import Form, StringField, SubmitField, TextAreaField, BooleanField,
 
 from wtforms.validators import ValidationError, DataRequired, Length, Regexp, Optional, URL, NumberRange
 
-from app import db
+from app import db, domain_config
 from app.constants import APPLE_PODCAST_CATEGORIES, COMMUNITY_KIND_DISCUSSION, COMMUNITY_KIND_PODCAST, \
     COMMUNITY_KIND_VIDEO_CHANNEL, DOWNVOTE_ACCEPT_ALL, DOWNVOTE_ACCEPT_MEMBERS, DOWNVOTE_ACCEPT_INSTANCE, \
     DOWNVOTE_ACCEPT_TRUSTED, DOWNVOTE_ACCEPT_NONE, MAX_ALBUM_IMAGES_CEILING
 from app.local_names import local_named
-from app.models import Community, Site, utcnow, User, Feed, storable_alt_text
+from app.models import Community, utcnow, User, Feed, storable_alt_text
 from app.storefront import current_storefront
 from app.utils import domain_from_url, MultiCheckboxField, get_timezones, get_request, url_is_parseable, is_hex_color, max_album_images
 from app.form_choices import select_choices
@@ -456,10 +456,7 @@ def is_chan_screenshot(uploaded_file) -> bool:
     if not uploaded_file or uploaded_file.filename == '' or uploaded_file.filename.endswith('.svg') or \
             uploaded_file.filename.endswith('.gif'):
         return False
-    site = db.session.get(Site, 1)
-    if site is None:
-        site = Site()
-    if not site.enable_chan_image_filter:
+    if not domain_config.here('enable_chan_image_filter'):   # the domain the upload is made on
         return False
     if current_app.config['CHAN_DETECTION_ENDPOINT'] != '':
         return False   # with a detection endpoint configured the upload is not OCR'd here

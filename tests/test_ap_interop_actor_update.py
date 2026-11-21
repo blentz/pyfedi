@@ -20,7 +20,7 @@ from app.activitypub import routes as activitypub_routes
 from app.activitypub import util as activitypub_util
 from app.activitypub.util import (INBOX_URL_MAX, LD_ACTOR_UPDATE_REFUSED, delivery_inbox_of, names_actor,
                                   refresh_community_profile_task, refresh_feed_profile_task)
-from app.models import ActivityPubLog, Community, Feed, File, User, utcnow
+from app.models import ActivityPubLog, Community, Feed, File, User, first_config, utcnow
 from tests.factories import (inbox_activity, make_community, make_community_member, make_file, make_site, make_user,
                              seed_community_owner)
 from tests.test_ap_refresh_profiles import (PEER, _feed_document, _group_document, _person_document,
@@ -466,6 +466,7 @@ def test_a_moderators_update_of_a_local_community_keeps_its_key_and_ids(app, db_
     and the community's actor document would then publish the sender's key."""
     monkeypatch.setitem(app.config, 'LOG_ACTIVITYPUB_TO_DB', True)
     instance = seed_community_owner(PEER)
+    first_config().enable_nsfw = first_config().enable_nsfl = True   # the site shows them: the moderator's choice stands
     community = make_community(host=app.config['SERVER_NAME'])
     community.public_key = OLD_KEY
     community.ap_inbox_url = f"https://{app.config['SERVER_NAME']}/c/microblogs/inbox"
