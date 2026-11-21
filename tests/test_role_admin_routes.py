@@ -165,7 +165,7 @@ def test_the_create_form_offers_every_permission_grouped_with_its_guard(env):
     for permission in CATALOGUE:
         assert f'value="{permission.name}"' in body
         assert str(escape(permission.guards)) in body
-    assert body.index('<legend class="h5">Site</legend>') < body.index('<legend class="h5">Display</legend>')
+    assert body.index('<summary class="h5">Site') < body.index('<summary class="h5">Display')
 
 
 def test_a_role_is_created_from_the_form(env):
@@ -231,7 +231,7 @@ def test_a_change_of_a_permissions_domains_alone_asks_first(env):
     form = {'scope-ban users': 'selected', 'domains-ban users': str(env.domain.id)}
     response = post(env, f'/admin/roles/{role.id}/edit', name='Helpers', permissions=['ban users'], **form)
     assert 'This changes access for 1 user.' in response.get_data(as_text=True)
-    assert 'value="selected" checked' in response.get_data(as_text=True)   # the choice survives the second look
+    assert 'value="selected" selected' in response.get_data(as_text=True)   # the choice survives the second look
     post(env, f'/admin/roles/{role.id}/edit', name='Helpers', permissions=['ban users'], confirmed='1', **form)
     row = RolePermission.query.filter_by(role_id=role.id).one()
     assert row.all_domains is False and [d.site_domain_id for d in row.domains] == [env.domain.id]
@@ -417,3 +417,71 @@ def test_the_user_pages_role_list_makes_nobody_an_admin_by_default(env):
         from app.admin.forms import GrantForm
         first = GrantForm().role.choices[0]
     assert (first.value, str(first.label)) == (0, 'Choose a role')
+
+
+# --------------------------------------------------------------------------
+# The form's layout: groups that fold, a domain choice that shows only where it matters (admin_role_form.js)
+# --------------------------------------------------------------------------
+
+def groups_of(body):
+    """Each permission group's name, whether it starts open, and its count."""
+    return [(name.strip(), bool(opened), count) for opened, name, count in re.findall(
+        r'<details class="mb-2 role-permission-group"( open)?>\s*<summary class="h5">([^<]+)'
+        r'<span class="group-count badge text-bg-secondary">([^<]+)</span>', body)]
+
+
+def test_each_group_folds_and_counts_what_it_grants_opening_only_where_it_grants(env):
+    role = a_role('Helpers', 'ban users')
+    found = groups_of(page(env, f'/admin/roles/{role.id}/edit'))
+    groups = {}
+    for permission in CATALOGUE:
+        groups.setdefault(permission.group, []).append(permission.name)
+    assert [name for name, _opened, _count in found] == [group.capitalize() for group in groups]
+    for name, opened, count in found:
+        members = next(names for group, names in groups.items() if group.capitalize() == name)
+        granted = int('ban users' in members)
+        assert (opened, count) == (bool(granted), f'{granted} / {len(members)}'), name
+
+
+def test_a_new_role_starts_with_every_group_folded(env):
+    assert not any(opened for _name, opened, _count in groups_of(page(env, '/admin/roles/new')))
+
+
+def test_a_permissions_domains_are_one_choice_with_a_toggle_per_domain(env):
+    role = limit_role(a_role('Helpers', 'ban users'), env.domain)
+    body = page(env, f'/admin/roles/{role.id}/edit')
+    choice = re.search(r'<select class="perm-scope-select[^>]*name="scope-ban users"[^>]*>(.*?)</select>', body, re.S)
+    assert choice and re.findall(r'<option value="(\w+)"( selected)?>', choice.group(1)) == [('all', ''),
+                                                                                         ('selected', ' selected')]
+    assert 'type="radio"' not in body
+    assert re.search(rf'class="perm-domain btn-check" id="[^"]+" autocomplete="off" name="domains-ban users" '
+                     rf'value="{env.domain.id}" checked>\s*<label class="btn btn-sm btn-outline-secondary"', body)
+
+
+def test_the_tools_wait_for_the_script_and_the_page_loads_it(env):
+    body = page(env, '/admin/roles/new')
+    for tool in ('role-tools', 'role-reach'):
+        assert re.search(rf'<div class="role-js d-none[^"]*" id="{tool}">', body), tool
+    assert 'js/admin_role_form.js' in body
+    assert body.count('class="group-grant') == 2 * len({permission.group for permission in CATALOGUE})
+
+
+def test_the_role_wide_domains_offer_each_domain_and_name_no_field(env):
+    """It sets the permissions' own fields: it posts nothing itself."""
+    body = page(env, '/admin/roles/new')
+    reach = re.search(r'id="role-reach">(.*?)</div>\s*</div>', body, re.S).group(1)
+    assert f'value="{env.domain.id}"' in reach and 'name=' not in reach
+
+
+def test_a_site_with_no_domains_to_choose_has_no_role_wide_domains(env):
+    db.session.delete(env.domain)
+    db.session.commit()
+    clear_domain_cache()
+    body = page(env, '/admin/roles/new')
+    assert 'id="role-reach"' not in body and 'id="role-tools"' in body
+
+
+def test_a_permissions_text_is_what_the_search_reads(env):
+    body = page(env, '/admin/roles/new')
+    ban = next(permission for permission in CATALOGUE if permission.name == 'ban users')
+    assert f'data-search="{escape(ban.name)} {escape(ban.guards)}"' in body

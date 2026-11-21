@@ -28,36 +28,85 @@
 
             <h2>{{ _('Permissions') }}</h2>
             <p class="small">{{ _('Each permission reaches every domain, or the domains you select. Instance-only ones always apply to the whole instance.') }}</p>
+            {# The tools below need a script (admin_role_form.js), which shows them; without it every control is shown. #}
+            <div class="role-js d-none d-flex flex-wrap gap-2 align-items-center mb-2" id="role-tools">
+                <input type="search" class="form-control form-control-sm w-auto" id="role-filter"
+                       placeholder="{{ _('Find a permission') }}" aria-label="{{ _('Find a permission') }}">
+                <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" id="role-granted-only">
+                    <label class="form-check-label" for="role-granted-only">{{ _('Granted only') }}</label>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="role-expand">{{ _('Expand all') }}</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="role-collapse">{{ _('Collapse all') }}</button>
+            </div>
+            {% if domains -%}
+            <div class="role-js d-none border rounded p-2 mb-3" id="role-reach">
+                <p class="small mb-2">{{ _('Give every granted permission the same domains:') }}</p>
+                <div class="d-flex flex-wrap gap-1 align-items-center">
+                    <select class="perm-scope-select form-select form-select-sm w-auto" style="min-width: 12rem" aria-label="{{ _('Domains for every granted permission') }}">
+                        <option value="all">{{ _('All domains') }}</option>
+                        <option value="selected">{{ _('Selected domains') }}</option>
+                    </select>
+                    <span class="perm-domains d-flex flex-wrap gap-1">
+                        {% for domain_id, domain in domains -%}
+                        <input type="checkbox" class="perm-domain btn-check" id="reach-{{ domain_id }}" autocomplete="off" value="{{ domain_id }}">
+                        <label class="btn btn-sm btn-outline-secondary" for="reach-{{ domain_id }}">{{ domain }}</label>
+                        {% endfor -%}
+                    </span>
+                    <button type="button" class="role-reach-apply btn btn-sm btn-outline-primary">{{ _('Apply to granted permissions') }}</button>
+                </div>
+            </div>
+            {% endif -%}
             {% for group, permissions in groups -%}
-            <fieldset class="mb-3 role-permission-group">
-                <legend class="h5">{{ group|capitalize }}</legend>
+            {% set group_slug = group|replace(' ', '-') -%}
+            {% set granted = permissions|selectattr('name', 'in', scopes)|list|length -%}
+            <details class="mb-2 role-permission-group"{{ ' open' if granted }}>
+                <summary class="h5">{{ group|capitalize }}
+                    <span class="group-count badge text-bg-secondary">{{ granted }} / {{ permissions|length }}</span>
+                </summary>
+                <div class="role-js d-none mb-1">
+                    <button type="button" class="group-grant btn btn-link btn-sm p-0 me-2" data-grant="all">{{ _('Grant all') }}</button>
+                    <button type="button" class="group-grant btn btn-link btn-sm p-0" data-grant="none">{{ _('Grant none') }}</button>
+                </div>
+                <ul class="list-group list-group-flush">
                 {% for permission in permissions -%}
-                <div class="form-check">
-                    <input class="form-check-input" type="checkbox" name="permissions" value="{{ permission.name }}"
-                           id="perm-{{ loop.index }}-{{ group|replace(' ', '-') }}"{{ ' checked' if permission.name in scopes }}>
-                    <label class="form-check-label" for="perm-{{ loop.index }}-{{ group|replace(' ', '-') }}">
-                        <strong>{{ permission.name }}</strong>
-                        {% if permission.name not in scopable %}<span class="badge text-bg-warning">{{ _('instance-only') }}</span>{% endif %}
-                        <span class="small text-muted">{{ permission.guards }}</span>
-                    </label>
+                {% set perm_id = 'perm-' ~ loop.index ~ '-' ~ group_slug -%}
+                <li class="role-permission list-group-item px-0" data-search="{{ permission.name }} {{ permission.guards }}">
+                    <div class="form-check">
+                        <input class="perm-box form-check-input" type="checkbox" name="permissions" value="{{ permission.name }}"
+                               id="{{ perm_id }}"{{ ' checked' if permission.name in scopes }}>
+                        <label class="form-check-label" for="{{ perm_id }}">
+                            <strong>{{ permission.name }}</strong>
+                            {% if permission.name not in scopable %}<span class="badge text-bg-warning">{{ _('instance-only') }}</span>{% endif %}
+                            <span class="small text-muted">{{ permission.guards }}</span>
+                        </label>
+                    </div>
                     {% if permission.name in scopable -%}
                     {% set limited = scopes.get(permission.name) -%}
-                    <div class="ms-3 small permission-scope">
-                        <label class="me-2"><input type="radio" name="scope-{{ permission.name }}" value="all"{{ ' checked' if limited is none }}> {{ _('All domains') }}</label>
-                        <label class="me-2"><input type="radio" name="scope-{{ permission.name }}" value="selected"{{ ' checked' if limited is not none }}> {{ _('Selected domains:') }}</label>
-                        {% for domain_id, domain in domains -%}
-                        <label class="me-2"><input type="checkbox" name="domains-{{ permission.name }}" value="{{ domain_id }}"{{ ' checked' if limited and domain_id in limited }}> {{ domain }}</label>
-                        {% endfor -%}
+                    <div class="perm-scope ms-4 mt-1 d-flex flex-wrap gap-1 align-items-center">
+                        <select class="perm-scope-select form-select form-select-sm w-auto" style="min-width: 12rem" name="scope-{{ permission.name }}"
+                                aria-label="{{ _('Domains for %(permission)s', permission=permission.name) }}">
+                            <option value="all"{{ ' selected' if limited is none }}>{{ _('All domains') }}</option>
+                            <option value="selected"{{ ' selected' if limited is not none }}>{{ _('Selected domains') }}</option>
+                        </select>
+                        <span class="perm-domains d-flex flex-wrap gap-1">
+                            {% for domain_id, domain in domains -%}
+                            <input type="checkbox" class="perm-domain btn-check" id="{{ perm_id }}-d{{ domain_id }}" autocomplete="off" name="domains-{{ permission.name }}" value="{{ domain_id }}"{{ ' checked' if limited and domain_id in limited }}>
+                            <label class="btn btn-sm btn-outline-secondary" for="{{ perm_id }}-d{{ domain_id }}">{{ domain }}</label>
+                            {% endfor -%}
+                        </span>
                     </div>
                     {% endif -%}
-                </div>
+                </li>
                 {% endfor -%}
-            </fieldset>
+                </ul>
+            </details>
             {% endfor -%}
             {{ render_field(form.submit) }}
             {% if role %}<a class="btn btn-secondary" href="{{ url_for('admin.admin_role', role_id=role.id) }}">{{ _('Cancel') }}</a>
             {% else %}<a class="btn btn-secondary" href="{{ url_for('admin.admin_roles') }}">{{ _('Cancel') }}</a>{% endif %}
         </form>
+        <script type="module" src="{{ url_for('static', filename='js/admin_role_form.js', changed=getmtime('js/admin_role_form.js')) }}" nonce="{{ nonce }}"></script>
     </div>
 </div>
 <hr />
