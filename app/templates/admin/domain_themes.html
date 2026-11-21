@@ -3,7 +3,8 @@
 {% else -%}
     {% extends "base.html" -%}
 {% endif -%}
-{% set active_child = 'admin_domains' %}
+{% set active_child = 'admin_themes' %}
+{% set picker_action = url_for('admin.admin_themes') %}
 
 {% macro copy_button(source) -%}
 <form method="post" action="{{ url_for('admin.admin_domain_theme_copy', domain_id=row.id) }}" class="d-inline">

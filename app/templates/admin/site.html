@@ -26,7 +26,7 @@
             {{ tenant_field(form.description, tenant, editable, inherited) }}
             {{ tenant_field(form.sidebar, tenant, editable, inherited) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}
-                <a href="{{ url_for('admin.admin_sidebar') if tenant.is_first else url_for('admin.admin_domain_sidebar', domain_id=tenant.domain.id) }}">{{ _('Order and hide the sidebar boxes') }}</a></p>
+                <a href="{{ url_for('admin.admin_sidebar', domain=tenant.id) }}">{{ _('Order and hide the sidebar boxes') }}</a></p>
             {{ tenant_field(form.announcement, tenant, editable, inherited) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
             {% if stored and stored.logo %}

@@ -4,7 +4,7 @@
     {% if user_access('change instance settings', current_user.id) or user_access('edit domain branding', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_site') }}">{{ _('Site profile') }}</a> |
     {% endif %}
-    {% if user_access('change instance settings', current_user.id) %}
+    {% if user_access('change instance settings', current_user.id) or user_access('manage domains', current_user.id) %}
         <a href="{{ url_for('admin.admin_misc') }}">{{ _('Misc settings') }}</a> |
     {% endif %}
     {% if (user_access('manage domains', current_user.id) or user_access('edit domain branding', current_user.id, anywhere=True)) %}

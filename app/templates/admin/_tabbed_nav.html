@@ -4,7 +4,10 @@
             {% if user_access('change instance settings', current_user.id) or user_access('edit domain branding', current_user.id, anywhere=True) %}
                 <a class="nav-link{% if active_child == 'admin_site' %} active{% endif %}" id="site-profile-tab" type="button" role="tab" href="/admin/site" style="view-transition-name: site">{{ _('Site') }}</a>
             {% endif -%}
-            {% if user_access('change instance settings', current_user.id) %}
+            {% if user_access('change instance settings', current_user.id) or user_access('edit domain branding', current_user.id, anywhere=True) %}
+                <a class="nav-link{% if active_child == 'admin_themes' %} active{% endif %}" id="themes-tab" type="button" role="tab" href="/admin/themes" style="view-transition-name: site">{{ _('Themes') }}</a>
+            {% endif -%}
+            {% if user_access('change instance settings', current_user.id) or user_access('manage domains', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_misc' %} active{% endif %}" id="misc-tab" type="button" role="tab" href="/admin/misc" style="view-transition-name: misc">{{ _('Misc') }}</a>
             {% endif -%}
             {% if (user_access('manage domains', current_user.id) or user_access('edit domain branding', current_user.id, anywhere=True)) %}

@@ -1,21 +1,21 @@
-"""/admin/sidebar and /admin/domains/<id>/sidebar: the order of the sidebars' boxes and which are hidden (app/sidebar.py).
+"""/admin/sidebar: the order of the picked domain's sidebar boxes and which are hidden (app/sidebar.py; spec
+2026-11-20-multitenant-domain-config MT4). /admin/domains/<id>/sidebar opens it with that domain picked.
 
-The site's order is Site row 1's, under `change instance settings`. A sister domain's is its `DomainConfig` row's,
-under `edit domain branding` on that domain; until it sets one it shows the site's, and its first change starts from
-the site's. Each button is its own POST: it moves one box up or down, hides or shows one, or (on a domain) goes back to
+The first domain's order is its configuration row's, under `change instance settings`. A sister domain's is its own
+row's, under `edit domain branding` on that domain; until it sets one it shows the first domain's, and its first change
+starts from the first domain's. Each button is its own POST: it moves one box up or down, hides or shows one, or (on a domain) goes back to
 the site's order, and the page comes back showing the result. Nothing needs JavaScript.
 """
 from flask import abort, redirect, request, url_for
 from flask_babel import _
-from flask_login import current_user
 
 from app import db
 from app.admin import bp
+from app.admin.tenant import may_edit_branding, tenant_for
 from app.domain_config import own_config
-from app.models import Site, SiteDomain
+from app.models import SiteDomain, first_config
 from app.sidebar import BOXES, FIELDS, layout, moved, stored, toggled
-from app.storefront import clear_domain_cache
-from app.utils import login_required, permission_required, render_template, user_access
+from app.utils import login_required, render_template
 
 STEPS = {'up': -1, 'down': 1}
 
@@ -62,47 +62,45 @@ def sidebar_page(values: dict, inherited: dict, save, **context):
         if result is None:
             abort(400)
         save(result)
-        db.session.commit()
-        clear_domain_cache()   # branding is memoised per domain (app/branding.py)
+        db.session.commit()   # the commit clears each domain's memoised configuration (app.domain_config)
         area = next(part for part in request.form['action'].split(':') if part in BOXES)
-        return redirect(f'{request.path}#sidebar-{area}')
+        return redirect(url_for('admin.admin_sidebar', domain=context['tenant'].id) + f'#sidebar-{area}')
     return render_template('admin/sidebar.html', title=_('Sidebar boxes'),
                            sidebars=sidebars(values, inherited), **context)
 
 
-def site_values(site: Site) -> dict:
-    return {area: getattr(site, field) or '' for area, field in FIELDS.items()}
+def site_values(config) -> dict:
+    return {area: getattr(config, field) or '' for area, field in FIELDS.items()}
 
 
 @bp.route('/sidebar', methods=['GET', 'POST'])
 @login_required
-@permission_required('change instance settings')
 def admin_sidebar():
-    site = db.session.get(Site, 1) or abort(404)
-
-    def save(result):
-        for area, field in FIELDS.items():
-            setattr(site, field, result[area] or '')
-    values = site_values(site)
-    return sidebar_page(values, values, save, row=None)
-
-
-@bp.route('/domains/<int:domain_id>/sidebar', methods=['GET', 'POST'])
-@login_required
-def admin_domain_sidebar(domain_id):
-    row = db.session.get(SiteDomain, domain_id) or abort(404)
-    if not user_access('edit domain branding', current_user.get_id(), on=row):
-        abort(403)
-    if row.is_default:
-        return redirect(url_for('admin.admin_sidebar'))
+    """The picked domain's sidebars. A sister's sidebar with no order of its own shows the first domain's."""
+    tenant = tenant_for(may_edit_branding)
+    if tenant is None:
+        return redirect(url_for('auth.permission_denied'))
+    first = site_values(first_config())
+    if tenant.is_first:
+        def save(result):
+            for area, field in FIELDS.items():
+                setattr(first_config(), field, result[area] or '')
+        return sidebar_page(first, first, save, tenant=tenant, row=None)
+    row = db.session.get(SiteDomain, tenant.domain.id)
     branding = own_config(row.id)
     values = {area: (getattr(branding, field) or None) if branding is not None else None
               for area, field in FIELDS.items()}
 
     def save(result):
-        own = branding
-        if own is None:
-            own = row.config()
+        own = branding if branding is not None else row.config()
         for area, field in FIELDS.items():
             setattr(own, field, result[area])
-    return sidebar_page(values, site_values(db.session.get(Site, 1)), save, row=row)
+    return sidebar_page(values, first, save, tenant=tenant, row=row)
+
+
+@bp.route('/domains/<int:domain_id>/sidebar', methods=['GET', 'POST'])
+@login_required
+def admin_domain_sidebar(domain_id):
+    """A domain's sidebars are on the Sidebar page with the domain picked (MT4)."""
+    row = db.session.get(SiteDomain, domain_id) or abort(404)
+    return redirect(url_for('admin.admin_sidebar', domain=row.id))

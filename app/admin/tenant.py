@@ -11,11 +11,13 @@ from __future__ import annotations
 from typing import Callable, NamedTuple
 
 from flask import g, request, session
+from flask_login import current_user
 
 from app import db
 from app.admin.scope import SESSION_KEY, domain_choices
 from app.domain_config import effective, own_config
 from app.models import DomainConfig, SiteDomain, first_config
+from app.permissions import user_access
 from app.storefront import DomainInfo, default_domain, domain_rows
 
 
@@ -45,6 +47,14 @@ class Tenant(NamedTuple):
     def inherited(self) -> dict:
         """What a blank field shows here: the first domain's values; nothing on the first domain itself."""
         return {} if self.is_first else effective(default_domain())
+
+
+def may_edit_branding(domain) -> bool:
+    """Whether the current user may change `domain`'s branding (its profile, look and sidebars): `change instance
+    settings`, or on a sister `edit domain branding` there."""
+    user_id = current_user.get_id()
+    return user_access('change instance settings', user_id) or \
+        (not domain.is_default and user_access('edit domain branding', user_id, on=domain))
 
 
 def tenant_for(may_edit: Callable[[DomainInfo], bool]) -> Tenant | None:

@@ -1,6 +1,6 @@
 # Domains as tenants: one configuration per domain — design
 
-Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1 built: 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) and 1b (the per-tenant `settings` keys). Phase 2a (the picker on settings pages, the Site page per domain with Branding folded in) and 2b (Misc per domain with Domain settings folded in; the first domain's row holds every setting's value) built; 2c (the Chooser, Sidebar and Themes pages) next.
+Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1 built: 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) and 1b (the per-tenant `settings` keys). Phase 2 built: the picker on settings pages; the Site page per domain with Branding folded in (2a); Misc per domain with Domain settings folded in, the first domain's row holding every setting's value (2b); the Sidebar, Chooser and Themes pages (2c). Phase 3 (readers per tenant) next.
 
 ## Why
 

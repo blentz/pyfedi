@@ -213,7 +213,8 @@ def test_the_site_page_lists_both_sidebars_boxes(admin_domain_branding_admin, ad
 
 def test_the_buttons_move_hide_and_show_a_box_on_the_site(admin_domain_branding_admin, admin_domain_branding_domains):
     response = press(admin_domain_branding_admin, '/admin/sidebar', 'home:up:about')
-    assert response.status_code == 302 and response.headers['Location'].endswith('/admin/sidebar#sidebar-home')
+    first = admin_domain_branding_domains['first']
+    assert response.status_code == 302 and response.headers['Location'].endswith(f'/admin/sidebar?domain={first.id}#sidebar-home')
     assert layout(site_row().home_sidebar, HOME)[3:5] == [('about', True), ('recent_tags', True)]
     press(admin_domain_branding_admin, '/admin/sidebar', 'community:toggle:actions')
     assert dict(layout(site_row().community_sidebar, COMMUNITY))['actions'] is False
@@ -261,20 +262,22 @@ def test_only_admins_see_or_change_the_sites_order(app, admin_domain_branding_do
     assert response.status_code == 302 and 'permission' in response.headers['Location']
     assert not site_row().home_sidebar
     forget_login()
-    assert client.get(f"/admin/domains/{admin_domain_branding_domains['shop'].id}/sidebar").status_code == 403
+    response = client.get(f"/admin/sidebar?domain={admin_domain_branding_domains['shop'].id}")
+    assert response.status_code == 302 and 'permission' in response.headers['Location']
     forget_login()
-    response = client.post(f"/admin/domains/{admin_domain_branding_domains['shop'].id}/sidebar",
+    response = client.post(f"/admin/sidebar?domain={admin_domain_branding_domains['shop'].id}",
                            data={'csrf_token': token, 'action': 'home:up:about'})
-    assert response.status_code == 403 and own_row(admin_domain_branding_domains['shop']) is None
+    assert response.status_code == 302 and 'permission' in response.headers['Location']
+    assert own_row(admin_domain_branding_domains['shop']) is None
 
 
 def test_a_domains_first_change_starts_from_the_sites_order(admin_domain_branding_admin, admin_domain_branding_domains):
     set_site(home_sidebar='about,-new_communities')
     shop = admin_domain_branding_domains['shop']
-    body = admin_domain_branding_admin[0].get(f'/admin/domains/{shop.id}/sidebar').get_data(as_text=True)
+    body = admin_domain_branding_admin[0].get(f'/admin/sidebar?domain={shop.id}').get_data(as_text=True)
     assert "shows the site's order" in body and 'reset:home' not in body
-    response = press(admin_domain_branding_admin, f'/admin/domains/{shop.id}/sidebar', 'home:down:about')
-    assert response.headers['Location'].endswith(f'/admin/domains/{shop.id}/sidebar#sidebar-home')
+    response = press(admin_domain_branding_admin, f'/admin/sidebar?domain={shop.id}', 'home:down:about')
+    assert response.headers['Location'].endswith(f'/admin/sidebar?domain={shop.id}#sidebar-home')
     own = layout(own_row(shop).home_sidebar, HOME)
     assert own[:2] == [('new_communities', False), ('about', True)]
     assert own_row(shop).community_sidebar is None    # the other sidebar still shows the site's
@@ -284,10 +287,10 @@ def test_a_domains_first_change_starts_from_the_sites_order(admin_domain_brandin
 
 def test_a_domain_goes_back_to_the_sites_order(admin_domain_branding_admin, admin_domain_branding_domains):
     shop = admin_domain_branding_domains['shop']
-    press(admin_domain_branding_admin, f'/admin/domains/{shop.id}/sidebar', 'community:toggle:about_community')
-    body = admin_domain_branding_admin[0].get(f'/admin/domains/{shop.id}/sidebar').get_data(as_text=True)
+    press(admin_domain_branding_admin, f'/admin/sidebar?domain={shop.id}', 'community:toggle:about_community')
+    body = admin_domain_branding_admin[0].get(f'/admin/sidebar?domain={shop.id}').get_data(as_text=True)
     assert 'value="reset:community"' in body and 'value="reset:home"' not in body
-    press(admin_domain_branding_admin, f'/admin/domains/{shop.id}/sidebar', 'reset:community')
+    press(admin_domain_branding_admin, f'/admin/sidebar?domain={shop.id}', 'reset:community')
     assert own_row(shop).community_sidebar is None
     set_site(community_sidebar='-community_feeds')
     assert branding_for(shop).community_sidebar == '-community_feeds'
@@ -297,13 +300,14 @@ def test_a_domain_keeps_its_other_branding(admin_domain_branding_admin, admin_do
     shop = admin_domain_branding_domains['shop']
     config_of(shop).name = 'Shop name'
     db.session.commit()
-    press(admin_domain_branding_admin, f'/admin/domains/{shop.id}/sidebar', 'home:toggle:about')
+    press(admin_domain_branding_admin, f'/admin/sidebar?domain={shop.id}', 'home:toggle:about')
     assert own_row(shop).name == 'Shop name' and own_row(shop).home_sidebar
 
 
 def test_the_first_domains_page_is_the_sites(admin_domain_branding_admin, admin_domain_branding_domains):
-    response = admin_domain_branding_admin[0].get(f"/admin/domains/{admin_domain_branding_domains['first'].id}/sidebar")
-    assert response.status_code == 302 and response.headers['Location'].endswith('/admin/sidebar')
+    first = admin_domain_branding_domains['first']
+    response = admin_domain_branding_admin[0].get(f"/admin/domains/{first.id}/sidebar")
+    assert response.status_code == 302 and response.headers['Location'].endswith(f'/admin/sidebar?domain={first.id}')
 
 
 def test_an_unknown_domain_is_404(admin_domain_branding_admin, admin_domain_branding_domains):
@@ -312,16 +316,16 @@ def test_an_unknown_domain_is_404(admin_domain_branding_admin, admin_domain_bran
 
 def test_the_onions_order_is_changed_like_any_domains(admin_domain_branding_admin, admin_domain_branding_domains):
     onion = admin_domain_branding_domains['onion']
-    press(admin_domain_branding_admin, f'/admin/domains/{onion.id}/sidebar', 'home:toggle:new_instances')
+    press(admin_domain_branding_admin, f'/admin/sidebar?domain={onion.id}', 'home:toggle:new_instances')
     assert dict(layout(own_row(onion).home_sidebar, HOME))['new_instances'] is False
 
 
 def test_the_branding_pages_link_to_the_sidebar_pages(admin_domain_branding_admin, admin_domain_branding_domains):
     shop = admin_domain_branding_domains['shop']
     first = admin_domain_branding_domains['first']
-    assert '/admin/sidebar"' in admin_domain_branding_admin[0].get(f'/admin/site?domain={first.id}').get_data(as_text=True)
-    assert f'/admin/domains/{shop.id}/sidebar' in admin_domain_branding_admin[0].get(f'/admin/site?domain={shop.id}').get_data(as_text=True)
-    assert f'/admin/domains/{shop.id}/sidebar' in admin_domain_branding_admin[0].get('/admin/domains').get_data(as_text=True)
+    assert f'/admin/sidebar?domain={first.id}"' in admin_domain_branding_admin[0].get(f'/admin/site?domain={first.id}').get_data(as_text=True)
+    assert f'/admin/sidebar?domain={shop.id}' in admin_domain_branding_admin[0].get(f'/admin/site?domain={shop.id}').get_data(as_text=True)
+    assert f'/admin/sidebar?domain={shop.id}' in admin_domain_branding_admin[0].get('/admin/domains').get_data(as_text=True)
 
 
 def test_a_change_shows_on_the_next_page(admin_domain_branding_admin, admin_domain_branding_domains):

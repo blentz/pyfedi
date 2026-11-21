@@ -60,9 +60,9 @@ from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_
 from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
 from app.domain_config import effective, own_config
-from app.admin.scope import creatable_domains, scope_for
+from app.admin.scope import SESSION_KEY, creatable_domains, scope_for
 from app.admin.settings_form import Setting, load, offer_inheritance, save, sister_form
-from app.admin.tenant import tenant_for
+from app.admin.tenant import may_edit_branding, tenant_for
 from app.roles import grant_role
 from app.oauth_server import admin_scopes
 from app.permissions import domains_for, holds_any_grant, may_act_on_user
@@ -402,13 +402,6 @@ PROFILE_FIELDS = ('announcement', 'legal_information', 'contact_email', 'tos_url
 MARKDOWN_FIELDS = ('sidebar', 'about', 'announcement', 'legal_information')
 
 
-def may_edit_branding(domain) -> bool:
-    """Whether the current user may change `domain`'s branding on the Site page."""
-    user_id = current_user.get_id()
-    return user_access('change instance settings', user_id) or \
-        (not domain.is_default and user_access('edit domain branding', user_id, on=domain))
-
-
 def _markdown_html(field: str, text: str) -> str:
     if not text:
         return ''
@@ -629,11 +622,29 @@ def _describe_uses(found: dict) -> str:
     return ', '.join(parts)
 
 
+def may_manage_any_themes(domain) -> bool:
+    """Whether the current user manages `domain`'s custom themes, a domain with a row (CT4)."""
+    return domain.id is not None and may_manage_themes(domain)
+
+
+@bp.route('/themes', methods=['GET'])
+@login_required
+def admin_themes():
+    """The picked domain's themes (MT4)."""
+    tenant = tenant_for(may_manage_any_themes)
+    if tenant is None:
+        return redirect(url_for('auth.permission_denied'))
+    return redirect(url_for('admin.admin_domain_themes', domain_id=tenant.domain.id))
+
+
 @bp.route('/domains/<int:domain_id>/themes', methods=['GET'])
 @login_required
 def admin_domain_themes(domain_id):
-    """A domain's themes (custom themes spec §3.5): the shipped ones, to view and copy, and its own."""
+    """A domain's themes (custom themes spec §3.5): the shipped ones, to view and copy, and its own. The picker here
+    opens another domain's (/admin/themes)."""
     row = _themes_domain(domain_id)
+    session[SESSION_KEY] = row.id   # the page is this domain's: the picker says so, and the other pages follow
+    tenant_for(may_manage_any_themes)
     shipped = [(name, shipped_name(name)) for name in shipped_themes()]
     custom = [(theme, uses(theme)) for theme in custom_themes_for(row.id, include_retired=True)]
     return render_template('admin/domain_themes.html', title=_('Themes: %(domain)s', domain=row.domain), row=row,
@@ -1149,30 +1160,44 @@ def admin_misc():
                            roles_with=roles_with('change instance settings'))
 
 
+# The Chooser page (MT4): how the picked domain appears in the instance chooser, and, for every domain, where the list
+# comes from and whether this server publishes its own
+CHOOSER_SETTINGS = [Setting(name) for name in (
+    'enable_instance_chooser', 'elevator_pitch', 'number_of_admins', 'financial_stability', 'daily_backups')]
+CHOOSER_INSTANCE_WIDE = ('main_instance_list', 'crawl_known_instances')
+
+
+def may_change_settings(domain) -> bool:
+    return user_access('change instance settings', current_user.get_id())
+
+
 @bp.route('/instance_chooser', methods=['GET', 'POST'])
 @login_required
-@permission_required('change instance settings')
 def admin_instance_chooser():
-    form = InstanceChooserForm()
+    """The picked domain's entry in the instance chooser. The list it is shown in is the instance's."""
+    tenant = tenant_for(may_change_settings)
+    if tenant is None:
+        return redirect(url_for('auth.permission_denied'))
+    sister = not tenant.is_first
+    form_class = sister_form(InstanceChooserForm, CHOOSER_SETTINGS, shown_only=CHOOSER_INSTANCE_WIDE) if sister \
+        else InstanceChooserForm
+    form = form_class()
+    if sister:
+        offer_inheritance(form, form_class, CHOOSER_SETTINGS, effective(default_domain()))
     if form.validate_on_submit():
-        set_setting('enable_instance_chooser', form.enable_instance_chooser.data)
-        set_setting('elevator_pitch', form.elevator_pitch.data or '')
-        set_setting('number_of_admins', form.number_of_admins.data)
-        set_setting('financial_stability', form.financial_stability.data)
-        set_setting('daily_backups', form.daily_backups.data)
-        set_setting('main_instance_list', form.main_instance_list.data or 'piefed.social')
-        set_setting('crawl_known_instances', form.crawl_known_instances.data)
+        save(form, form_class, CHOOSER_SETTINGS, tenant.target(), sister)
+        if not sister:
+            set_setting('main_instance_list', form.main_instance_list.data or 'piefed.social')
+            set_setting('crawl_known_instances', form.crawl_known_instances.data)
+        db.session.commit()
         flash(_('Settings saved. It might take up to 24 hours before other instances show your changes.'))
     elif request.method == 'GET':
-        form.enable_instance_chooser.data = get_setting('enable_instance_chooser', False)
-        form.elevator_pitch.data = get_setting('elevator_pitch', '')
-        form.number_of_admins.data = get_setting('number_of_admins', 0)
-        form.financial_stability.data = get_setting('financial_stability', False)
-        form.daily_backups.data = get_setting('daily_backups', False)
+        load(form, form_class, CHOOSER_SETTINGS, tenant.stored(), sister, FIRST_DEFAULTS)
         form.main_instance_list.data = get_setting('main_instance_list', 'piefed.social')
         form.crawl_known_instances.data = get_setting('crawl_known_instances', False)
-
-    return render_template('admin/instance_chooser.html', title=_('Misc settings'), form=form,
+    editable = {setting.field for setting in CHOOSER_SETTINGS} | (set() if sister else set(CHOOSER_INSTANCE_WIDE))
+    return render_template('admin/instance_chooser.html', title=_('Misc settings'), form=form, tenant=tenant,
+                           editable=editable, inherited=tenant.inherited(), instance_wide=set(CHOOSER_INSTANCE_WIDE),
                            roles_with=roles_with('change instance settings'))
 
 
