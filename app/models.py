@@ -6445,7 +6445,20 @@ SETTING_COLUMNS = (
     'allow_default_user_add_remote_community', 'allow_video_file_uploads', 'allow_audio_file_uploads',
     'max_video_upload_bytes', 'max_audio_upload_bytes', 'max_album_images', 'redirect_policy',
     'enable_instance_chooser', 'elevator_pitch', 'number_of_admins', 'financial_stability', 'daily_backups')
-FIRST_DEFAULTS.update(dict.fromkeys(SETTING_COLUMNS))
+# What each reader took when the settings key was missing: the first domain's value until an admin sets one. The first
+# domain's row holds a value for each (MT3), so no reader's default is ever the one that decides.
+SETTING_DEFAULTS = {
+    'logo_192': '', 'logo_512': '', 'announcement': '', 'announcement_html': '', 'registration_approved_email': '',
+    'email_verification': True, 'captcha_enabled': True, 'choose_topics': True, 'filter_selection': True,
+    'auto_decline_countries': '', 'nsfw_country_restriction': '', 'referral_generators': 'admins',
+    'referral_max_per_code': 0, 'referral_max_per_user': 0, 'meme_comms_low_quality': False, 'public_modlog': False,
+    'enable_report_em_dash_replies': True, 'limit_one_em_report_per_user': False, 'ban_posts': False,
+    'allow_default_user_add_remote_community': True, 'allow_video_file_uploads': 'no', 'allow_audio_file_uploads': 'no',
+    'max_video_upload_bytes': 524288000, 'max_audio_upload_bytes': 209715200, 'max_album_images': 4,
+    'redirect_policy': 'same_origin', 'enable_instance_chooser': False, 'elevator_pitch': '', 'number_of_admins': 0,
+    'financial_stability': False, 'daily_backups': False}
+assert set(SETTING_DEFAULTS) == set(SETTING_COLUMNS)
+FIRST_DEFAULTS.update(SETTING_DEFAULTS)
 
 # The columns a sister domain inherits from the first domain when it leaves them NULL (or '')
 TENANT_COLUMNS = tuple(name for name in FIRST_DEFAULTS if name not in OWN_COLUMNS)

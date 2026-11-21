@@ -109,7 +109,7 @@ def test_who_may_generate(people, setting, allowed):
 
 
 def test_the_default_is_admins_only(people):
-    assert get_setting('referral_generators', None) is None
+    assert get_setting('referral_generators', None) == 'admins'   # the first domain's row holds the default
     assert may_generate(people['admin']) is True
     assert may_generate(people['staff']) is False
 
@@ -645,7 +645,7 @@ def test_misc_ignores_an_unknown_generator_value(app, admin_client):
     payload.update({'submit': 'Save', 'csrf_token': admin_client.token, 'referral_generators': 'everyone'})
     with patch('app.admin.routes.render_template', return_value='rendered'):
         admin_client.post('/admin/misc', data=payload)
-    assert get_setting('referral_generators', None) is None
+    assert get_setting('referral_generators', None) == 'admins'   # the first domain's row holds the default
 
 
 def test_the_admin_referral_list(app, admin_client, people):

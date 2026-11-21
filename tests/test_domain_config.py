@@ -15,7 +15,7 @@ from sqlalchemy import event, inspect, text
 
 from app import cache, db
 from app.domain_config import _CHANGED as CHANGED, SiteView, effective, own_config, resolve, site_view
-from app.models import FIRST_DEFAULTS, OWN_COLUMNS, SETTING_COLUMNS, TENANT_COLUMNS, DomainConfig, Settings, Site, \
+from app.models import FIRST_DEFAULTS, OWN_COLUMNS, SETTING_COLUMNS, SETTING_DEFAULTS, TENANT_COLUMNS, DomainConfig, Settings, Site, \
     SiteDomain, first_config
 from app.storefront import clear_domain_cache, default_domain, domain_by_id, domain_rows
 from app.utils import get_setting, get_site_as_dict, set_setting
@@ -386,8 +386,73 @@ def test_a_domain_setting_is_the_requests_domains(app, site):
     assert get_setting('announcement') == 'First news'   # outside a request: the first domain's
 
 
-def test_an_unset_domain_setting_is_the_callers_default(site):
+def test_the_first_domains_row_holds_each_readers_default(site):
+    """MT3: no NULL on the first domain's row means anything, so no reader's own default decides."""
+    assert {name: getattr(first_config(), name) for name in SETTING_COLUMNS} == SETTING_DEFAULTS
+    assert get_setting('elevator_pitch', 'fallback') == ''
+
+
+def test_a_null_on_the_first_domains_row_is_still_the_callers_default(site):
+    first_config().elevator_pitch = None
+    db.session.commit()
     assert get_setting('elevator_pitch', 'fallback') == 'fallback'
+
+
+def test_every_reader_takes_the_same_default(app):
+    """Each `get_setting(<a domain's setting>, <default>)` in the app passes SETTING_DEFAULTS' value, so the value the
+    first domain's row starts with is the one every reader took before."""
+    import ast
+    import app.constants as constants
+    import app.referral as referral
+    import app.utils as utils
+    names = {**vars(constants), **vars(referral), **vars(utils)}
+    seen = 0
+    for path in Path(__file__).parent.parent.glob('app/**/*.py'):
+        for call in ast.walk(ast.parse(path.read_text())):
+            if not (isinstance(call, ast.Call) and getattr(call.func, 'id', getattr(call.func, 'attr', None)) == 'get_setting'
+                    and call.args and len(call.args) == 2):
+                continue
+            key = call.args[0]
+            key = key.value if isinstance(key, ast.Constant) else names.get(getattr(key, 'id', None))
+            if key not in SETTING_DEFAULTS or key in ('announcement_html',):   # its default is a nested get_setting
+                continue
+            default = call.args[1]
+            value = default.value if isinstance(default, ast.Constant) else names[default.id]
+            assert value == SETTING_DEFAULTS[key], f'{path}:{call.lineno}: {key} defaults to {value!r}'
+            seen += 1
+    assert seen > 40
+
+
+@pytest.fixture
+def values_migration(app, db_session):
+    path = next(Path(__file__).parent.parent.glob('migrations/versions/e4a9c7d2b6f1_domain_config_first_values.py'))
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def test_the_values_migration_fills_the_first_domains_nulls_with_the_readers_defaults(site, values_migration):
+    assert values_migration.DEFAULTS == SETTING_DEFAULTS
+    first_config()
+    db.session.add(SiteDomain(domain=ONION, scheme='http', federates=False))
+    db.session.commit()
+    sister = db.session.query(SiteDomain).filter_by(domain=ONION).one().config()
+    db.session.commit()
+    nulls = ', '.join(name + ' = NULL' for name in SETTING_COLUMNS)
+    db.session.execute(text(f'UPDATE domain_config SET {nulls}'))
+    db.session.execute(text("UPDATE domain_config SET announcement = 'Kept', ban_posts = true WHERE site_domain_id IS NULL"))
+    connection = db.session.connection()
+    with Operations.context(MigrationContext.configure(connection)):
+        values_migration.upgrade()
+        first = connection.execute(text('SELECT * FROM domain_config WHERE site_domain_id IS NULL')).mappings().one()
+        assert {name: first[name] for name in SETTING_COLUMNS} == {**SETTING_DEFAULTS, 'announcement': 'Kept',
+                                                                   'ban_posts': True}
+        own = connection.execute(text('SELECT * FROM domain_config WHERE id = :id'), {'id': sister.id}).mappings().one()
+        assert all(own[name] is None for name in SETTING_COLUMNS)   # a sister's NULL is the first domain's
+        values_migration.downgrade()   # nothing to undo: each value is what its reader took for the NULL
+        assert connection.execute(text('SELECT announcement FROM domain_config WHERE site_domain_id IS NULL')).scalar() == 'Kept'
+    db.session.rollback()
 
 
 def test_setting_a_domain_setting_writes_the_first_domains_row_not_a_key(site):
@@ -414,9 +479,10 @@ def settings_migration():
 
 @pytest.fixture
 def settings_schema(app, db_session):
-    """The schema before migration c3f7a1e9d5b8, the first domain's row there."""
+    """The schema before migration c3f7a1e9d5b8, the first domain's row there as it was then: no setting's value."""
     first_config()
     db.session.commit()
+    db.session.execute(text(f'UPDATE domain_config SET {", ".join(name + " = NULL" for name in SETTING_COLUMNS)}'))
     migration = settings_migration()
     connection = db.session.connection()
     try:

@@ -4,6 +4,7 @@
     {% extends "base.html" -%}
 {% endif -%}
 {% from 'bootstrap5/form.html' import render_field, render_form %}
+{% from 'admin/_tenant_field.html' import tenant_field %}
 {% set active_child = 'admin_misc' %}
 
 {% block extra_css %}
@@ -16,86 +17,99 @@
 <br>
 <div class="row">
     <div class="col">
-        <h1>{{ _('Misc settings') }}</h1>
+        <h1>{{ _('Misc settings') if tenant.is_first else _('Misc settings: %(domain)s', domain=tenant.domain.domain) }}</h1>
+        {% macro f(field) %}{{ tenant_field(field, tenant, editable, inherited, instance_wide, needs) }}{% endmacro %}
         <form method="post">
-            {{ form.csrf_token() }}
+            {% if form.csrf_token %}{{ form.csrf_token() }}{% endif %}
+            <input type="hidden" name="domain" value="{{ tenant.id }}">{# a save writes this domain, whatever is picked since #}
             <h3>{{ _('Content settings') }}</h3>
-            {{ render_field(form.additional_js) }}
+            {{ f(form.additional_js) }}
             <p class="small field_hint">{{ _('JavaScript in this field will be added to every page. Do not include &lt;script&gt; tags.') }}</p>
-            {{ render_field(form.default_filter) }}
+            {{ f(form.default_filter) }}
             <p class="small field_hint">{{ _('This is for anonymous users. Logged-in users always default to Subscribed') }}</p>
-            {{ render_field(form.oauth_admin_role) }}
-            {{ render_field(form.enable_downvotes) }}
-            {{ render_field(form.enable_gif_reply_rep_decrease) }}
-            {{ render_field(form.enable_chan_image_filter) }}
-            {{ render_field(form.enable_this_comment_filter) }}
-            {{ render_field(form.meme_comms_low_quality) }}
-            {{ render_field(form.allow_local_image_posts) }}
-            {{ render_field(form.max_album_images) }}
-            {{ render_field(form.allow_video_file_uploads) }}
-            {{ render_field(form.max_video_upload_mb) }}
+            {{ f(form.oauth_admin_role) }}
+            {{ f(form.enable_downvotes) }}
+            {{ f(form.enable_gif_reply_rep_decrease) }}
+            {{ f(form.enable_chan_image_filter) }}
+            {{ f(form.enable_this_comment_filter) }}
+            {{ f(form.meme_comms_low_quality) }}
+            {{ f(form.allow_local_image_posts) }}
+            {{ f(form.max_album_images) }}
+            {{ f(form.allow_video_file_uploads) }}
+            {{ f(form.max_video_upload_mb) }}
             <p class="small field_hint"><a href="{{ url_for('admin.admin_video_hls') }}">{{ _('Offer videos as HLS streams too') }}</a></p>
-            {{ render_field(form.allow_audio_file_uploads) }}
-            {{ render_field(form.max_audio_upload_mb) }}
-            {{ render_field(form.redirect_policy) }}
+            {{ f(form.allow_audio_file_uploads) }}
+            {{ f(form.max_audio_upload_mb) }}
+            {{ f(form.redirect_policy) }}
             <p class="small field_hint">{{ _('Controls which servers a "go back" link, a Referer header or a ?next= parameter may send someone to. "Any server at all" is DANGEROUS: it lets anyone craft a link that starts on this site and silently lands the visitor on a phishing page, which is exactly what the safe options prevent. Leave it on "This server only" unless you have a specific reason not to.') }}</p>
-            {{ render_field(form.enable_nsfw) }}
-            {{ render_field(form.enable_nsfl) }}
-            {{ render_field(form.nsfw_country_restriction) }}
+            {{ f(form.enable_nsfw) }}
+            {{ f(form.enable_nsfl) }}
+            {{ f(form.nsfw_country_restriction) }}
             <p class="small field_hint">{{ _('Use 2-letter country codes, one per line, e.g. GB. Probably not necessary if NSFW communities is off.') }}</p>
-            {{ render_field(form.community_creation_admin_only) }}
-            {{ render_field(form.allow_default_user_add_remote_community) }}
-            {{ render_field(form.reports_email_admins) }}
+            {{ f(form.community_creation_admin_only) }}
+            {{ f(form.allow_default_user_add_remote_community) }}
+            {{ f(form.reports_email_admins) }}
             <div id="tom_select">
-                {{ render_field(form.language_id) }}
+                {{ f(form.language_id) }}
             </div>
             <hr>
             <h3>{{ _('Registration') }}</h3>
-            {{ render_field(form.registration_mode, data_referral_prompt=_('Enter your referral code')) }}
-            {{ render_field(form.application_question) }}
+            {% if form.registration_mode %}
+            {{ render_field(form.registration_mode, data_referral_prompt=_('Enter your referral code'), disabled=('registration_mode' not in editable)) }}
+            {% endif %}
+            {% if form.registration %}
+            {# A sister domain's own: who may join it, and who may read it (plan S4, S24), never the first domain's #}
+            <p>{{ _("Who may join this domain, and who may read it, are this domain's own: they are never the first domain's.") }}</p>
+            {{ f(form.registration) }}
+            {{ f(form.referral_codes) }}
+            {{ f(form.registration_offer_id) }}
+            {{ f(form.lapse_grace_days) }}
+            {{ f(form.login_required) }}
+            {% endif %}
+            {{ f(form.application_question) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
-            {{ render_field(form.referral_generators) }}
-            {{ render_field(form.referral_max_per_code) }}
-            {{ render_field(form.referral_max_per_user) }}
+            {{ f(form.referral_generators) }}
+            {{ f(form.referral_max_per_code) }}
+            {{ f(form.referral_max_per_user) }}
             <p class="small field_hint">{{ _('Used when the registration mode is "Referral code". Admins are exempt from both limits.') }}</p>
             <script type="module" src="{{ url_for('static', filename='js/admin_misc_referral.js', changed=getmtime('js/admin_misc_referral.js')) }}" nonce="{{ nonce }}"></script>
-            {{ render_field(form.email_verification) }}
-            {{ render_field(form.captcha_enabled) }}
-            {{ render_field(form.choose_topics) }}
-            {{ render_field(form.filter_selection) }}
-            {{ render_field(form.auto_decline_countries) }}
+            {{ f(form.email_verification) }}
+            {{ f(form.captcha_enabled) }}
+            {{ f(form.choose_topics) }}
+            {{ f(form.filter_selection) }}
+            {{ f(form.auto_decline_countries) }}
             <p class="small field_hint">{{ _('Use 2-letter country codes, one per line. Requires IPinfo API or a Country information header set.') }}</p>
-            {{ render_field(form.auto_decline_referrers) }}
-            {{ render_field(form.ban_check_servers) }}
+            {{ f(form.auto_decline_referrers) }}
+            {{ f(form.ban_check_servers) }}
             <p class="small field_hint">{{ _('PieFed instances only. One per line, no https:// on the front.') }}</p>
-            {{ render_field(form.registration_approved_email) }}
+            {{ f(form.registration_approved_email) }}
             <p class="small field_hint">{{ _('This will be sent after their application is approved. Use markdown.') }}</p>
-            {{ render_field(form.ban_posts) }}
+            {{ f(form.ban_posts) }}
             <hr>
             <h3>{{ _('Other random stuff') }}</h3>
-            {{ render_field(form.cache_remote_images_locally) }}
+            {{ f(form.cache_remote_images_locally) }}
             <p class="small field_hint">{{ _('Turn this off to save storage and reduce server load. Increases load on clients.') }}</p>
-            {{ render_field(form.enable_report_em_dash_replies) }}
+            {{ f(form.enable_report_em_dash_replies) }}
             <ul>
                 <li>
-                    {{ render_field(form.limit_one_em_report_per_user) }}
+                    {{ f(form.limit_one_em_report_per_user) }}
                 </li>
             </ul>
-            {{ render_field(form.read_posts_cutoff) }}
-            {{ render_field(form.onion_pow_difficulty) }}
-            {{ render_field(form.remote_image_cache_days) }}
-            {{ render_field(form.onion_media_cache_mb) }}
-            {{ render_field(form.onion_media_image_max_mb) }}
-            {{ render_field(form.onion_media_av_max_mb) }}
-            {{ render_field(form.log_activitypub_json) }}
-            {{ render_field(form.public_modlog) }}
-            {{ render_field(form.private_instance) }}
-            {{ render_field(form.honeypot) }}
-            {{ render_field(form.show_inoculation_block) }}
+            {{ f(form.read_posts_cutoff) }}
+            {{ f(form.onion_pow_difficulty) }}
+            {{ f(form.remote_image_cache_days) }}
+            {{ f(form.onion_media_cache_mb) }}
+            {{ f(form.onion_media_image_max_mb) }}
+            {{ f(form.onion_media_av_max_mb) }}
+            {{ f(form.log_activitypub_json) }}
+            {{ f(form.public_modlog) }}
+            {% if form.private_instance %}{{ f(form.private_instance) }}{% endif %}
+            {{ f(form.honeypot) }}
+            {{ f(form.show_inoculation_block) }}
 
             {{ render_field(form.submit) }}
         </form>
-        {% if current_user.id == 1 %}
+        {% if current_user.id == 1 and tenant.is_first %}
         <hr class="bg-danger border-4 border-top border-danger" />
         <div class="accordion" id="deleteAccordion">
           <div class="accordion-item">

@@ -716,9 +716,9 @@ class TestDomainSettings:
         return admin
 
     def save(self, env, row, **data):
-        fields = {'registration': 'anyone', 'registration_offer_id': '0', 'lapse_grace_days': '7', 'submit': 'Save',
-                  'csrf_token': real_csrf(env), **data}
-        return env.client.post(f'/admin/domains/{row.id}/settings', data=fields, follow_redirects=True).get_data(as_text=True)
+        fields = {'domain': str(row.id), 'registration': 'anyone', 'registration_offer_id': '0', 'lapse_grace_days': '7',
+                  'submit': 'Save', 'csrf_token': real_csrf(env), **data}
+        return env.client.post('/admin/misc', data=fields, follow_redirects=True).get_data(as_text=True)
 
     def test_a_domain_can_be_made_paid_and_private(self, env, admin):
         self.save(env, env.public, registration='paid', registration_offer_id=str(env.offer.id), login_required='y',
@@ -744,11 +744,18 @@ class TestDomainSettings:
 
     def test_the_form_opens(self, env, admin, monkeypatch):
         monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
-        assert 'Who may register' in env.client.get(f'/admin/domains/{env.public.id}/settings').get_data(as_text=True)
+        assert 'Who may register' in env.client.get(f'/admin/misc?domain={env.public.id}').get_data(as_text=True)
 
-    def test_the_default_domain_has_no_such_page(self, env, admin):
+    def test_the_old_settings_address_opens_the_misc_page_with_the_domain_picked(self, env, admin):
+        response = env.client.get(f'/admin/domains/{env.public.id}/settings')
+        assert response.status_code == 302 and response.headers['Location'].endswith(f'/admin/misc?domain={env.public.id}')
+
+    def test_the_first_domain_has_no_such_fields(self, env, admin):
+        """The first domain's registration and login are its registration mode and private instance, on its own page,
+        which `manage domains` alone does not open: it opens a sister's instead."""
         default = SiteDomain.query.filter_by(is_default=True).one()
-        assert env.client.get(f'/admin/domains/{default.id}/settings').status_code == 404
+        body = env.client.get(f'/admin/misc?domain={default.id}').get_data(as_text=True)
+        assert f'name="domain" value="{default.id}"' not in body
 
     def test_paid_needs_an_offer(self, env, admin):
         body = self.save(env, env.public, registration='paid')

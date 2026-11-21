@@ -1,18 +1,24 @@
 {# One field of a per-domain settings page (spec 2026-11-20-multitenant-domain-config MT4). On a sister domain a blank
-   field is the first domain's value, shown as its placeholder; a field the user may not change here is shown, not
-   editable. #}
+   field is the first domain's value, shown as its placeholder (a choice names it); a field the user may not change here
+   is shown, not editable; an instance-wide field says it applies to every domain, and is changed on the first
+   domain's page only. #}
 {% from 'bootstrap5/form.html' import render_field %}
-{% macro tenant_field(field, tenant, editable, inherited) -%}
+{% macro tenant_field(field, tenant, editable, inherited, instance_wide=(), needs={}) -%}
+{% set texts = ('StringField', 'TextAreaField', 'EmailField') -%}
 {% set options = {} -%}
 {% if field.name not in editable %}{% set _unused = options.update({'disabled': true}) %}{% endif -%}
-{% if not tenant.is_first and inherited.get(field.name) and field.type in ('StringField', 'TextAreaField', 'EmailField') -%}
+{% if not tenant.is_first and field.name not in instance_wide and inherited.get(field.name) and field.type in texts -%}
     {% set _unused = options.update({'placeholder': inherited[field.name]|string|truncate(200)}) -%}
 {% endif -%}
 {{ render_field(field, **options) }}
-{% if not tenant.is_first and field.type in ('StringField', 'TextAreaField', 'EmailField') -%}
+{% if field.name in instance_wide -%}
+<p class="small field_hint">{{ _('Applies to every domain.') }}{% if not tenant.is_first %} {{ _("It is changed on the first domain's page.") }}{% endif %}</p>
+{% else -%}
+{% if not tenant.is_first and field.type in texts -%}
 <p class="small field_hint">{{ _("Left blank, this is the first domain's.") }}</p>
 {% endif -%}
 {% if field.name not in editable -%}
-<p class="small field_hint">{{ _('Changing this needs the change instance settings permission.') }}</p>
+<p class="small field_hint">{{ _('Changing this needs the %(permission)s permission.', permission=needs.get(field.name, 'change instance settings')) }}</p>
+{% endif -%}
 {% endif -%}
 {%- endmacro %}

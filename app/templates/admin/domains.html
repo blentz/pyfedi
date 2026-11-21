@@ -53,7 +53,7 @@
                             <a href="{{ url_for('admin.admin_site', domain=row.id) }}">{{ _('Branding') }}</a> |
                             <a href="{{ url_for('admin.admin_domain_sidebar', domain_id=row.id) }}">{{ _('Sidebar') }}</a>
                             {%- if can_manage %} |
-                            <a href="{{ url_for('admin.admin_domain_settings', domain_id=row.id) }}">{{ _('Settings') }}</a> |
+                            <a href="{{ url_for('admin.admin_misc', domain=row.id) }}">{{ _('Settings') }}</a> |
                             <a href="#" data-url="{{ url_for('admin.admin_domains_delete', domain_id=row.id) }}" class="confirm_first send_post">{{ _('Delete') }}</a>
                             {%- endif %}
                             {% endif %}

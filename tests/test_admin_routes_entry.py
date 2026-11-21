@@ -730,7 +730,7 @@ def test_closing_the_instance_without_an_announcement_says_nothing(app, db_sessi
     db.session.expire_all()
     assert db.session.get(Site, 1).registration_mode == 'Open'
     assert redis_double.get('pause_federation') is None
-    assert get_setting('announcement', 'unset') == 'unset'
+    assert get_setting('announcement', 'unset') == ''   # the first domain's row holds none
 
 
 def test_the_misc_settings_create_a_site_row_when_there_is_none(app, db_session):

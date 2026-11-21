@@ -59,19 +59,20 @@ from app.community.routes import do_subscribe
 from app.constants import REPORT_STATE_NEW, REPORT_STATE_ESCALATED, POST_STATUS_REVIEWING
 from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
-from app.domain_config import own_config
+from app.domain_config import effective, own_config
 from app.admin.scope import creatable_domains, scope_for
+from app.admin.settings_form import Setting, load, offer_inheritance, save, sister_form
 from app.admin.tenant import tenant_for
 from app.roles import grant_role
 from app.oauth_server import admin_scopes
 from app.permissions import domains_for, holds_any_grant, may_act_on_user
 from app.federation_urls import object_base
 from app.complimentary import complimentary_of
-from app.models import AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
+from app.models import FIRST_DEFAULTS, AllowedInstances, BannedInstances, ActivityPubLog, CronJobLog, utcnow, Site, Community, \
     CommunityMember, \
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainConfig, Referral, CustomTheme, CustomThemeTemplate
-from app.referral import DEFAULT_GENERATORS, GENERATOR_CHOICES, GENERATORS_SETTING, MAX_PER_CODE_SETTING, MAX_PER_USER_SETTING
+from app.referral import GENERATOR_CHOICES
 from app.storefront import clear_domain_cache, current_storefront, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
 from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
@@ -79,8 +80,7 @@ from app.shared.community import hold_community_text
 from app.shared.tasks import task_selector
 from app.shared.upload import process_file_delete
 from app.translation import LibreTranslateAPI
-from app.utils import canonical_host, captcha_enabled, render_template, permission_required, permission_held_anywhere, admin_required, set_setting, get_setting, stored_setting, gibberish, markdown_to_html, \
-    max_album_images, \
+from app.utils import canonical_host, render_template, permission_required, permission_held_anywhere, admin_required, set_setting, get_setting, stored_setting, gibberish, markdown_to_html, \
     moderating_communities, joined_communities, finalize_user_setup, theme_choices, human_filesize, blocked_phrases, blocked_referrers, \
     topic_tree, languages_for_form, menu_topics, ensure_directory_exists, add_to_modlog, get_request, \
     LEMMYVERSE_MAX_BYTES, LEMMYVERSE_MAX_SECONDS, PAGE_MAX_BYTES, \
@@ -88,7 +88,7 @@ from app.utils import canonical_host, captcha_enabled, render_template, permissi
     community_membership, retrieve_image_hash, posts_with_blocked_images, user_access, reported_posts, user_notes, \
     decrement_unread_counts, \
     safe_order_by, get_task_session, patch_db_session, low_value_reposters, moderating_communities_ids, \
-    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, roles_with, sql_file, sanitize_svg, REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN, sanitise_posting_warning, inbox_domain
+    instance_allowed, trusted_instance_ids, get_emoji_replacements, get_site_as_dict, roles_with, sql_file, sanitize_svg, sanitise_posting_warning, inbox_domain
 from app.admin import bp
 import app as app_pkg
 import time
@@ -574,33 +574,10 @@ def admin_domains_delete(domain_id):
 
 @bp.route('/domains/<int:domain_id>/settings', methods=['GET', 'POST'])
 @login_required
-@permission_required('manage domains')
 def admin_domain_settings(domain_id):
-    """Who may join a sister domain and who may read it. The first domain's are the site settings' (plan S4, S24)."""
+    """Who may join a sister domain, and who may read it, are on its Misc page (MT4)."""
     row = db.session.get(SiteDomain, domain_id) or abort(404)
-    if row.is_default:
-        abort(404)
-    form = DomainSettingsForm(obj=row)
-    usable = [offer for offer in offers_on(row.id, row.is_onion) if offer.kind == 'subscription']
-    form.registration_offer_id.choices = [(0, _('None'))] + [(offer.id, offer.title) for offer in usable]
-    if row.registration_offer_id is None and not form.is_submitted():
-        form.registration_offer_id.data = 0
-    if form.validate_on_submit():
-        refusal = domain_settings_refusal(row, form, {offer.id for offer in usable},
-                                          user_access('manage monetization', current_user.get_id()))
-        if refusal is not None:
-            flash(refusal, 'error')
-        else:
-            row.registration = form.registration.data
-            row.referral_codes = form.referral_codes.data
-            row.registration_offer_id = form.registration_offer_id.data or None
-            row.lapse_grace_days = form.lapse_grace_days.data
-            row.login_required = form.login_required.data
-            db.session.commit()
-            clear_domain_cache()
-            flash(_('Domain settings saved.'))
-            return redirect(url_for('admin.admin_domains'))
-    return render_template('admin/domain_settings.html', title=_('Domain settings'), form=form, row=row)
+    return redirect(url_for('admin.admin_misc', domain=row.id))
 
 
 def domain_settings_refusal(row: SiteDomain, form: DomainSettingsForm, usable_offers: set, may_choose_offer: bool) -> str | None:
@@ -1017,19 +994,112 @@ def admin_domain_branding(domain_id):
     return redirect(url_for('admin.admin_site', domain=row.id))
 
 
+# The Misc page (MT4). MISC_SETTINGS are each domain's. FIRST_ONLY are the first domain's registration mode and private
+# instance: a sister has its own registration and login instead (DOMAIN_JOINING, never inherited) until phase 3 makes
+# them one. INSTANCE_WIDE apply to every domain: shown on a sister's page, changed on the first domain's.
+MISC_SETTINGS = [Setting(name) for name in (
+    'enable_downvotes', 'enable_gif_reply_rep_decrease', 'enable_chan_image_filter', 'enable_this_comment_filter',
+    'allow_local_image_posts', 'enable_nsfw', 'enable_nsfl', 'community_creation_admin_only', 'reports_email_admins',
+    'application_question', 'auto_decline_referrers', 'show_inoculation_block', 'additional_js', 'default_filter',
+    'language_id', 'allow_default_user_add_remote_community', 'meme_comms_low_quality', 'public_modlog',
+    'email_verification', 'captcha_enabled', 'referral_generators', 'referral_max_per_code', 'referral_max_per_user',
+    'choose_topics', 'filter_selection', 'registration_approved_email', 'allow_video_file_uploads',
+    'allow_audio_file_uploads', 'redirect_policy', 'enable_report_em_dash_replies', 'limit_one_em_report_per_user',
+    'ban_posts', 'max_album_images')] + [
+    Setting('nsfw_country_restriction', upper=True), Setting('auto_decline_countries', upper=True),
+    Setting('max_video_upload_mb', 'max_video_upload_bytes', 1048576),
+    Setting('max_audio_upload_mb', 'max_audio_upload_bytes', 1048576)]
+FIRST_ONLY = ('registration_mode', 'private_instance')
+INSTANCE_WIDE = ('oauth_admin_role', 'log_activitypub_json', 'honeypot', 'ban_check_servers',
+                 'cache_remote_images_locally', 'read_posts_cutoff', 'onion_pow_difficulty', 'remote_image_cache_days',
+                 'onion_media_cache_mb', 'onion_media_image_max_mb', 'onion_media_av_max_mb')
+DOMAIN_JOINING = ('registration', 'referral_codes', 'registration_offer_id', 'lapse_grace_days', 'login_required')
+
+
+def may_edit_misc(domain) -> bool:
+    """Whether the current user may change something on `domain`'s Misc page: its settings, or, on a sister, who may
+    join it and read it."""
+    user_id = current_user.get_id()
+    return user_access('change instance settings', user_id) or \
+        (not domain.is_default and user_access('manage domains', user_id))
+
+
+def _sister_misc_form(joins: bool) -> type:
+    """A sister's Misc form: its settings able to be the first domain's, the instance-wide ones shown only, and who may
+    join it and read it, which only `manage domains` changes (shown only to anyone else)."""
+    return sister_form(SiteMiscForm, MISC_SETTINGS, shown_only=INSTANCE_WIDE + (() if joins else DOMAIN_JOINING),
+                       removed=FIRST_ONLY, added={name: getattr(DomainSettingsForm, name) for name in DOMAIN_JOINING})
+
+
+def _load_instance_wide(form, site) -> None:
+    form.log_activitypub_json.data = site.log_activitypub_json
+    form.honeypot.data = site.honeypot
+    form.remote_image_cache_days.data = site.remote_image_cache_days
+    form.ban_check_servers.data = get_setting('ban_check_servers', '')
+    form.cache_remote_images_locally.data = get_setting('cache_remote_images_locally', True)
+    form.read_posts_cutoff.data = get_setting('read_posts_cutoff', 180)
+    form.onion_pow_difficulty.data = pow_difficulty()
+    form.onion_media_cache_mb.data = get_setting('onion_media_cache_bytes', DEFAULT_CACHE_BYTES) // 1048576
+    form.onion_media_image_max_mb.data = get_setting('onion_media_image_max_bytes', 20971520) // 1048576
+    form.onion_media_av_max_mb.data = get_setting('onion_media_av_max_bytes', 524288000) // 1048576
+    role = admin_scopes.admin_role()
+    form.oauth_admin_role.data = role.id if role is not None else None
+
+
+def _save_instance_wide(form, site) -> None:
+    if form.oauth_admin_role.data:
+        set_setting(admin_scopes.SETTING, form.oauth_admin_role.data)
+    site.log_activitypub_json = form.log_activitypub_json.data
+    site.honeypot = form.honeypot.data
+    if form.remote_image_cache_days.data is not None:
+        site.remote_image_cache_days = form.remote_image_cache_days.data
+    set_setting('ban_check_servers', form.ban_check_servers.data)
+    set_setting('cache_remote_images_locally', form.cache_remote_images_locally.data)
+    set_setting('read_posts_cutoff', int(form.read_posts_cutoff.data))
+    if form.onion_pow_difficulty.data is not None:
+        set_setting(POW_DIFFICULTY_SETTING, form.onion_pow_difficulty.data)
+    if form.onion_media_cache_mb.data is not None:
+        set_setting('onion_media_cache_bytes', form.onion_media_cache_mb.data * 1048576)
+    if form.onion_media_image_max_mb.data is not None:
+        set_setting('onion_media_image_max_bytes', form.onion_media_image_max_mb.data * 1048576)
+    if form.onion_media_av_max_mb.data is not None:
+        set_setting('onion_media_av_max_bytes', form.onion_media_av_max_mb.data * 1048576)
+
+
 @bp.route('/misc', methods=['GET', 'POST'])
 @login_required
-@permission_required('change instance settings')
 def admin_misc():
-    form = SiteMiscForm()
+    """The picked domain's miscellaneous settings (spec 2026-11-20-multitenant-domain-config MT4), and on a sister who
+    may join it and who may read it (plan S4, S24). The instance-wide ones are changed on the first domain's page."""
+    tenant = tenant_for(may_edit_misc)
+    if tenant is None:
+        return redirect(url_for('auth.permission_denied'))
+    user_id = current_user.get_id()
+    whole = user_access('change instance settings', user_id)
+    sister = not tenant.is_first
+    joins = sister and user_access('manage domains', user_id)
+    form_class = _sister_misc_form(joins) if sister else SiteMiscForm
+    row = db.session.get(SiteDomain, tenant.domain.id) if sister else None
+    form = form_class(obj=row)   # who may join a sister and read it: one a post leaves out keeps the row's
     close_form = CloseInstanceForm()
     site = db.session.get(Site, 1)
     if site is None:
         site = Site()
+    settings = MISC_SETTINGS if whole else []
+    editable = {setting.field for setting in settings} | \
+        (set(FIRST_ONLY + INSTANCE_WIDE) if whole and not sister else set()) | (set(DOMAIN_JOINING) if joins else set())
     form.language_id.choices = select_choices(languages_for_form(all_languages=True))
     form.oauth_admin_role.choices = select_choices([(0, ADMIN_SCOPE_ROLE_DEFAULT)] +
                                                    [(role.id, role.name) for role in Role.query.order_by(Role.name)])
-    if close_form.close_submit.data and close_form.validate():
+    usable = []
+    if sister:
+        usable = [offer for offer in offers_on(row.id, row.is_onion) if offer.kind == 'subscription']
+        form.registration_offer_id.choices = select_choices([(0, _('None'))] + [(offer.id, offer.title) for offer in usable])
+        if form.registration_offer_id.data is None:   # none, as the row's NULL; a post that leaves it out keeps it
+            form.registration_offer_id.data = 0
+        offer_inheritance(form, form_class, MISC_SETTINGS, effective(default_domain()))
+    stored = tenant.stored()
+    if not sister and close_form.close_submit.data and close_form.validate():
         app_pkg.redis_client.set('pause_federation', '666', ex=86400 * 365 * 10)
         site.registration_mode = 'Closed'
         # No `if close_form.announcement.data:` guard -- announcement carries
@@ -1039,145 +1109,43 @@ def admin_misc():
         db.session.commit()
         flash(_('Settings saved.'))
     elif form.validate_on_submit():
-        if form.oauth_admin_role.data:
-            set_setting(admin_scopes.SETTING, form.oauth_admin_role.data)
-        site.enable_downvotes = form.enable_downvotes.data
-        site.enable_gif_reply_rep_decrease = form.enable_gif_reply_rep_decrease.data
-        site.enable_chan_image_filter = form.enable_chan_image_filter.data
-        site.enable_this_comment_filter = form.enable_this_comment_filter.data
-        site.allow_local_image_posts = form.allow_local_image_posts.data
-        site.enable_nsfw = form.enable_nsfw.data
-        site.enable_nsfl = form.enable_nsfl.data
-        site.community_creation_admin_only = form.community_creation_admin_only.data
-        site.reports_email_admins = form.reports_email_admins.data
-        site.registration_mode = form.registration_mode.data
-        site.application_question = form.application_question.data
-        site.auto_decline_referrers = form.auto_decline_referrers.data
-        site.log_activitypub_json = form.log_activitypub_json.data
-        site.show_inoculation_block = form.show_inoculation_block.data
-        site.updated = utcnow()
-        site.additional_js = form.additional_js.data
-        site.default_filter = form.default_filter.data
-        site.private_instance = form.private_instance.data
-        site.language_id = form.language_id.data
-        site.honeypot = form.honeypot.data
-        if site.id is None:
-            db.session.add(site)
-        db.session.commit()
-        cache.delete_memoized(blocked_referrers)
-        cache.delete_memoized(get_site_as_dict)
-        clear_domain_cache()   # its default theme and CSS are the first domain's branding, memoised (app/branding.py)
-        set_setting("allow_default_user_add_remote_community", form.allow_default_user_add_remote_community.data)
-        set_setting('meme_comms_low_quality', form.meme_comms_low_quality.data)
-        set_setting('public_modlog', form.public_modlog.data)
-        set_setting('email_verification', form.email_verification.data)
-        set_setting('captcha_enabled', form.captcha_enabled.data)
-        if form.referral_generators.data in GENERATOR_CHOICES:
-            set_setting(GENERATORS_SETTING, form.referral_generators.data)
-        if form.referral_max_per_code.data is not None:   # blank keeps the current limit, as the upload limits do
-            set_setting(MAX_PER_CODE_SETTING, form.referral_max_per_code.data)
-        if form.referral_max_per_user.data is not None:
-            set_setting(MAX_PER_USER_SETTING, form.referral_max_per_user.data)
-        set_setting('choose_topics', form.choose_topics.data)
-        set_setting('filter_selection', form.filter_selection.data)
-        set_setting('registration_approved_email', form.registration_approved_email.data)
-        set_setting('ban_check_servers', form.ban_check_servers.data)
-        set_setting('nsfw_country_restriction', form.nsfw_country_restriction.data.strip())
-        set_setting('auto_decline_countries', form.auto_decline_countries.data.strip())
-        set_setting('cache_remote_images_locally', form.cache_remote_images_locally.data)
-        set_setting('allow_video_file_uploads', form.allow_video_file_uploads.data)
-        set_setting('allow_audio_file_uploads', form.allow_audio_file_uploads.data)
-        if form.max_video_upload_mb.data is not None:
-            set_setting('max_video_upload_bytes', form.max_video_upload_mb.data * 1048576)
-        if form.max_audio_upload_mb.data is not None:
-            set_setting('max_audio_upload_bytes', form.max_audio_upload_mb.data * 1048576)
-        set_setting(REDIRECT_POLICY_SETTING, form.redirect_policy.data)
-        set_setting('enable_report_em_dash_replies', form.enable_report_em_dash_replies.data)
-        set_setting('limit_one_em_report_per_user', form.limit_one_em_report_per_user.data)
-        set_setting('read_posts_cutoff', int(form.read_posts_cutoff.data))
-        set_setting('ban_posts', form.ban_posts.data)
-        set_setting('max_album_images', int(form.max_album_images.data))
-        if form.onion_pow_difficulty.data is not None:
-            set_setting(POW_DIFFICULTY_SETTING, form.onion_pow_difficulty.data)
-        if form.remote_image_cache_days.data is not None:
-            site.remote_image_cache_days = form.remote_image_cache_days.data
-        if form.onion_media_cache_mb.data is not None:
-            set_setting('onion_media_cache_bytes', form.onion_media_cache_mb.data * 1048576)
-        if form.onion_media_image_max_mb.data is not None:
-            set_setting('onion_media_image_max_bytes', form.onion_media_image_max_mb.data * 1048576)
-        if form.onion_media_av_max_mb.data is not None:
-            set_setting('onion_media_av_max_bytes', form.onion_media_av_max_mb.data * 1048576)
-        flash(_('Settings saved.'))
+        refusal = domain_settings_refusal(row, form, {offer.id for offer in usable},
+                                          user_access('manage monetization', user_id)) if joins else None
+        if refusal is not None:
+            flash(refusal, 'error')
+        else:
+            # A referral generators value not on offer keeps the stored one, as before
+            saved = [setting for setting in settings if setting.field != 'referral_generators' or
+                     form.referral_generators.data in GENERATOR_CHOICES or (sister and not form.referral_generators.data)]
+            if saved:
+                save(form, form_class, saved, tenant.target(), sister)
+            if whole and not sister:
+                site.registration_mode = form.registration_mode.data
+                site.private_instance = form.private_instance.data
+                _save_instance_wide(form, site)
+            if joins:
+                row.registration = form.registration.data
+                row.referral_codes = form.referral_codes.data
+                row.registration_offer_id = form.registration_offer_id.data or None
+                row.lapse_grace_days = form.lapse_grace_days.data
+                row.login_required = form.login_required.data
+            site.updated = utcnow()
+            if site.id is None:
+                db.session.add(site)
+            db.session.commit()   # the commit clears each domain's memoised configuration (app.domain_config)
+            cache.delete_memoized(blocked_referrers)
+            cache.delete_memoized(get_site_as_dict)
+            flash(_('Settings saved.'))
     elif request.method == 'GET':
-        form.enable_downvotes.data = site.enable_downvotes
-        form.enable_gif_reply_rep_decrease.data = site.enable_gif_reply_rep_decrease
-        form.enable_chan_image_filter.data = site.enable_chan_image_filter
-        form.enable_this_comment_filter.data = site.enable_this_comment_filter
-        form.meme_comms_low_quality.data = get_setting('meme_comms_low_quality', False)
-        form.allow_local_image_posts.data = site.allow_local_image_posts
-        form.enable_nsfw.data = site.enable_nsfw
-        form.enable_nsfl.data = site.enable_nsfl
-        form.nsfw_country_restriction.data = get_setting('nsfw_country_restriction', '').upper()
-        form.community_creation_admin_only.data = site.community_creation_admin_only
-        form.allow_default_user_add_remote_community.data = get_setting("allow_default_user_add_remote_community", True) 
-        form.reports_email_admins.data = site.reports_email_admins
-        form.registration_mode.data = site.registration_mode
-        form.application_question.data = site.application_question
-        form.referral_generators.data = get_setting(GENERATORS_SETTING, DEFAULT_GENERATORS)
-        form.referral_max_per_code.data = get_setting(MAX_PER_CODE_SETTING, 0)
-        form.referral_max_per_user.data = get_setting(MAX_PER_USER_SETTING, 0)
-        form.auto_decline_referrers.data = site.auto_decline_referrers
-        form.auto_decline_countries.data = get_setting('auto_decline_countries', '').upper()
-        form.log_activitypub_json.data = site.log_activitypub_json
-        form.language_id.data = site.language_id
-        form.show_inoculation_block.data = site.show_inoculation_block
-        form.additional_js.data = site.additional_js if site.additional_js is not None else ''
-        form.default_filter.data = site.default_filter if site.default_filter else 'popular'
-        form.public_modlog.data = get_setting('public_modlog', False)
-        form.email_verification.data = get_setting('email_verification', True)
-        # D1398. `False` here while both consumers read `True` --
-        # `RegistrationForm.__init__` (app/auth/forms.py:41), which is what actually
-        # requires the captcha, and the nodeinfo document
-        # (app/activitypub/util.py:4396), which advertises whether it is required.
-        # No migration or seed inserts a `captcha_enabled` row, so on any instance
-        # that has never saved this page the default IS the behaviour: the captcha
-        # was required and this box rendered UNTICKED. An admin saving the page for
-        # any other reason then posted that box back and turned the captcha off,
-        # having been shown it was already off. Measured:
-        #
-        #     rows for captcha_enabled:                0
-        #     RegistrationForm has captcha field:      True
-        #     GET /admin/misc rendered the box as:     False
-        #
-        # Round 203's failure mode -- a pre-fill disagreeing with reality resets the
-        # setting on the next save -- arriving through a mismatched DEFAULT rather
-        # than a missing line.
-        form.captcha_enabled.data = captcha_enabled()
-        form.onion_pow_difficulty.data = pow_difficulty()
-        form.remote_image_cache_days.data = site.remote_image_cache_days
-        form.onion_media_cache_mb.data = get_setting('onion_media_cache_bytes', DEFAULT_CACHE_BYTES) // 1048576
-        form.onion_media_image_max_mb.data = get_setting('onion_media_image_max_bytes', 20971520) // 1048576
-        form.onion_media_av_max_mb.data = get_setting('onion_media_av_max_bytes', 524288000) // 1048576
-        form.choose_topics.data = get_setting('choose_topics', True)
-        form.filter_selection.data = get_setting('filter_selection', True)
-        form.private_instance.data = site.private_instance
-        form.registration_approved_email.data = get_setting('registration_approved_email', '')
-        form.ban_check_servers.data = get_setting('ban_check_servers', '')
-        form.honeypot.data = site.honeypot
-        form.cache_remote_images_locally.data = get_setting('cache_remote_images_locally', True)
-        form.allow_video_file_uploads.data = get_setting('allow_video_file_uploads', 'no')
-        form.allow_audio_file_uploads.data = get_setting('allow_audio_file_uploads', 'no')
-        form.max_video_upload_mb.data = get_setting('max_video_upload_bytes', 524288000) // 1048576
-        form.max_audio_upload_mb.data = get_setting('max_audio_upload_bytes', 209715200) // 1048576
-        form.redirect_policy.data = get_setting(REDIRECT_POLICY_SETTING, REDIRECT_POLICY_SAME_ORIGIN)
-        form.enable_report_em_dash_replies.data = get_setting('enable_report_em_dash_replies', True)
-        form.limit_one_em_report_per_user.data = get_setting('limit_one_em_report_per_user', False)
-        form.read_posts_cutoff.data = get_setting('read_posts_cutoff', 180)
-        form.ban_posts.data = get_setting('ban_posts', False)
-        form.max_album_images.data = max_album_images()
-        role = admin_scopes.admin_role()
-        form.oauth_admin_role.data = role.id if role is not None else None
-    return render_template('admin/misc.html', title=_('Misc settings'), form=form, close_form=close_form,
+        load(form, form_class, MISC_SETTINGS, stored, sister, FIRST_DEFAULTS)
+        _load_instance_wide(form, site)
+        if not sister:   # a sister's own registration and login came from its row with the form
+            form.registration_mode.data = site.registration_mode
+            form.private_instance.data = site.private_instance
+            form.default_filter.data = form.default_filter.data or 'popular'
+    return render_template('admin/misc.html', title=_('Misc settings'), form=form, close_form=close_form, tenant=tenant,
+                           editable=editable, inherited=tenant.inherited(), instance_wide=set(INSTANCE_WIDE),
+                           needs=dict.fromkeys(DOMAIN_JOINING, 'manage domains'),
                            roles_with=roles_with('change instance settings'))
 
 
