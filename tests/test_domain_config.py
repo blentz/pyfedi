@@ -20,6 +20,7 @@ from app.models import FIRST_DEFAULTS, OWN_COLUMNS, SETTING_COLUMNS, SETTING_DEF
 from app.storefront import clear_domain_cache, default_domain, domain_by_id, domain_rows
 from app.utils import get_setting, get_site_as_dict, set_setting
 from tests.factories import config_of, configure
+from tests.schema_history import load_revision
 from tests.two_domains import FIRST, ONION, request_on
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -179,14 +180,14 @@ def test_a_domains_own_settings_default_when_unset(site):
 
 
 def test_a_sisters_own_settings_are_its_rows_and_never_inherited(site):
-    first_config().registration = 'closed'
-    row = sister(registration='paid', lapse_grace_days=3)
-    assert own_config(row.id).registration == 'paid'
+    first_config().paid_membership = True
+    row = sister(paid_membership=True, lapse_grace_days=3)
+    assert own_config(row.id).paid_membership is True
     assert domain_by_id(row.id).lapse_grace_days == 3
     other = SiteDomain(domain='other.example', scheme='https', federates=True)
     db.session.add(other)
     db.session.commit()
-    assert other.registration == 'anyone'   # not the first domain's
+    assert other.paid_membership is False and domain_by_id(other.id).paid_membership is False   # not the first domain's
 
 
 def test_the_default_domains_own_settings_are_the_first_domains_row(site):
@@ -198,7 +199,7 @@ def test_the_default_domains_own_settings_are_the_first_domains_row(site):
 
 
 def test_a_sisters_row_goes_with_it(site):
-    row = sister(registration='closed')
+    row = sister(registration_mode='Closed')
     row_id = row.id
     db.session.delete(row)
     db.session.commit()
@@ -293,6 +294,7 @@ def old_schema(app, db_session):
     connection = db.session.connection()
     try:
         with Operations.context(MigrationContext.configure(connection)):
+            load_revision('f5b1d8e3a7c9_domain_config_one_registration.py').downgrade()
             migration.downgrade()
             connection.execute(text(
                 "UPDATE site SET name = 'Old name', enable_nsfw = true, tos_url = NULL, registration_mode = 'Open' "
@@ -361,6 +363,7 @@ def test_the_upgrade_without_a_site_or_default_row_makes_no_first_row(app, db_se
     connection = db.session.connection()
     try:
         with Operations.context(MigrationContext.configure(connection)):
+            load_revision('f5b1d8e3a7c9_domain_config_one_registration.py').downgrade()
             migration.downgrade()
             connection.execute(text('DELETE FROM site'))
             migration.upgrade()

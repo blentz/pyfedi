@@ -34,7 +34,7 @@
                         <td>{{ implicit_default.domain }}</td>
                         <td>{{ implicit_default.scheme }}</td>
                         <td>{{ _('Yes') }}</td>
-                        <td>{{ implicit_default.registration }}</td>
+                        <td>{{ registration_modes[None] }}</td>
                         <td></td>
                     </tr>
                     {% endif %}
@@ -44,7 +44,7 @@
                         <td>{{ row.domain }}{% if row.is_onion %} <span class="badge bg-secondary">onion</span>{% endif %}</td>
                         <td>{{ row.scheme }}</td>
                         <td>{{ _('Yes') if row.federates else _('No') }}</td>
-                        <td>{{ row.registration }}</td>
+                        <td>{{ registration_modes[row.id] }}{% if row.paid_membership %} ({{ _('members pay') }}){% endif %}</td>
                         <td>
                             {% if row.id in theme_rows %}
                             <a href="{{ url_for('admin.admin_domain_themes', domain_id=row.id) }}">{{ _('Themes') }}</a>{% if not row.is_default %} |{% endif %}

@@ -204,7 +204,7 @@ def register(app):
             protocol = app.config['HTTP_PROTOCOL']
             db.session.add(SiteDomain(domain=normalise_host(app.config['SERVER_NAME']),
                                       scheme='https' if protocol in ('https', 'mixed') else protocol,
-                                      federates=True, registration='anyone', is_default=True))
+                                      federates=True, is_default=True))
             db.session.flush()
             clear_domain_cache()
             db.session.add(CmsPage(url=DONATE_URL, title=DONATE_TITLE, body=DONATE_BODY, body_html=DONATE_BODY_HTML,

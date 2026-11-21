@@ -11,7 +11,7 @@ pytestmark = pytest.mark.usefixtures('site')
 
 
 def _row(domain='shop.example', **kw):
-    row = SiteDomain(domain=domain, scheme='https', federates=True, registration='anyone', is_default=False, **kw)
+    row = SiteDomain(domain=domain, scheme='https', federates=True, is_default=False, **kw)
     db.session.add(row)
     db.session.commit()
     return row

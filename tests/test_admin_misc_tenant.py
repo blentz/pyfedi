@@ -117,19 +117,24 @@ def test_instance_wide_settings_are_shown_on_a_sister_and_changed_on_the_first_d
     assert ' disabled' not in tag(first, 'honeypot') and 'Applies to every domain.' in first
 
 
-def test_a_sister_has_its_own_joining_not_the_first_domains(admin_domain_branding_admin, admin_domain_branding_domains,
-                                                            english):
+def test_a_sisters_registration_and_login_may_be_the_first_domains_and_its_payment_is_its_own(
+        admin_domain_branding_admin, admin_domain_branding_domains, english):
+    """MT6, MT7: who may register and who may read are settings like the rest; whether members pay is its own."""
     shop = admin_domain_branding_domains['shop']
+    first_config().registration_mode = 'RequireApplication'
+    db.session.commit()
     body = get(admin_domain_branding_admin[0], f'/admin/misc?domain={shop.id}')
-    assert 'id="registration_mode"' not in body and 'id="private_instance"' not in body
-    assert 'Who may register' in body and 'id="login_required"' in body
-    assert 'Danger Zone' not in body
-    post(admin_domain_branding_admin, shop, registration='closed', lapse_grace_days='9', registration_offer_id='0')
+    assert options(body, 'registration_mode')[0] == ('', "The first domain's: Require application", True)
+    assert options(body, 'private_instance')[0] == ('', "The first domain's: No", True)
+    assert 'id="paid_membership"' in body and 'Danger Zone' not in body
+    post(admin_domain_branding_admin, shop, registration_mode='Closed', private_instance='', lapse_grace_days='9',
+         registration_offer_id='0')
     db.session.expire_all()
     row = db.session.get(SiteDomain, shop.id)
-    assert (row.registration, row.lapse_grace_days, row.referral_codes) == ('closed', 9, False)
+    assert (row.registration_mode, row.private_instance, row.lapse_grace_days, row.referral_codes) == \
+        ('Closed', None, 9, False)
     first = get(admin_domain_branding_admin[0], '/admin/misc?domain=0')
-    assert 'id="registration_mode"' in first and 'Who may register' not in first
+    assert 'id="registration_mode"' in first and 'id="paid_membership"' not in first
 
 
 @pytest.fixture
@@ -148,12 +153,12 @@ def test_manage_domains_alone_changes_who_may_join_and_nothing_else(domain_manag
                                                                     english):
     shop = admin_domain_branding_domains['shop']
     body = get(domain_manager[0], f'/admin/misc?domain={shop.id}')
-    assert ' disabled' in tag(body, 'enable_downvotes') and ' disabled' not in tag(body, 'registration')
-    response = post(domain_manager, shop, enable_downvotes='n', registration='closed', lapse_grace_days='7',
+    assert ' disabled' in tag(body, 'enable_downvotes') and ' disabled' not in tag(body, 'registration_mode')
+    response = post(domain_manager, shop, enable_downvotes='n', registration_mode='Closed', lapse_grace_days='7',
                     registration_offer_id='0')
     assert response.status_code == 200
     db.session.expire_all()
-    assert db.session.get(SiteDomain, shop.id).registration == 'closed'
+    assert db.session.get(SiteDomain, shop.id).registration_mode == 'Closed'
     assert own_config(shop.id).enable_downvotes is None
     # the first domain's page is not theirs: a save naming it is refused
     response = post(domain_manager, admin_domain_branding_domains['first'], enable_downvotes='n')
@@ -171,10 +176,10 @@ def test_change_instance_settings_alone_shows_who_may_join_and_does_not_change_i
     token = csrf(app, client)
     shop = admin_domain_branding_domains['shop']
     body = get(client, f'/admin/misc?domain={shop.id}')
-    assert ' disabled' in tag(body, 'registration') and 'Changing this needs the manage domains permission.' in body
-    post((client, token), shop, registration='closed', enable_downvotes='n')
+    assert ' disabled' in tag(body, 'registration_mode') and 'Changing this needs the manage domains permission.' in body
+    post((client, token), shop, registration_mode='Closed', enable_downvotes='n')
     db.session.expire_all()
-    assert db.session.get(SiteDomain, shop.id).registration == 'anyone'
+    assert db.session.get(SiteDomain, shop.id).registration_mode is None
     assert own_config(shop.id).enable_downvotes is False
 
 

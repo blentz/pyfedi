@@ -142,6 +142,6 @@ def test_the_settings_that_named_staff_name_what_they_mean(app, people):
     from app.admin.forms import SiteDomainForm, SiteMiscForm
     with app.test_request_context():
         referral = {choice.value: choice.label for choice in SiteMiscForm().referral_generators.choices}
-        registration = {choice.value: choice.label for choice in SiteDomainForm().registration.choices}
+        registration = {choice.value: choice.label for choice in SiteDomainForm().registration_mode.choices}
     assert str(referral['staff']) == 'Admins and holders of "generate referral codes"'
-    assert set(registration) == {'anyone', 'closed'}   # who adds accounts is the permission's to say
+    assert set(registration) == {'', 'Closed'}   # who adds accounts is the permission's to say

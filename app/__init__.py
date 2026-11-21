@@ -142,7 +142,8 @@ cache = Cache()
 # gains or loses a field: every memo whose value holds one passes `make_name=shaped_memo_name`, so new code never unpickles an entry the
 # old code left in redis, and a rollback never reads one the new code wrote. v2: per-domain identity (site_domain_id,
 # local_only, DomainInfo.id). v3: DomainInfo.instance_id (plan C2). v4: Branding.sidebar (per-domain branding). v5: DomainInfo's login, offer and grace (monetization phase 3).
-MEMO_SHAPE = 'v5'
+# v6: DomainInfo's paid_membership for registration and login_required (multitenant domain config MT6, MT7).
+MEMO_SHAPE = 'v6'
 
 
 def shaped_memo_name(fname: str) -> str:

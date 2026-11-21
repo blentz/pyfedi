@@ -3497,9 +3497,9 @@ def aged_account_required(func):
 
 
 def login_required_here() -> bool:
-    """Whether this storefront requires login to browse (M11). What app.login_gate and each decorator below ask."""
-    storefront = current_storefront()
-    return g.site.private_instance is not False if storefront.is_default else storefront.login_required
+    """Whether this storefront requires login to browse (M11): its `private_instance`, a sister's blank one being the
+    first domain's (MT7), as the request's `g.site` has it. What app.login_gate and each decorator below ask."""
+    return g.site.private_instance is not False
 
 
 def login_redirect():

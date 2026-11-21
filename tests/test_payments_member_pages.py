@@ -250,7 +250,7 @@ class TestThePage:
 
 class TestDomains:
     def test_an_offer_on_another_domain_is_not_offered_here(self, env, app):
-        other = SiteDomain(domain='sister.example', scheme='https', registration='anyone')
+        other = SiteDomain(domain='sister.example', scheme='https')
         db.session.add(other)
         db.session.commit()
         db.session.add(OfferDomain(offer_id=env.offer.id, site_domain_id=other.id))
@@ -263,7 +263,7 @@ class TestDomains:
 
 
     def test_a_sister_domain_is_where_the_provider_sends_the_member_back(self, env):
-        db.session.add(SiteDomain(domain='sister.example', scheme='https', registration='anyone'))
+        db.session.add(SiteDomain(domain='sister.example', scheme='https'))
         db.session.commit()
         clear_domain_cache()
         with env.client.session_transaction(base_url='https://sister.example') as session:

@@ -44,16 +44,17 @@ class DomainInfo(NamedTuple):
     domain: str
     scheme: str
     federates: bool
-    registration: str
     is_default: bool
     is_onion: bool
     id: int | None   # the site_domain row; None only for the synthesised default
     instance_id: int   # the domain's instance row; DEFAULT_INSTANCE_ID for the default (spec 2026-10-19 §3.1)
-    login_required: bool = False   # not the default domain's, which is Site.private_instance
+    # Its own, never another domain's (OWN_COLUMNS). Who may register and who may read are its configuration's
+    # `registration_mode` and `private_instance` (app.domain_config), which a sister inherits.
+    paid_membership: bool = False   # its members pay a subscription (paid membership plan M1)
     registration_offer_id: int | None = None
     lapse_grace_days: int = 7
     paid_since: datetime | None = None   # accounts made before it never lapse (plan M2)
-    referral_codes: bool = True   # in referral-code mode, whether a code opens signup here while closed (RC11a)
+    referral_codes: bool = True   # whether a valid referral code opens signup where it is not open to the public (RC11a)
 
 
 # Made by `flask init-db` as the local instance, row 1 is the default domain's. Each other domain has a row of its own.
@@ -63,12 +64,18 @@ DEFAULT_INSTANCE_ID = 1
 # Referral-code registration (app/referral.py): signup needs a referral code, so it is closed to the public
 REFERRAL_MODE = 'ReferralCode'
 
+def registration_mode_of(storefront: DomainInfo) -> str:
+    """Who may register on `storefront` (spec 2026-11-20-multitenant-domain-config MT6): its `registration_mode`, a
+    sister's blank one being the first domain's."""
+    return domain_config.effective(storefront)['registration_mode']
+
+
 def public_registration_open(storefront: DomainInfo) -> bool:
-    """Whether anyone may sign up on `storefront` for free, by any way in. The default domain is governed by
-    `Site.registration_mode` unless it charges (paid membership, plan M1, M5); any other domain takes public sign-ups
-    only when it is 'anyone', and then `Site.registration_mode` applies as well. A 'closed' domain's accounts are made
-    by the admin add-user form alone, and a paid one's by /register, which leads to the provider."""
-    return not paid_registration(storefront) and (storefront.is_default or storefront.registration == 'anyone')
+    """Whether anyone may sign up on `storefront` for free, by any way in: unless its members pay (paid membership,
+    plan M1, M5) or its registration mode is 'Closed'. Its mode then applies as well (an application, a referral
+    code). A closed domain's accounts are made by the admin add-user form alone, and a paid one's by /register, which
+    leads to the provider."""
+    return not paid_registration(storefront) and registration_mode_of(storefront) != 'Closed'
 
 
 def signup_open_to(storefront: DomainInfo, referral_codes: bool) -> bool:
@@ -78,28 +85,30 @@ def signup_open_to(storefront: DomainInfo, referral_codes: bool) -> bool:
 
 
 def paid_registration(storefront: DomainInfo) -> bool:
-    """Whether signing up on `storefront` costs a first fee (M10). Only `/register` knows this: to every other way of
-    making an account a paid domain is simply closed (plan S9). The default domain's own `registration` column means
-    this alone: 'paid' is its membership switch (paid membership plan M1); for who may register otherwise it is
-    `Site.registration_mode` that counts."""
-    return storefront.registration == 'paid'
+    """Whether signing up on `storefront` costs a first fee (M10): its members pay (`paid_membership`, its own, never
+    inherited). Only `/register` knows this: to every other way of making an account a paid domain is simply closed
+    (plan S9). Who may register otherwise is its registration mode, which may close it while its members go on
+    paying."""
+    return storefront.paid_membership
 
 
-def registration_mode_on(storefront: DomainInfo, site) -> str:
-    """`site.registration_mode` as `storefront` offers it: 'Closed' where public sign-up is not open
-    (`public_registration_open`). The default domain's is the Site row's own. Referral-code mode is offered as
-    'RequireApplication' (spec 2026-10-31 RC6): clients that know only Lemmy's three modes then show the question
-    field the code is typed into."""
-    referral_codes = site.registration_mode == REFERRAL_MODE
-    # A paid default domain still admits a referral code (paid membership plan M4), which is all a client can send
-    if not public_registration_open(storefront) and not (storefront.is_default and referral_codes):
+def registration_mode_on(storefront: DomainInfo, site=None) -> str:
+    """`storefront`'s registration mode as it offers it to clients: 'Closed' where public sign-up is not open
+    (`public_registration_open`). Referral-code mode is offered as 'RequireApplication' (spec 2026-10-31 RC6):
+    clients that know only Lemmy's three modes then show the question field the code is typed into. `site` is unused:
+    the mode is the domain's own (MT6)."""
+    mode = registration_mode_of(storefront)
+    referral_codes = mode == REFERRAL_MODE
+    # A paid domain in referral-code mode still admits a referral code (paid membership plan M4), which is all a
+    # client can send
+    if not public_registration_open(storefront) and not (paid_registration(storefront) and referral_codes):
         return 'Closed'
-    return 'RequireApplication' if referral_codes else site.registration_mode
+    return 'RequireApplication' if referral_codes else mode
 
 
-def open_registrations(storefront: DomainInfo, site) -> bool:
+def open_registrations(storefront: DomainInfo, site=None) -> bool:
     """nodeinfo's `openRegistrations`: false when closed and in referral-code mode, which is closed to the public."""
-    return site.registration_mode != REFERRAL_MODE and registration_mode_on(storefront, site) != 'Closed'
+    return registration_mode_of(storefront) != REFERRAL_MODE and registration_mode_on(storefront) != 'Closed'
 
 
 _NOT_IN_AUTHORITY = frozenset('@/\\?#')
@@ -141,7 +150,7 @@ def _synthesised_default() -> DomainInfo:
     protocol = current_app.config['HTTP_PROTOCOL']
     scheme = 'https' if protocol in ('https', 'mixed') else protocol
     domain = normalise_host(current_app.config['SERVER_NAME'])
-    return DomainInfo(domain, scheme, True, 'anyone', True, domain.endswith('.onion'), None, DEFAULT_INSTANCE_ID)
+    return DomainInfo(domain, scheme, True, True, domain.endswith('.onion'), None, DEFAULT_INSTANCE_ID)
 
 
 @cache.memoize(timeout=300, make_name=shaped_memo_name)
@@ -162,8 +171,8 @@ def domain_rows() -> tuple[DomainInfo, ...]:
     def info(row):
         own = {name: models.OWN_COLUMNS[name] if value is None else value
                for name, value in zip(names, row[7:])}
-        return DomainInfo(row.domain, row.scheme, row.federates, own['registration'], row.is_default, row.is_onion,
-                          row.id, row.instance_id, own['login_required'], own['registration_offer_id'],
+        return DomainInfo(row.domain, row.scheme, row.federates, row.is_default, row.is_onion, row.id,
+                          row.instance_id, own['paid_membership'], own['registration_offer_id'],
                           own['lapse_grace_days'], own['paid_since'], own['referral_codes'])
     return tuple(info(row) for row in rows)
 

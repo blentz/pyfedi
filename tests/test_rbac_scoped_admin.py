@@ -354,7 +354,8 @@ def modes(app, db_session):
     local = make_instance('test.piefed.local', software='piefed')
     founder = make_user(local, 'founder', local=True)
     assert founder.id == 1
-    rows = {mode: SiteDomain(domain=f'{mode}.modes.example', scheme='https', federates=True, registration=mode)
+    rows = {mode: SiteDomain(domain=f'{mode}.modes.example', scheme='https', federates=True,
+                             registration_mode={'anyone': None, 'closed': 'Closed'}[mode])
             for mode in ('anyone', 'closed')}
     db.session.add_all(rows.values())
     db.session.commit()

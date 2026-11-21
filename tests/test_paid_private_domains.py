@@ -14,6 +14,7 @@ from flask import current_app, g, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import db
+from app.domain_config import effective
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCode, Referral, Site, SiteDomain, User, utcnow
 from app.payments.core import apply_event, cancel_subscription
 from app.payments.events import Paid, SubscriptionEnded, SubscriptionStarted
@@ -44,9 +45,9 @@ def env(app, api_baseline, monkeypatch):
     db.session.add(offer)
     db.session.flush()
     db.session.add(SiteDomain(domain=current_app.config['SERVER_NAME'], scheme='https', federates=True, is_default=True))
-    paid = SiteDomain(domain='paid.example', scheme='https', federates=False, registration='paid',
-                      registration_offer_id=offer.id, login_required=True)
-    public = SiteDomain(domain='public.example', scheme='https', federates=False, registration='anyone')
+    paid = SiteDomain(domain='paid.example', scheme='https', federates=False, paid_membership=True,
+                      registration_offer_id=offer.id, private_instance=True)
+    public = SiteDomain(domain='public.example', scheme='https', federates=False)
     db.session.add_all([paid, public])
     db.session.commit()
     clear_domain_cache()
@@ -626,7 +627,7 @@ class TestLapsing:
 
     def test_a_domain_that_stops_charging_lets_them_back(self, env, member):
         self.end(env, member, days_ago=8)
-        env.paid.registration = 'closed'
+        env.paid.set_paid_membership(False)
         db.session.commit()
         clear_domain_cache()
 
@@ -716,35 +717,37 @@ class TestDomainSettings:
         return admin
 
     def save(self, env, row, **data):
-        fields = {'domain': str(row.id), 'registration': 'anyone', 'registration_offer_id': '0', 'lapse_grace_days': '7',
-                  'submit': 'Save', 'csrf_token': real_csrf(env), **data}
+        fields = {'domain': str(row.id), 'registration_mode': '', 'private_instance': 'n', 'registration_offer_id': '0',
+                  'lapse_grace_days': '7', 'submit': 'Save', 'csrf_token': real_csrf(env), **data}
         return env.client.post('/admin/misc', data=fields, follow_redirects=True).get_data(as_text=True)
 
     def test_a_domain_can_be_made_paid_and_private(self, env, admin):
-        self.save(env, env.public, registration='paid', registration_offer_id=str(env.offer.id), login_required='y',
+        before = utcnow()
+        self.save(env, env.public, paid_membership='y', registration_offer_id=str(env.offer.id), private_instance='y',
                   lapse_grace_days='14')
 
         db.session.refresh(env.public)
-        assert (env.public.registration, env.public.registration_offer_id, env.public.login_required,
-                env.public.lapse_grace_days) == ('paid', env.offer.id, True, 14)
+        assert (env.public.paid_membership, env.public.registration_offer_id, env.public.private_instance,
+                env.public.lapse_grace_days) == (True, env.offer.id, True, 14)
+        assert env.public.paid_since >= before.replace(microsecond=0)   # it began charging now (plan M2)
 
     def test_referral_codes_can_be_turned_off(self, env, admin):
         """RC11a: the settings page sets whether a referral code opens the domain while it is closed."""
         assert env.public.referral_codes is True   # the default keeps RC11
-        self.save(env, env.public, registration='closed')
+        self.save(env, env.public, registration_mode='Closed')
         db.session.refresh(env.public)
-        assert env.public.referral_codes is False   # an unticked box
+        assert env.public.referral_codes is False and env.public.registration_mode == 'Closed'   # an unticked box
 
     def test_referral_codes_can_be_turned_on(self, env, admin):
         env.public.referral_codes = False
         db.session.commit()
-        self.save(env, env.public, registration='closed', referral_codes='y')
+        self.save(env, env.public, registration_mode='Closed', referral_codes='y')
         db.session.refresh(env.public)
         assert env.public.referral_codes is True
 
     def test_the_form_opens(self, env, admin, monkeypatch):
         monkeypatch.setitem(current_app.config, 'WTF_CSRF_ENABLED', True)
-        assert 'Who may register' in env.client.get(f'/admin/misc?domain={env.public.id}').get_data(as_text=True)
+        assert 'Members pay a subscription' in env.client.get(f'/admin/misc?domain={env.public.id}').get_data(as_text=True)
 
     def test_the_old_settings_address_opens_the_misc_page_with_the_domain_picked(self, env, admin):
         response = env.client.get(f'/admin/domains/{env.public.id}/settings')
@@ -758,50 +761,50 @@ class TestDomainSettings:
         assert f'name="domain" value="{default.id}"' not in body
 
     def test_paid_needs_an_offer(self, env, admin):
-        body = self.save(env, env.public, registration='paid')
+        body = self.save(env, env.public, paid_membership='y')
 
         db.session.refresh(env.public)
-        assert env.public.registration == 'anyone' and 'needs a subscription' in body
+        assert env.public.paid_membership is False and 'needs a subscription' in body
 
     def test_an_onion_cannot_be_paid(self, env, admin):
         onion = SiteDomain(domain='abc.onion', scheme='http', federates=False)
         db.session.add(onion)
         db.session.commit()
 
-        body = self.save(env, onion, registration='paid', registration_offer_id=str(env.offer.id))
+        body = self.save(env, onion, paid_membership='y', registration_offer_id=str(env.offer.id))
 
         db.session.refresh(onion)
-        assert onion.registration == 'anyone' and 'Not a valid choice' in body   # Stripe isn't on offer there
+        assert onion.paid_membership is False and 'Not a valid choice' in body   # Stripe isn't on offer there
 
     def test_a_federating_domain_cannot_turn_login_on(self, env, admin):
         federating = SiteDomain(domain='fed.example', scheme='https', federates=True)
         db.session.add(federating)
         db.session.commit()
 
-        body = self.save(env, federating, login_required='y')
+        body = self.save(env, federating, private_instance='y')
 
         db.session.refresh(federating)
-        assert federating.login_required is False and 'already left' in body
+        assert effective(federating)['private_instance'] is False and 'already left' in body
 
     def test_a_federating_domain_already_on_can_stay_on(self, env, admin):
-        federating = SiteDomain(domain='fed.example', scheme='https', federates=True, login_required=True)
+        federating = SiteDomain(domain='fed.example', scheme='https', federates=True, private_instance=True)
         db.session.add(federating)
         db.session.commit()
 
-        self.save(env, federating, login_required='y', lapse_grace_days='9')
+        self.save(env, federating, private_instance='y', lapse_grace_days='9')
 
         db.session.refresh(federating)
-        assert federating.login_required is True and federating.lapse_grace_days == 9
+        assert federating.private_instance is True and federating.lapse_grace_days == 9
 
     def test_choosing_an_offer_needs_the_money_permission(self, env):
         admin = make_user(env.baseline.instance_local, 'domainsonly', local=True)
         grant_permission(admin, 'manage domains')
         login(env.client, admin, base='https://' + current_app.config['SERVER_NAME'])
 
-        body = self.save(env, env.public, registration='paid', registration_offer_id=str(env.offer.id))
+        body = self.save(env, env.public, paid_membership='y', registration_offer_id=str(env.offer.id))
 
         db.session.refresh(env.public)
-        assert env.public.registration == 'anyone' and 'manage monetization' in body
+        assert env.public.paid_membership is False and 'manage monetization' in body
 
     def test_an_offer_a_domain_charges_cannot_be_deleted_or_stopped(self, env, admin):
         token = real_csrf(env)   # one per test: `g` keeps it, across clients
@@ -867,7 +870,7 @@ class TestWhatsLeftOver:
 class TestTheMigration:
     @pytest.mark.parametrize('private', [True, False], ids=['private', 'public'])
     def test_each_other_domain_takes_the_sites_setting(self, env, private):
-        env.paid.registration, env.paid.registration_offer_id = 'closed', None
+        env.paid.paid_membership, env.paid.registration_offer_id = False, None
         env.site.private_instance = private
         db.session.commit()
         connection = db.session.connection()

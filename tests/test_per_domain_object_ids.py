@@ -482,7 +482,7 @@ def test_a_browser_request_is_answered_as_before(app, sites, owned):
     post_id = owned['first'].post.id
     db.session.get(Site, 1).private_instance = True
     for row in SiteDomain.query:
-        row.login_required = True   # each domain's own
+        row.private_instance = True   # each domain's own
     db.session.commit()
     clear_domain_cache()
     response = fetch(app, f'/post/{post_id}', SHOP, headers={})

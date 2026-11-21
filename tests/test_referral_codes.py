@@ -251,8 +251,8 @@ def test_record_referral_stores_the_code_used(people):
 # RC9 / RC10 (2026-11-19): the domain the code is used on
 # --------------------------------------------------------------------------
 
-def _shop(registration='anyone'):
-    row = SiteDomain(domain='shop.example', is_default=False, registration=registration)
+def _shop(registration_mode=None, paid=False):
+    row = SiteDomain(domain='shop.example', is_default=False, registration_mode=registration_mode, paid_membership=paid)
     db.session.add(row)
     db.session.commit()
     clear_domain_cache()
@@ -273,7 +273,7 @@ def test_the_link_uses_the_domain_it_is_made_on(people):
 
 def test_the_link_falls_back_to_home_where_codes_are_not_taken(people):
     """A domain that refuses codes (RC11a) links the member's home domain instead."""
-    shop = _shop('closed')
+    shop = _shop('Closed')
     shop.referral_codes = False
     db.session.commit()
     clear_domain_cache()
@@ -297,14 +297,14 @@ def test_a_code_works_on_any_domain(people):
 
 def test_a_code_is_refused_where_codes_are_not_taken(people):
     """No code on a domain that refuses them (RC11a), paid for or not."""
-    shop = _shop('closed')
+    shop = _shop('Closed')
     shop.referral_codes = False
     db.session.commit()
     clear_domain_cache()
     admin = people['admin']
     code = _code(admin)
     assert referrer_for(code, domain_by_id(shop.id)) is None
-    shop.registration = 'paid'
+    shop.paid_membership = True
     db.session.commit()
     clear_domain_cache()
     assert referrer_for(code, domain_by_id(shop.id)) is None
@@ -313,7 +313,7 @@ def test_a_code_is_refused_where_codes_are_not_taken(people):
 def test_a_paid_domain_that_takes_codes_takes_one(people):
     """Owner 2026-11-20 (was the default domain alone, G4): a paid domain with codes on takes a referral code, and its
     link names that domain."""
-    shop = _shop('paid')
+    shop = _shop(paid=True)
     admin = people['admin']
     code = _code(admin)
     assert referrer_for(code, domain_by_id(shop.id)).id == admin.id
@@ -325,7 +325,7 @@ def test_the_api_refuses_a_code_that_gives_nothing_on_a_paid_domain(app, people,
     """The API signup on a paid domain: a code that has nothing to give there (no tier on offer) does not make a free
     account (R5, X2)."""
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
-    _shop('paid')
+    _shop(paid=True)
     code = _code(people['admin'])
     body = {'username': 'freeloader', 'email': 'f@example.com', 'password': 'a-good-password',
             'password_verify': 'a-good-password', 'answer': code}
@@ -338,7 +338,7 @@ def test_the_api_refuses_a_code_that_gives_nothing_on_a_paid_domain(app, people,
 
 def test_a_default_domain_code_registers_on_the_domain_used(app, people, no_captcha):
     """RC10: the account belongs to the domain the code was used on, wherever its referrer lives."""
-    shop = _shop('closed')
+    shop = _shop('ReferralCode')
     admin = people['admin']   # home: the default domain
     code = _code(admin)
     data = {'user_name': 'shopper', 'hp_field': '', 'real_email': 'shopper@example.com',
@@ -481,7 +481,7 @@ def test_the_form_shows_in_referral_mode(app, people, monkeypatch):
 
 def test_a_referral_opens_a_staff_only_domain(app, people, no_captcha):
     """RC11: a valid code lets someone sign up where public registration is off; RC10: the account lands there."""
-    shop = _shop('closed')
+    shop = _shop('ReferralCode')
     admin = people['admin']
     admin.site_domain_id = shop.id
     code = _code(admin)
@@ -497,7 +497,7 @@ def test_a_referral_opens_a_staff_only_domain(app, people, no_captcha):
 
 
 def _shop_refusing_codes():
-    shop = _shop('closed')
+    shop = _shop('Closed')
     shop.referral_codes = False
     db.session.commit()
     clear_domain_cache()
@@ -529,21 +529,21 @@ def test_a_closed_domain_that_refuses_codes_says_it_is_closed(app, people, monke
 def test_codes_still_show_the_form_on_a_closed_domain_that_allows_them(app, people, monkeypatch):
     """RC11 is the default: a closed domain offers the form, for a code."""
     monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)
-    _shop('closed')
+    _shop('ReferralCode')
     text = app.test_client().get('/auth/register', base_url='https://shop.example').get_data(as_text=True)
     assert 'Registration is closed' not in text
 
 
-@pytest.mark.parametrize('registration, codes_allowed, referral_mode, expected', [
-    ('anyone', False, False, True),    # public: codes have no say
-    ('anyone', False, True, True),
-    ('closed', True, False, False),    # no referral mode, nothing opens it
-    ('closed', True, True, True),      # RC11
-    ('closed', False, True, False),    # RC11a
+@pytest.mark.parametrize('registration_mode, codes_allowed, referral_mode, expected', [
+    (None, False, False, True),        # public (the first domain's mode): codes have no say
+    (None, False, True, True),
+    ('Closed', True, False, False),    # no referral mode, nothing opens it
+    ('Closed', True, True, True),      # RC11
+    ('Closed', False, True, False),    # RC11a
 ])
-def test_signup_open_to(people, registration, codes_allowed, referral_mode, expected):
+def test_signup_open_to(people, registration_mode, codes_allowed, referral_mode, expected):
     from app.storefront import signup_open_to
-    shop = _shop(registration)
+    shop = _shop(registration_mode)
     shop.referral_codes = codes_allowed
     db.session.commit()
     clear_domain_cache()
@@ -551,7 +551,7 @@ def test_signup_open_to(people, registration, codes_allowed, referral_mode, expe
 
 
 def test_a_staff_only_domain_stays_closed_without_a_code(app, people, no_captcha):
-    _shop('closed')
+    _shop('ReferralCode')
     client = app.test_client()
     data = {'user_name': 'shopper', 'hp_field': '', 'real_email': 'shopper@example.com',
             'password': 'a-good-password', 'password2': 'a-good-password', 'timezone': 'UTC', 'question': 'hi',
@@ -729,14 +729,14 @@ def test_the_open_form_keeps_its_own_question_label(app, people):
 
 def test_a_staff_only_domain_is_closed_outside_referral_mode(app, people):
     _mode('Open')
-    _shop('closed')
+    _shop('Closed')
     with patch('app.auth.util.render_template', return_value='rendered') as rt:
         app.test_client().get('/auth/register', base_url='https://shop.example')
     assert rt.call_args.kwargs['registration_open'] is False
 
 
 def test_a_staff_only_domain_advertises_closed(people):
-    shop = _shop('closed')
+    shop = _shop('Closed')
     site = db.session.get(Site, 1)
     assert registration_mode_on(domain_by_id(shop.id), site) == 'Closed'
     assert open_registrations(domain_by_id(shop.id), site) is False

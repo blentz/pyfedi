@@ -144,8 +144,8 @@ def test_the_onion_refuses(app, api):
         _refused(_post(api), 'registration_closed')
 
 
-def _shop(registration):
-    row = SiteDomain(domain='shop.example', is_default=False, registration=registration)
+def _shop(registration_mode):
+    row = SiteDomain(domain='shop.example', is_default=False, registration_mode=registration_mode)
     db.session.add(row)
     db.session.commit()
     clear_domain_cache()
@@ -153,7 +153,7 @@ def _shop(registration):
 
 
 def test_a_staff_only_domain_refuses_outside_referral_mode(app, api):
-    _shop('closed')
+    _shop('Closed')
     response = api['client'].post('/api/alpha/user/register', json=_body(), base_url='https://shop.example')
     _refused(response, 'registration_closed')
 
@@ -295,7 +295,7 @@ def test_a_valid_code_registers_a_referred_usable_account(app, api, referrer):
 
 
 def test_a_code_opens_its_referrers_staff_only_domain(app, api, referrer):
-    shop = _shop('closed')
+    shop = _shop('ReferralCode')   # opened by a code (RC11)
     referrer.site_domain_id = shop.id
     generate_code(referrer)
     db.session.commit()
@@ -307,7 +307,7 @@ def test_a_code_opens_its_referrers_staff_only_domain(app, api, referrer):
 
 def test_a_closed_domain_that_refuses_codes_refuses_a_valid_one(app, api, referrer):
     """RC11a: with the domain's referral_codes off, its own member's code does not open it."""
-    shop = _shop('closed')
+    shop = _shop('Closed')
     shop.referral_codes = False
     referrer.site_domain_id = shop.id
     generate_code(referrer)

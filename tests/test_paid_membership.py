@@ -42,7 +42,7 @@ def env(app, api_baseline, monkeypatch):
     db.session.add_all([knight, duke, gift])
     db.session.flush()
     home = SiteDomain(domain=current_app.config['SERVER_NAME'], scheme='https', federates=True, is_default=True,
-                      registration='paid', registration_offer_id=knight.id, lapse_grace_days=3,
+                      paid_membership=True, registration_offer_id=knight.id, lapse_grace_days=3,
                       paid_since=utcnow() - timedelta(days=10))
     db.session.add(home)
     db.session.commit()
@@ -70,7 +70,7 @@ class TestTheDefaultDomainCanCharge:
         assert paid_registration(default_domain())
 
     def test_anyone_on_its_own_row_keeps_it_free(self, env):
-        env.home.registration = 'anyone'
+        env.home.paid_membership = False
         db.session.commit()
         clear_domain_cache()
         assert not paid_registration(default_domain())
@@ -149,7 +149,7 @@ class TestTheSwitch:
                                base_url=env.base)
 
     def free(self, env):
-        env.home.registration, env.home.paid_since = 'anyone', None
+        env.home.paid_membership, env.home.paid_since = False, None
         db.session.commit()
         clear_domain_cache()
 
@@ -162,7 +162,7 @@ class TestTheSwitch:
         before = utcnow()
         assert self.switch(env, membership='y', membership_offer_id=env.duke.id, membership_grace_days=3).status_code == 302
         row = db.session.get(SiteDomain, env.home.id)
-        assert (row.registration, row.registration_offer_id, row.lapse_grace_days) == ('paid', env.duke.id, 3)
+        assert (row.paid_membership, row.registration_offer_id, row.lapse_grace_days) == (True, env.duke.id, 3)
         assert row.paid_since >= before.replace(microsecond=0)
         assert paid_registration(default_domain())
 
@@ -175,18 +175,18 @@ class TestTheSwitch:
     def test_turning_it_off_frees_it(self, env, admin):
         self.switch(env, membership_offer_id=env.knight.id, membership_grace_days=3)
         row = db.session.get(SiteDomain, env.home.id)
-        assert row.registration == 'anyone' and row.paid_since is None
+        assert row.paid_membership is False and row.paid_since is None
         assert not paid_registration(default_domain())
 
     def test_a_one_off_cannot_be_what_joining_costs(self, env, admin):
         self.free(env)
         assert self.switch(env, membership='y', membership_offer_id=env.gift.id, membership_grace_days=3).status_code in (200, 302)
-        assert db.session.get(SiteDomain, env.home.id).registration == 'anyone'
+        assert db.session.get(SiteDomain, env.home.id).paid_membership is False
 
     def test_on_needs_a_tier(self, env, admin):
         self.free(env)
         self.switch(env, membership='y', membership_offer_id=0, membership_grace_days=3)
-        assert db.session.get(SiteDomain, env.home.id).registration == 'anyone'
+        assert db.session.get(SiteDomain, env.home.id).paid_membership is False
 
     def test_without_a_default_domain_row_there_is_nothing_to_switch(self, env, admin):
         db.session.delete(env.home)
@@ -238,7 +238,7 @@ class TestOtherWaysInAreClosed:
         write.assert_not_called()
 
     def test_a_free_default_domain_is_open_as_before(self, env):
-        env.home.registration = 'anyone'
+        env.home.paid_membership = False
         db.session.commit()
         clear_domain_cache()
         assert public_registration_open(default_domain())
@@ -872,7 +872,7 @@ class TestReferralBenefitAwayFromHome:
     tiers, so elsewhere it gives the site's default for that domain, and keeps its own."""
 
     def test_another_domains_member_gives_the_default_here_and_keeps_its_own(self, env, referrer):
-        shop = SiteDomain(domain='shop.example', is_default=False, registration='anyone')
+        shop = SiteDomain(domain='shop.example', is_default=False)
         db.session.add(shop)
         db.session.commit()
         clear_domain_cache()
@@ -1087,7 +1087,7 @@ class TestJoiningWithAReferralBenefit:
         assert PromoCodeUse.query.filter(PromoCodeUse.promo_code_id.in_([row.id, discount.id])).count() == 0
 
     def test_on_a_domain_that_does_not_charge_it_gives_nothing(self, env, referrer, provider):
-        env.home.registration = 'anyone'
+        env.home.paid_membership = False
         db.session.commit()
         clear_domain_cache()
         join_with(env, question=referrer.referral_code)
@@ -1246,7 +1246,7 @@ class TestTheReferralPageSaysWhatTheCodeGives:
         assert 'Your code cannot be used to join at the moment' in body
 
     def test_where_joining_is_free_it_is_approved_straight_away(self, env, referrer):
-        env.home.registration = 'anyone'
+        env.home.paid_membership = False
         db.session.commit()
         clear_domain_cache()
         assert 'their account is approved straight away' in self.page(env, referrer)

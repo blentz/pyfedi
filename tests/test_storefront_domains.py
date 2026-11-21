@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from cachelib import SimpleCache
@@ -213,7 +213,9 @@ def test_server_name_is_served_when_no_row_names_it(app, db_session, site, rows)
 
 
 def test_the_seed_schema_puts_back_the_check_it_found(db_session):
-    """Asked after a test using seed_schema has run on this worker: a paying domain is still allowed."""
+    """Asked after a test using seed_schema has run on this worker: the schema is head's again, with no registration
+    check left behind (MT6 dropped it) and a domain's members able to pay."""
     check = db.session.execute(text("SELECT pg_get_constraintdef(oid) FROM pg_constraint "
                                     "WHERE conname = 'ck_domain_config_registration'")).scalar()
-    assert "'paid'" in check
+    assert check is None
+    assert 'paid_membership' in {column['name'] for column in inspect(db.session.connection()).get_columns('domain_config')}

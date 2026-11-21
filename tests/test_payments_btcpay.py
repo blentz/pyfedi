@@ -631,7 +631,7 @@ class TestAdmin:
 
     def test_an_offer_a_domain_charges_cant_be_stopped(self, env, admin):
         db.session.add(SiteDomain(domain=current_app.config['SERVER_NAME'], scheme='https', federates=True, is_default=True))
-        db.session.add(SiteDomain(domain='paid.example', scheme='https', federates=False, registration='paid',
+        db.session.add(SiteDomain(domain='paid.example', scheme='https', federates=False, paid_membership=True,
                                   registration_offer_id=env.plan.id))
         db.session.commit()
         clear_domain_cache()

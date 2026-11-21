@@ -26,7 +26,7 @@ from flask_sqlalchemy.query import Query
 from furl import furl
 from redis.exceptions import LockNotOwnedError
 from slugify import slugify
-from sqlalchemy import or_, text, desc, Index, func, and_, CheckConstraint, event, inspect, select
+from sqlalchemy import or_, text, desc, Index, func, and_, event, inspect, select
 from sqlalchemy.orm import Session, validates
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -6275,7 +6275,21 @@ class SiteDomain(db.Model):
         # Whether it is the default decides which configuration row the other arguments write: set it first
         if 'is_default' in kwargs:
             self.is_default = kwargs.pop('is_default')
+        if not self.is_default and 'private_instance' not in kwargs and first_config().private_instance is not False:
+            # A new domain is readable without login until it says otherwise, whatever the first domain's private
+            # instance says (MT7), as a new domain always was. Where the first domain's is off, it inherits that.
+            kwargs['private_instance'] = False
         super().__init__(**kwargs)
+
+    def set_paid_membership(self, paid: bool) -> None:
+        """Whether this domain's members pay. Turning it on dates it, once: an account made before then stays free for
+        good (PM5, plan M2). Turning it off forgets the date, so turning it on again grandfathers everyone who joined in
+        between."""
+        if paid and not self.paid_membership:
+            self.paid_since = utcnow()
+        elif not paid:
+            self.paid_since = None
+        self.paid_membership = paid
 
     def config(self) -> 'DomainConfig':
         """The row this domain's configuration is in, made empty (inheriting everything) the first time it is needed."""
@@ -6326,7 +6340,6 @@ class DomainConfig(db.Model):
         # One row with no domain: the first domain's
         Index('ix_domain_config_first', text('(site_domain_id IS NULL)'), unique=True,
               postgresql_where=text('site_domain_id IS NULL')),
-        CheckConstraint("registration IN ('anyone','closed','paid')", name='ck_domain_config_registration'),
     )
     id = db.Column(db.Integer, primary_key=True)
     site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', name='fk_domain_config_site_domain_id',
@@ -6378,11 +6391,11 @@ class DomainConfig(db.Model):
     enable_nsfl = db.Column(db.Boolean)
     community_creation_admin_only = db.Column(db.Boolean)
     reports_email_admins = db.Column(db.Boolean)
-    # Each domain's own, never inherited (OWN_COLUMNS): a sister domain's storefront settings (plan S4, S24)
-    registration = db.Column(db.String(10))   # anyone, closed, paid: whether the public may sign up, and whether it costs
+    # Each domain's own, never inherited (OWN_COLUMNS): whether and how its members pay (plan S4, S24; MT6). Who may
+    # register is `registration_mode` and who may read `private_instance`, which a sister inherits.
+    paid_membership = db.Column(db.Boolean, nullable=False, default=False, server_default='false')   # members pay
     registration_offer_id = db.Column(db.Integer, db.ForeignKey('offer.id', name='fk_domain_config_registration_offer'))   # paid: what the first fee is for
-    login_required = db.Column(db.Boolean)   # the first domain's is private_instance
-    # In referral-code mode, whether a valid code opens signup here while `registration` is 'closed' (spec RC11, RC11a)
+    # Whether a valid referral code opens signup here when it is not open to the public (spec RC11, RC11a)
     referral_codes = db.Column(db.Boolean)
     lapse_grace_days = db.Column(db.Integer)   # paid: how long access outlasts a member's subscription
     paid_since = db.Column(db.DateTime)   # when it began charging: accounts made before it are grandfathered (plan M2)
@@ -6419,8 +6432,8 @@ class DomainConfig(db.Model):
 
 
 # What each domain holds for itself: never the first domain's. NULL is the default here.
-OWN_COLUMNS = {'registration': 'anyone', 'registration_offer_id': None, 'login_required': False, 'referral_codes': True,
-               'lapse_grace_days': 7, 'paid_since': None}
+OWN_COLUMNS = {'paid_membership': False, 'registration_offer_id': None, 'referral_codes': True, 'lapse_grace_days': 7,
+               'paid_since': None}
 
 # What the first domain starts with: these were Site's defaults. A sister domain's row starts empty, inheriting all.
 FIRST_DEFAULTS = {
@@ -6520,6 +6533,9 @@ def _own_value(name: str):
 
 for _name in OWN_COLUMNS:
     setattr(SiteDomain, _name, _own_value(_name))
+# Who may register and who may read: a sister's own value (None: the first domain's), the default domain's the first's
+for _name in ('registration_mode', 'private_instance'):
+    setattr(SiteDomain, _name, _forward(_name, SiteDomain.config))
 
 class CustomTheme(db.Model):
     """A theme a domain's theme holders made by copying another: CSS plus uploaded files (custom themes spec §3.1).

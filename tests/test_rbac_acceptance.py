@@ -55,7 +55,7 @@ def world(app, db_session):
     admin.verified = grantee.verified = True
     db.session.commit()
     grant_role(admin, admin_role())
-    x = SiteDomain(domain='x.accept.example', scheme='https', federates=True, registration='closed')
+    x = SiteDomain(domain='x.accept.example', scheme='https', federates=True, registration_mode='Closed')
     y = SiteDomain(domain='y.accept.example', scheme='https', federates=True)
     db.session.add_all([x, y])
     db.session.commit()

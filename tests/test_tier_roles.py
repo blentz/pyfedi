@@ -40,7 +40,7 @@ def env(app, api_baseline):
     db.session.add_all([knight, duke, tip])
     db.session.flush()
     home = SiteDomain(domain=current_app.config['SERVER_NAME'], scheme='https', federates=True, is_default=True,
-                      registration='anyone', registration_offer_id=knight.id, lapse_grace_days=3)
+                      registration_offer_id=knight.id, lapse_grace_days=3)
     supporter = Role(name='Supporter', listed_publicly=True)   # a badge: no permissions
     helper = Role(name='Helper')
     helper.permissions.append(RolePermission(permission='administer all users', all_domains=True))
@@ -75,7 +75,7 @@ def holds(user, role):
 
 
 def charge_for_joining(env):
-    env.home.registration = 'paid'
+    env.home.paid_membership = True
     env.home.paid_since = utcnow() - timedelta(days=30)
     db.session.commit()
     clear_domain_cache()

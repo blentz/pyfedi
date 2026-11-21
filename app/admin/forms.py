@@ -774,9 +774,10 @@ class SiteDomainForm(FlaskForm):
     scheme = HiddenField(default='https', validators=[AnyOf(['https'])])
     federates = BooleanField(_l('Federates'), default=False,
                              description=_l('Fixed once the domain has accounts or communities.'))
-    registration = SelectField(_l('Who may register'),
-                               choices=select_choices([('anyone', _l('Anyone')), ('closed', _l('Closed'))]), default='anyone',
-                               description=_l('A paid domain is set up on its settings page, once it is added.'))
+    registration_mode = SelectField(_l('Who may register'), default='',
+                                    choices=select_choices([('', _l("As the first domain's registration mode")),
+                                                            ('Closed', _l('Closed'))]),
+                                    description=_l('A paid domain is set up on its Misc page, once it is added.'))
     submit = SubmitField(_l('Add domain'))
 
     def validate_federates(self, field):
@@ -803,21 +804,20 @@ class SiteDomainForm(FlaskForm):
 
 
 class DomainSettingsForm(FlaskForm):
-    """Who may join a sister domain, and who may read it. The route refuses what these may not be set to (plan S25)."""
-    registration = SelectField(_l('Who may register'), render_kw={'class': 'form-select'},
-                               choices=select_choices([('anyone', _l('Anyone')), ('closed', _l('Closed')),
-                                                       ('paid', _l('Anyone who pays a first subscription fee'))]))
-    referral_codes = BooleanField(_l('Referral codes open a closed domain'),
-                                  description=_l("While registration is by referral code, a valid code from one of this "
-                                                 "domain's members lets someone sign up here even when registration "
-                                                 "is closed. Turn it off to keep a closed domain closed to everyone."))
+    """Whether and how a sister domain's members pay. Who may register on it and who may read it are its registration
+    mode and private instance, on the Misc form. The route refuses what these may not be set to (plan S25)."""
+    paid_membership = BooleanField(_l('Members pay a subscription'),
+                                   description=_l('Joining costs a first subscription fee. The registration mode still '
+                                                  'applies: closed, nobody new joins, while members go on paying.'))
+    referral_codes = BooleanField(_l('Referral codes open this domain'),
+                                  description=_l("A valid code from one of this domain's members lets someone sign up "
+                                                 "here where signup is not open to the public, or join a paid domain "
+                                                 "with what the code gives. Turn it off to refuse every code."))
     registration_offer_id = SelectField(_l('Subscription that registration pays for'), coerce=int, choices=[],
                                         validators=[Optional()], render_kw={'class': 'form-select'})
     lapse_grace_days = IntegerField(_l('Days of access after a subscription ends'), default=7,
                                     validators=[DataRequired(), NumberRange(min=1, max=3650)],
                                     description=_l('After this a member of a paid domain can only renew, export their settings or delete their account. Nothing is deleted.'))
-    login_required = BooleanField(_l('Require login to browse'),
-                                  description=_l('Only a domain that does not federate can turn this on: what has federated has left this server.'))
     submit = SubmitField(_l('Save'))
 
 

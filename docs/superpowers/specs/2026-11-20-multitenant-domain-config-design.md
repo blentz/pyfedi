@@ -1,6 +1,6 @@
 # Domains as tenants: one configuration per domain — design
 
-Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1 built: 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) and 1b (the per-tenant `settings` keys). Phase 2 built: the picker on settings pages; the Site page per domain with Branding folded in (2a); Misc per domain with Domain settings folded in, the first domain's row holding every setting's value (2b); the Sidebar, Chooser and Themes pages (2c). Phase 3 in progress: 3a (the storage rule) built.
+Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1 built: 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) and 1b (the per-tenant `settings` keys). Phase 2 built: the picker on settings pages; the Site page per domain with Branding folded in (2a); Misc per domain with Domain settings folded in, the first domain's row holding every setting's value (2b); the Sidebar, Chooser and Themes pages (2c). Phase 3 in progress: 3a (the storage rule) and 3b (one registration vocabulary and login switch, MT6 and MT7) built.
 
 ## Why
 
@@ -29,6 +29,8 @@ for.
 | MT3 | A non-first tenant's NULL inherits the first tenant's value, so changing the first domain changes every domain that has not set its own. The first tenant's row has no NULLs that mean "inherit". |
 | MT4 | One admin UX: a domain picker in the admin navigation chooses the tenant; each settings page edits that tenant. A per-tenant field on another tenant offers "use the first domain's"; an instance-wide field is shown, not editable, with a note that it applies to every domain. |
 | MT5 | Built in phases, each its own commit and full green suite, pushed only when the owner asks. |
+| MT6 | (owner 2026-11-21) One registration vocabulary: each domain's `registration_mode` (Open, RequireApplication, Closed, ReferralCode), a sister's blank one the first domain's. Whether a domain's members pay is a switch of its own, `paid_membership`, never inherited, with its subscription, grace days and paid-since; the mode still applies to a paid domain, so a closed one takes nobody new while its members go on paying. `referral_codes` (its own) says whether a valid code opens a domain whose signup is not open to the public. A sister's `registration` column ('anyone', 'closed', 'paid') is gone. |
+| MT7 | (owner 2026-11-21) One login switch: each domain's `private_instance`, a sister's blank one the first domain's. A sister's `login_required` is gone. A new domain is readable without login until it says otherwise; a federating domain may not come to require login, by its own value or the first domain's. |
 
 ## Schema
 
@@ -41,10 +43,11 @@ for.
     that never seeded a default `site_domain` row (a fresh install, most tests) still has a first tenant. It is made
     with the old `Site` defaults (`FIRST_DEFAULTS`) the first time it is needed.
   - A sister's row is made the first time it sets something; with none it inherits everything.
-  - The storefront columns `site_domain` had (`registration`, `registration_offer_id`, `login_required`,
-    `referral_codes`, `lapse_grace_days`, `paid_since`: `OWN_COLUMNS`) are each tenant's own, never inherited, until
-    phase 3 unifies registration and login with the first domain's mode and private instance. The default domain's
-    are the first tenant's row's.
+  - The storefront columns `site_domain` had are each tenant's own, never inherited (`OWN_COLUMNS`:
+    `paid_membership`, `registration_offer_id`, `referral_codes`, `lapse_grace_days`, `paid_since`). Its
+    `registration` and `login_required` became `paid_membership`, `registration_mode` and `private_instance` in phase
+    3b (MT6, MT7; migration `f5b1d8e3a7c9`, which writes out each domain's behaviour). The default domain's are the
+    first tenant's row's.
   - Markdown and its HTML stay paired columns, written together, as today.
 - `domain_branding` is dropped: its columns are `domain_config`'s.
 - `Site` keeps the instance-wide columns; its per-tenant columns move to the first tenant's `domain_config` row and are
@@ -57,7 +60,7 @@ for.
 |---|---|
 | Profile | name, description (tagline), logos (all sizes, dark), sidebar, about, legal information, ToS URL, source URL, bug report URL, get involved URL, contact email, announcement |
 | Look | default theme, additional CSS, additional JS, home and community sidebar boxes, language, default filter, inoculation block |
-| Joining | registration mode (one vocabulary: open, application, closed, referral code, paid), application question, paid tier and lapse grace days and paid-since, whether referral codes open signup, referral generators and caps, email verification, captcha, approval email, topic choice and filter selection at signup, auto-decline countries and referrers, login required, NSFW country restriction |
+| Joining | registration mode (one vocabulary: open, application, closed, referral code; MT6), application question, whether members pay (its own) with its paid tier and lapse grace days and paid-since, whether referral codes open signup, referral generators and caps, email verification, captcha, approval email, topic choice and filter selection at signup, auto-decline countries and referrers, login required, NSFW country restriction |
 | Content | downvotes, NSFW, NSFL, local image posts, video and audio uploads and their limits, album size, who may create communities, adding remote communities, gif-reply and chan-image and "this" comment filters, meme communities as low quality, read-posts cutoff, public modlog, report emails, em-dash report settings, redirect policy, ban posts |
 | Chooser | the instance chooser page and its listing: enabled, main list, elevator pitch, number of admins, financial stability, daily backups, crawl known instances |
 

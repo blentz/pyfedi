@@ -79,7 +79,7 @@ def paid_row(user, offer, status='active', reference='sub_1'):
 
 def paid_domain(env):
     home = SiteDomain(domain=current_app.config['SERVER_NAME'], scheme='https', federates=True, is_default=True,
-                      registration='paid', registration_offer_id=env.tier.id, lapse_grace_days=3,
+                      paid_membership=True, registration_offer_id=env.tier.id, lapse_grace_days=3,
                       paid_since=utcnow() - timedelta(days=10))
     db.session.add(home)
     db.session.commit()

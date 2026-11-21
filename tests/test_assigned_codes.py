@@ -32,7 +32,7 @@ def env(app, api_baseline, monkeypatch):
     db.session.add(knight)
     db.session.flush()
     home = SiteDomain(domain=current_app.config['SERVER_NAME'], scheme='https', federates=True, is_default=True,
-                      registration='paid', registration_offer_id=knight.id, lapse_grace_days=3,
+                      paid_membership=True, registration_offer_id=knight.id, lapse_grace_days=3,
                       paid_since=utcnow() - timedelta(days=10))
     db.session.add(home)
     db.session.commit()
@@ -170,7 +170,7 @@ class TestItsLink:
         assert env.client.get(f'{PAGE}/codes/{row.id}/qr.png', base_url=env.base).status_code == 404
 
     def test_where_joining_is_free_there_is_no_link_to_join_with(self, env):
-        env.home.registration = 'anyone'
+        env.home.paid_membership = False
         db.session.commit()
         clear_domain_cache()
         holder = member(env)
@@ -347,7 +347,7 @@ class TestItsLinkIsOnTheDomainItWorksOn:
 
     @pytest.fixture
     def second(self, env):
-        row = SiteDomain(domain='second.example', scheme='https', federates=True, registration='paid',
+        row = SiteDomain(domain='second.example', scheme='https', federates=True, paid_membership=True,
                          registration_offer_id=env.knight.id)
         db.session.add(row)
         db.session.commit()
@@ -395,7 +395,7 @@ class TestItsLinkIsOnTheDomainItWorksOn:
 
 class TestSoldOn:
     def test_nowhere_joining_is_free(self, env):
-        env.home.registration = 'anyone'
+        env.home.paid_membership = False
         db.session.commit()
         clear_domain_cache()
         row = code_for(env, None)

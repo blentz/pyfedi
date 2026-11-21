@@ -54,17 +54,14 @@
             </div>
             <hr>
             <h3>{{ _('Registration') }}</h3>
-            {% if form.registration_mode %}
-            {{ render_field(form.registration_mode, data_referral_prompt=_('Enter your referral code'), disabled=('registration_mode' not in editable)) }}
-            {% endif %}
-            {% if form.registration %}
-            {# A sister domain's own: who may join it, and who may read it (plan S4, S24), never the first domain's #}
-            <p>{{ _("Who may join this domain, and who may read it, are this domain's own: they are never the first domain's.") }}</p>
-            {{ f(form.registration) }}
+            {{ tenant_field(form.registration_mode, tenant, editable, inherited, instance_wide, needs, {'data_referral_prompt': _('Enter your referral code')}) }}
+            {% if form.paid_membership %}
+            {# A sister domain's own: whether and how its members pay (plan S4, S24), never the first domain's #}
+            <p>{{ _("Whether this domain's members pay, and what for, are this domain's own: never the first domain's.") }}</p>
+            {{ f(form.paid_membership) }}
             {{ f(form.referral_codes) }}
             {{ f(form.registration_offer_id) }}
             {{ f(form.lapse_grace_days) }}
-            {{ f(form.login_required) }}
             {% endif %}
             {{ f(form.application_question) }}
             <p class="small field_hint">{{ _('You can use markdown here.') }}</p>
@@ -103,7 +100,7 @@
             {{ f(form.onion_media_av_max_mb) }}
             {{ f(form.log_activitypub_json) }}
             {{ f(form.public_modlog) }}
-            {% if form.private_instance %}{{ f(form.private_instance) }}{% endif %}
+            {{ f(form.private_instance) }}
             {{ f(form.honeypot) }}
             {{ f(form.show_inoculation_block) }}
 

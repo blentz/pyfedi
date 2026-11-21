@@ -61,7 +61,7 @@ from app.email import send_registration_approved_email
 from app.admin.roles_routes import user_grants_panel
 from app.domain_config import effective, own_config
 from app.admin.scope import SESSION_KEY, creatable_domains, scope_for
-from app.admin.settings_form import Setting, load, offer_inheritance, save, sister_form
+from app.admin.settings_form import NO, YES, Setting, load, offer_inheritance, save, sister_form
 from app.admin.tenant import may_edit_branding, tenant_for
 from app.roles import grant_role
 from app.oauth_server import admin_scopes
@@ -73,7 +73,7 @@ from app.models import FIRST_DEFAULTS, AllowedInstances, BannedInstances, Activi
     User, Instance, File, Report, Topic, UserRegistration, Role, Post, PostReply, Language, Domain, \
     Tag, DefederationSubscription, BlockedImage, CmsPage, Notification, Emoji, user_file, InstanceRole, Conversation, SiteDomain, instance_row_referenced, DomainConfig, Referral, CustomTheme, CustomThemeTemplate
 from app.referral import GENERATOR_CHOICES
-from app.storefront import clear_domain_cache, current_storefront, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri
+from app.storefront import clear_domain_cache, current_storefront, default_domain, storefront_url, canonicalise_text, domain_by_id, hosted_instance_ids, instance_id_of, domain_authority, domain_base_url, acting_as_default, federating_base, is_hosted_uri, registration_mode_of
 from app.onion_media import DEFAULT_CACHE_BYTES
 from app.onion_guard import POW_DIFFICULTY_SETTING, pow_difficulty
 from app.shared.community import hold_community_text
@@ -518,20 +518,22 @@ def admin_domains():
         # that never ran the seed has no rows, and adding the first would unregister SERVER_NAME, so seed it.
         if db.session.query(SiteDomain.id).first() is None:
             implicit = default_domain()
-            db.session.add(SiteDomain(domain=implicit.domain, scheme=implicit.scheme, federates=True,
-                                      registration='anyone', is_default=True))
+            db.session.add(SiteDomain(domain=implicit.domain, scheme=implicit.scheme, federates=True, is_default=True))
         scheme = 'http' if form.domain.data.endswith('.onion') else form.scheme.data
-        db.session.add(SiteDomain(domain=form.domain.data, scheme=scheme,
-                                  federates=form.federates.data, registration=form.registration.data,
-                                  is_default=False))
+        # Who may register is the first domain's mode unless it is closed
+        db.session.add(SiteDomain(domain=form.domain.data, scheme=scheme, federates=form.federates.data,
+                                  registration_mode=form.registration_mode.data or None, is_default=False))
         db.session.commit()
         clear_domain_cache()
         flash(_('Domain added.'))
         return redirect(url_for('admin.admin_domains'))
     rows = db.session.query(SiteDomain).filter(true() if can_manage else scope.clause(SiteDomain.id)) \
         .order_by(SiteDomain.id).all()
+    implicit_default = default_domain() if not rows and can_manage else None
+    shown = rows + ([implicit_default] if implicit_default else [])
     return render_template('admin/domains.html', title=_('Domains'), form=form, rows=rows, can_manage=can_manage,
-                           implicit_default=default_domain() if not rows and can_manage else None,
+                           implicit_default=implicit_default,
+                           registration_modes={row.id: registration_mode_of(row) for row in shown},
                            theme_rows={row.id for row in rows if may_manage_themes(row)})
 
 
@@ -574,12 +576,15 @@ def admin_domain_settings(domain_id):
 
 
 def domain_settings_refusal(row: SiteDomain, form: DomainSettingsForm, usable_offers: set, may_choose_offer: bool) -> str | None:
-    """Why a domain can't be set to what `form` says, or None (plan S5, S6, S8, S24)."""
-    if form.login_required.data and not row.login_required and row.federates:
+    """Why a domain can't be set to what `form` says, or None (plan S5, S6, S8, S24). Its private instance may be the
+    first domain's (MT7), which counts as what it would then be."""
+    now = effective(row)['private_instance']
+    private = {YES: True, NO: False}.get(form.private_instance.data, effective(default_domain())['private_instance'])
+    if private and not now and row.federates:
         return _('A domain that federates cannot require login: what it has federated has already left this server.')
     if form.registration_offer_id.data != (row.registration_offer_id or 0) and not may_choose_offer:
         return _('Choosing what registration pays for needs the manage monetization permission.')
-    if form.registration.data == 'paid' and form.registration_offer_id.data not in usable_offers:
+    if form.paid_membership.data and form.registration_offer_id.data not in usable_offers:
         return _('A paid domain needs a subscription that is on offer on that domain. On an onion domain that means one from '
                  'BTCPay Server with an .onion address of its own.')
     return None
@@ -1005,9 +1010,10 @@ def admin_domain_branding(domain_id):
     return redirect(url_for('admin.admin_site', domain=row.id))
 
 
-# The Misc page (MT4). MISC_SETTINGS are each domain's. FIRST_ONLY are the first domain's registration mode and private
-# instance: a sister has its own registration and login instead (DOMAIN_JOINING, never inherited) until phase 3 makes
-# them one. INSTANCE_WIDE apply to every domain: shown on a sister's page, changed on the first domain's.
+# The Misc page (MT4). MISC_SETTINGS are each domain's. JOINING_SETTINGS, who may register and who may read, are each
+# domain's too (MT6, MT7), and on a sister need `manage domains`, as do whether and how its members pay
+# (DOMAIN_JOINING, never inherited). INSTANCE_WIDE apply to every domain: shown on a sister's page, changed on the
+# first domain's.
 MISC_SETTINGS = [Setting(name) for name in (
     'enable_downvotes', 'enable_gif_reply_rep_decrease', 'enable_chan_image_filter', 'enable_this_comment_filter',
     'allow_local_image_posts', 'enable_nsfw', 'enable_nsfl', 'community_creation_admin_only', 'reports_email_admins',
@@ -1020,11 +1026,14 @@ MISC_SETTINGS = [Setting(name) for name in (
     Setting('nsfw_country_restriction', upper=True), Setting('auto_decline_countries', upper=True),
     Setting('max_video_upload_mb', 'max_video_upload_bytes', 1048576),
     Setting('max_audio_upload_mb', 'max_audio_upload_bytes', 1048576)]
-FIRST_ONLY = ('registration_mode', 'private_instance')
+# Who may register and who may read (MT6, MT7): a sister's may be the first domain's, and need `manage domains` there
+JOINING_SETTINGS = [Setting('registration_mode'), Setting('private_instance')]
+JOINING = tuple(setting.field for setting in JOINING_SETTINGS)
 INSTANCE_WIDE = ('oauth_admin_role', 'log_activitypub_json', 'honeypot', 'ban_check_servers',
                  'cache_remote_images_locally', 'read_posts_cutoff', 'onion_pow_difficulty', 'remote_image_cache_days',
                  'onion_media_cache_mb', 'onion_media_image_max_mb', 'onion_media_av_max_mb')
-DOMAIN_JOINING = ('registration', 'referral_codes', 'registration_offer_id', 'lapse_grace_days', 'login_required')
+# Whether and how a sister's members pay: its own, never the first domain's
+DOMAIN_JOINING = ('paid_membership', 'referral_codes', 'registration_offer_id', 'lapse_grace_days')
 
 
 def may_edit_misc(domain) -> bool:
@@ -1038,8 +1047,10 @@ def may_edit_misc(domain) -> bool:
 def _sister_misc_form(joins: bool) -> type:
     """A sister's Misc form: its settings able to be the first domain's, the instance-wide ones shown only, and who may
     join it and read it, which only `manage domains` changes (shown only to anyone else)."""
-    return sister_form(SiteMiscForm, MISC_SETTINGS, shown_only=INSTANCE_WIDE + (() if joins else DOMAIN_JOINING),
-                       removed=FIRST_ONLY, added={name: getattr(DomainSettingsForm, name) for name in DOMAIN_JOINING})
+    return sister_form(SiteMiscForm, MISC_SETTINGS + JOINING_SETTINGS,
+                       shown_only=INSTANCE_WIDE + (() if joins else DOMAIN_JOINING + JOINING),
+                       added={name: getattr(DomainSettingsForm, name) for name in DOMAIN_JOINING})
+
 
 
 def _load_instance_wide(form, site) -> None:
@@ -1091,14 +1102,16 @@ def admin_misc():
     joins = sister and user_access('manage domains', user_id)
     form_class = _sister_misc_form(joins) if sister else SiteMiscForm
     row = db.session.get(SiteDomain, tenant.domain.id) if sister else None
-    form = form_class(obj=row)   # who may join a sister and read it: one a post leaves out keeps the row's
+    # whether and how a sister's members pay: one a post leaves out keeps the row's. Its registration mode and private
+    # instance are settings like the rest: left out, they are the first domain's
+    form = form_class(data={name: getattr(row, name) for name in DOMAIN_JOINING} if sister else None)
     close_form = CloseInstanceForm()
     site = db.session.get(Site, 1)
     if site is None:
         site = Site()
     settings = MISC_SETTINGS if whole else []
     editable = {setting.field for setting in settings} | \
-        (set(FIRST_ONLY + INSTANCE_WIDE) if whole and not sister else set()) | (set(DOMAIN_JOINING) if joins else set())
+        (set(JOINING + INSTANCE_WIDE) if whole and not sister else set()) | (set(DOMAIN_JOINING + JOINING) if joins else set())
     form.language_id.choices = select_choices(languages_for_form(all_languages=True))
     form.oauth_admin_role.choices = select_choices([(0, ADMIN_SCOPE_ROLE_DEFAULT)] +
                                                    [(role.id, role.name) for role in Role.query.order_by(Role.name)])
@@ -1108,7 +1121,7 @@ def admin_misc():
         form.registration_offer_id.choices = select_choices([(0, _('None'))] + [(offer.id, offer.title) for offer in usable])
         if form.registration_offer_id.data is None:   # none, as the row's NULL; a post that leaves it out keeps it
             form.registration_offer_id.data = 0
-        offer_inheritance(form, form_class, MISC_SETTINGS, effective(default_domain()))
+        offer_inheritance(form, form_class, MISC_SETTINGS + JOINING_SETTINGS, effective(default_domain()))
     stored = tenant.stored()
     if not sister and close_form.close_submit.data and close_form.validate():
         app_pkg.redis_client.set('pause_federation', '666', ex=86400 * 365 * 10)
@@ -1128,6 +1141,8 @@ def admin_misc():
             # A referral generators value not on offer keeps the stored one, as before
             saved = [setting for setting in settings if setting.field != 'referral_generators' or
                      form.referral_generators.data in GENERATOR_CHOICES or (sister and not form.referral_generators.data)]
+            if joins:
+                saved += JOINING_SETTINGS
             if saved:
                 save(form, form_class, saved, tenant.target(), sister)
             if whole and not sister:
@@ -1135,11 +1150,10 @@ def admin_misc():
                 site.private_instance = form.private_instance.data
                 _save_instance_wide(form, site)
             if joins:
-                row.registration = form.registration.data
+                row.set_paid_membership(form.paid_membership.data)
                 row.referral_codes = form.referral_codes.data
                 row.registration_offer_id = form.registration_offer_id.data or None
                 row.lapse_grace_days = form.lapse_grace_days.data
-                row.login_required = form.login_required.data
             site.updated = utcnow()
             if site.id is None:
                 db.session.add(site)
@@ -1147,15 +1161,15 @@ def admin_misc():
             cache.delete_memoized(get_site_as_dict)
             flash(_('Settings saved.'))
     elif request.method == 'GET':
-        load(form, form_class, MISC_SETTINGS, stored, sister, FIRST_DEFAULTS)
+        load(form, form_class, MISC_SETTINGS + (JOINING_SETTINGS if sister else []), stored, sister, FIRST_DEFAULTS)
         _load_instance_wide(form, site)
-        if not sister:   # a sister's own registration and login came from its row with the form
+        if not sister:   # a sister's own payment settings came from its row with the form
             form.registration_mode.data = site.registration_mode
             form.private_instance.data = site.private_instance
             form.default_filter.data = form.default_filter.data or 'popular'
     return render_template('admin/misc.html', title=_('Misc settings'), form=form, close_form=close_form, tenant=tenant,
                            editable=editable, inherited=tenant.inherited(), instance_wide=set(INSTANCE_WIDE),
-                           needs=dict.fromkeys(DOMAIN_JOINING, 'manage domains'),
+                           needs=dict.fromkeys(DOMAIN_JOINING + (JOINING if sister else ()), 'manage domains'),
                            roles_with=roles_with('change instance settings'))
 
 

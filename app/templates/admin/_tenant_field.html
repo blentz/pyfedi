@@ -3,9 +3,9 @@
    is shown, not editable; an instance-wide field says it applies to every domain, and is changed on the first
    domain's page only. #}
 {% from 'bootstrap5/form.html' import render_field %}
-{% macro tenant_field(field, tenant, editable, inherited, instance_wide=(), needs={}) -%}
+{% macro tenant_field(field, tenant, editable, inherited, instance_wide=(), needs={}, attributes={}) -%}
 {% set texts = ('StringField', 'TextAreaField', 'EmailField') -%}
-{% set options = {} -%}
+{% set options = dict(attributes) -%}
 {% if field.name not in editable %}{% set _unused = options.update({'disabled': true}) %}{% endif -%}
 {% if not tenant.is_first and field.name not in instance_wide and inherited.get(field.name) and field.type in texts -%}
     {% set _unused = options.update({'placeholder': inherited[field.name]|string|truncate(200)}) -%}

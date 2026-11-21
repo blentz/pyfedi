@@ -13,18 +13,21 @@ def load_revision(pattern: str):
 
 
 class DomainConfigMigrations:
-    """Migrations b9e4d2a7c1f6 and c3f7a1e9d5b8 as one step (spec 2026-11-20-multitenant-domain-config): what they
-    moved into domain_config goes back to site, site_domain, domain_branding and settings, and returns. An older
+    """Migrations b9e4d2a7c1f6, c3f7a1e9d5b8 and f5b1d8e3a7c9 as one step (spec 2026-11-20-multitenant-domain-config):
+    what they moved into domain_config goes back to site, site_domain, domain_branding and settings, and returns. An older
     migration's test undoes it first and redoes it last; call both inside an alembic Operations context."""
 
     def __init__(self):
         self.table = load_revision('b9e4d2a7c1f6_domain_config.py')
         self.settings = load_revision('c3f7a1e9d5b8_domain_config_settings.py')
+        self.registration = load_revision('f5b1d8e3a7c9_domain_config_one_registration.py')
 
     def downgrade(self):
+        self.registration.downgrade()
         self.settings.downgrade()
         self.table.downgrade()
 
     def upgrade(self):
         self.table.upgrade()
         self.settings.upgrade()
+        self.registration.upgrade()

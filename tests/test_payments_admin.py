@@ -290,7 +290,7 @@ class TestOffers:
         assert (offer.provider_price_id, offer.amount_minor) == ('price_2', 900)
 
     def test_the_edit_page_shows_the_price_and_domains(self, env, admin):
-        domain = SiteDomain(domain='sister.example', scheme='https', registration='anyone')
+        domain = SiteDomain(domain='sister.example', scheme='https')
         db.session.add(domain)
         db.session.commit()
         offer = an_offer()
@@ -302,7 +302,7 @@ class TestOffers:
         assert 'value="price_1"' in body and 'sister.example' in body
 
     def test_domains_are_saved_and_replaced(self, env, admin):
-        domain = SiteDomain(domain='sister.example', scheme='https', registration='anyone')
+        domain = SiteDomain(domain='sister.example', scheme='https')
         db.session.add(domain)
         db.session.commit()
         clear_domain_cache()
@@ -450,7 +450,7 @@ class TestLinks:
         assert (link.title, link.url) == ('Our Ko-fi', 'https://ko-fi.example/us') and not retrieve.called
 
     def test_a_link_can_be_limited_to_a_domain(self, env, admin):
-        domain = SiteDomain(domain='sister.example', scheme='https', registration='anyone')
+        domain = SiteDomain(domain='sister.example', scheme='https')
         db.session.add(domain)
         db.session.commit()
         clear_domain_cache()

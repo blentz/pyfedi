@@ -104,11 +104,10 @@ def register():
     if referral and request.method == 'GET' and normalise_code(request.args.get('ref')):
         # A referral link: the code fills the answer, and is kept for an OAuth signup started from this page (RC5)
         session['referral_code'] = form.question.data = normalise_code(request.args.get('ref'))
-    # this domain's accounts are made by staff, not by sign-up -- unless a referral code opens it (RC11, RC11a)
+    # this domain's accounts are made by staff, not by sign-up -- unless a referral code opens it (RC11, RC11a). A
+    # Closed mode is closed here (MT6): the template hides the form; a direct POST gets the same refusal
     if not signup_open_to(current_storefront(), referral):
         return render_registration_form(form)
-    if g.site.registration_mode == 'Closed':
-        return render_registration_form(form)   # the template hides the form; a direct POST gets the same refusal
     if g.site.tos_url is None or not g.site.tos_url.strip():
         del form.terms
     if g.site.registration_mode == 'Open':

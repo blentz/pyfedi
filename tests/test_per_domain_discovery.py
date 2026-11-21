@@ -297,9 +297,9 @@ def test_the_shops_alpha_site_documents_name_only_the_shop(app, two_domains, sho
 
 @pytest.fixture
 def shop_admin_only(app, golden_site, shop_rows):
-    """Sign-up open on the first domain (Site.registration_mode), the shop's accounts made by an admin only."""
+    """Sign-up open on the first domain, the shop's accounts made by an admin only (its registration mode Closed)."""
     db.session.get(Site, 1).registration_mode = 'RequireApplication'
-    db.session.get(SiteDomain, shop_rows[0].id).registration = 'closed'
+    db.session.get(SiteDomain, shop_rows[0].id).registration_mode = 'Closed'
     db.session.commit()
     clear_domain_cache()
     cache.clear()

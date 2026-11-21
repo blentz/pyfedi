@@ -6,6 +6,7 @@ import pytest
 from flask import current_app
 
 from app import db
+from app.domain_config import effective
 from app.models import Instance, InstanceBlock, Site, SiteDomain, refuse_a_federating_onion
 from app.storefront import clear_domain_cache, domain_for_host
 from tests.factories import grant_permissions, INSTANCE_SETTINGS, grant_permission, make_instance, make_user
@@ -26,14 +27,14 @@ def _admin(name='domainadmin'):
 
 def _default_row():
     row = SiteDomain(domain=current_app.config['SERVER_NAME'], scheme='https', federates=True,
-                     registration='anyone', is_default=True)
+                     is_default=True)
     db.session.add(row)
     db.session.commit()
     return row
 
 
 def _form(token, **overrides):
-    data = {'domain': 'abc.onion', 'scheme': 'https', 'federates': '', 'registration': 'closed',
+    data = {'domain': 'abc.onion', 'scheme': 'https', 'federates': '', 'registration_mode': 'Closed',
             'csrf_token': token, 'submit': 'Add'}
     data.update(overrides)
     return data
@@ -62,8 +63,9 @@ def test_add_domain(app):
     response = client.post('/admin/domains', data=_form(csrf(app, client), domain='ABC.onion'))
     assert response.status_code == 302
     row = db.session.query(SiteDomain).filter_by(domain='abc.onion').one()
-    assert (row.is_onion, row.is_default, row.scheme, row.federates, row.registration) == \
-           (True, False, 'http', False, 'closed')
+    assert (row.is_onion, row.is_default, row.scheme, row.federates, row.registration_mode) == \
+           (True, False, 'http', False, 'Closed')
+    assert effective(row)['private_instance'] is False   # readable without login
     assert domain_for_host('abc.onion') is not None
 
 
@@ -100,7 +102,7 @@ def test_the_form_adds_a_second_federating_domain_with_its_keys_and_instance_row
     client = app.test_client()
     login(client, _admin())
     response = client.post('/admin/domains', data=_form(csrf(app, client), domain='shop.example',
-                                                        scheme='https', federates='y', registration='anyone'))
+                                                        scheme='https', federates='y', registration_mode=''))
     assert response.status_code == 302
     row = db.session.query(SiteDomain).filter_by(domain='shop.example').one()
     assert (row.federates, row.is_default) == (True, False)
@@ -223,7 +225,7 @@ def test_page_says_later_release_and_dns(app):
     client = app.test_client()
     login(client, _admin())
     html = client.get('/admin/domains').get_data(as_text=True)
-    assert html.count('A paid domain is set up on its settings page') >= 1
+    assert html.count('A paid domain is set up on its Misc page') >= 1
     assert 'configured on the server' in html
     assert 'DNS' in html and 'TLS' in html and 'Tor' in html
 

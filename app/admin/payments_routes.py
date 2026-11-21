@@ -102,9 +102,9 @@ def _membership_tiers(row: SiteDomain | None) -> list[Offer]:
 
 
 def _membership_form(row: SiteDomain | None) -> MembershipForm:
-    form = MembershipForm(membership=bool(row and row.registration == 'paid'),
+    form = MembershipForm(membership=bool(row and row.paid_membership),
                           membership_offer_id=(row.registration_offer_id if row else None) or 0,
-                          membership_grace_days=row.lapse_grace_days if row and row.registration == 'paid' else 3)
+                          membership_grace_days=row.lapse_grace_days if row and row.paid_membership else 3)
     form.membership_offer_id.choices = [(0, _('None'))] + [(offer.id, offer.title) for offer in _membership_tiers(row)]
     return form
 
@@ -301,8 +301,7 @@ def _apply_price(offer: Offer, price: dict) -> None:
 @login_required
 @permission_required('manage monetization')
 def admin_payments_membership():
-    """Turning it on dates it, once: an account made before then stays free for good (PM5, plan M2). Turning it off
-    forgets the date, so turning it on again grandfathers everyone who joined in between."""
+    """The first domain's members pay, or no longer do (`SiteDomain.set_paid_membership`)."""
     row = _home_row()
     if row is None:
         flash(_('This site has no domain settings yet: add its domain on the domains page first.'), 'error')
@@ -315,13 +314,11 @@ def admin_payments_membership():
         if form.membership_offer_id.data not in tiers:
             flash(_('Choose a subscription that is on offer here.'), 'error')
             return redirect(url_for('admin.admin_payments'))
-        if row.registration != 'paid':
-            row.paid_since = utcnow()
-        row.registration = 'paid'
+        row.set_paid_membership(True)
         row.registration_offer_id = form.membership_offer_id.data
         row.lapse_grace_days = form.membership_grace_days.data
     else:
-        row.registration, row.paid_since = 'anyone', None
+        row.set_paid_membership(False)
     db.session.commit()
     clear_domain_cache()
     flash(_('Membership saved.'))

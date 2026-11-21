@@ -42,7 +42,7 @@ def env(app, api_baseline, monkeypatch):
     db.session.add_all([tier, regular, once])
     db.session.flush()
     home = SiteDomain(domain=current_app.config['SERVER_NAME'], scheme='https', federates=True, is_default=True,
-                      registration='paid', registration_offer_id=tier.id, lapse_grace_days=3,
+                      paid_membership=True, registration_offer_id=tier.id, lapse_grace_days=3,
                       paid_since=utcnow() - timedelta(days=100))
     db.session.add(home)
     db.session.add(BtcDailyRate(day=utcnow().date() - timedelta(days=1), currency='usd', rate=50000, fixed_at=utcnow()))
