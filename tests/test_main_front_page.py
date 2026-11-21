@@ -14,7 +14,7 @@ defect, measured first:
 from unittest.mock import patch
 
 import pytest
-from flask import g
+from flask import current_app, g
 
 from app import db
 from app.models import Site, utcnow
@@ -116,7 +116,7 @@ class TestTheFrontPage:
         db.session.commit()
         actor = main_front_page_env.client.get(
             '/', headers={'Accept': 'application/activity+json'}).get_json()
-        assert actor['summary'] == ''
+        assert actor['summary'] == current_app.config['SERVER_NAME']   # an unnamed domain goes by its own name
 
     def test_a_private_instance_sends_an_anonymous_reader_to_the_login(
             self, main_front_page_env):

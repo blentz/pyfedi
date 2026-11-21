@@ -110,10 +110,10 @@ def federating_storefront() -> DomainInfo:
 
 
 def domain_site_name(domain: DomainInfo, site) -> str:
-    """The name `domain`'s site goes by in what it tells other servers and clients: `site.name` for the default
-    domain; for any other its own display name (per-domain branding, spec §3.3), else the domain itself, as Site.name
-    is the default domain's and nothing a sister domain publishes names the default domain (owner ruling)."""
-    return own_value(domain, 'name') or (site.name if domain.is_default else domain_authority(domain))
+    """The name `domain`'s site goes by in what it tells other servers and clients: its own display name (per-domain
+    branding, spec §3.3), else the domain itself, as nothing a sister domain publishes names the first domain (owner
+    ruling). `site` is unused: the name is the domain's own."""
+    return own_value(domain, 'name') or domain_authority(domain)
 
 
 def hosted_domain_names() -> list[str]:

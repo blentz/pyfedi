@@ -93,11 +93,6 @@ def config():
     })
 
 
-def _own(domain, field: str) -> str:
-    """`domain`'s own text, or the Site row's on the default domain alone, as the Mastodon API's instance reads it."""
-    return own_value(domain, field) or ((getattr(g.site, field) or '') if domain.is_default else '')
-
-
 @bp.route('/api/v1/config/about')
 def config_about():
     """The instance's page, which PeerTube's app reads to open a platform (it calls one unreachable without it): every
@@ -106,8 +101,8 @@ def config_about():
     empty = ('codeOfConduct', 'hardwareInformation', 'creationReason', 'moderationInformation', 'administrator',
              'maintenanceLifetime', 'businessModel')
     return jsonify({'instance': {
-        'name': domain_site_name(domain, g.site) or domain.domain, 'shortDescription': _own(domain, 'description'),
-        'description': _own(domain, 'about'), 'terms': _own(domain, 'legal_information'),
+        'name': domain_site_name(domain, g.site) or domain.domain, 'shortDescription': own_value(domain, 'description'),
+        'description': own_value(domain, 'about'), 'terms': own_value(domain, 'legal_information'),
         **{name: '' for name in empty}, 'languages': [], 'categories': [], 'banners': [], 'avatars': []}})
 
 

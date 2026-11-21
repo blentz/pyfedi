@@ -1,6 +1,6 @@
 # Domains as tenants: one configuration per domain — design
 
-Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1 built: 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) and 1b (the per-tenant `settings` keys). Phase 2 built: the picker on settings pages; the Site page per domain with Branding folded in (2a); Misc per domain with Domain settings folded in, the first domain's row holding every setting's value (2b); the Sidebar, Chooser and Themes pages (2c). Phase 3 in progress: 3a (the storage rule) and 3b (one registration vocabulary and login switch, MT6 and MT7) built.
+Date: 2026-11-20. Status: approved (owner 2026-11-20). Phase 1 built: 1a (the table, `Site`'s and `site_domain`'s columns, `domain_branding`) and 1b (the per-tenant `settings` keys). Phase 2 built: the picker on settings pages; the Site page per domain with Branding folded in (2a); Misc per domain with Domain settings folded in, the first domain's row holding every setting's value (2b); the Sidebar, Chooser and Themes pages (2c). Phase 3 built: the storage rule (3a), one registration vocabulary and login switch (3b, MT6 and MT7), and what a domain publishes read from its own row, the first domain's being the first row (3c).
 
 ## Why
 
@@ -93,7 +93,10 @@ Outside a request (a Celery task), a setting about what a user does is the first
   same attribute names and `Site`'s methods, so upstream code reading `g.site.<name>` reads its tenant's value without change.
 - `get_setting(name)` for a key that moved reads the request's tenant; outside a request, the first tenant's.
 - Code that branches on `is_default` to choose between `Site` and a sister's fragment reads the effective
-  configuration instead.
+  configuration instead. What a domain publishes as its own (its name, tagline, about, contact address, logo) is read
+  from `app.domain_config.own_row(domain)`, the first domain's own row being the first row (MT1); a sister never
+  publishes the first domain's. The `is_default` branches left are about identity (keys, instance rows, which
+  accounts and communities are whose) and permissions, not configuration.
 
 ## Phases
 

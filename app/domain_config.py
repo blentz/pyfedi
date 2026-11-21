@@ -28,6 +28,12 @@ def own_config(site_domain_id: int | None) -> models.DomainConfig | None:
     return None if row is None or row.is_default else row.own_config
 
 
+def own_row(domain) -> models.DomainConfig | None:
+    """The row `domain` (a DomainInfo or a SiteDomain row) stores its own values in: the first domain's row for the
+    default domain (MT1), a sister's own row or None. What a domain publishes as its own is read here."""
+    return models.first_config() if domain.is_default else own_config(domain.id)
+
+
 def _inherits(value) -> bool:
     return value is None or value == ''
 

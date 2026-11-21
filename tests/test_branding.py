@@ -10,8 +10,9 @@ from sqlalchemy import inspect
 from cachelib import SimpleCache
 
 from app import cache, db
-from app.branding import Branding, branding_for, current_branding, own_branding
-from app.models import DomainConfig, SiteDomain
+from app.branding import Branding, branding_for, current_branding
+from app.domain_config import own_row
+from app.models import DomainConfig, SiteDomain, first_config
 from app.storefront import clear_domain_cache
 from tests.schema_history import DomainConfigMigrations
 from tests.two_domains import default_request, onion_request
@@ -49,14 +50,14 @@ def set_branding(domain, **values):
 def test_default_domain_is_the_site(two_domains, site_values):
     default, _onion = two_domains.domains
     assert branding_for(default)._asdict() == site_values
-    assert own_branding(default) is None
+    assert own_row(default) is first_config()   # the first domain's own row is the first row (MT1)
 
 
 def test_blank_fields_inherit_per_field(two_domains, site_values):
     default, onion = two_domains.domains
     set_branding(onion, name='Onion name', description='', logo=None)
     assert branding_for(onion)._asdict() == {**site_values, 'name': 'Onion name'}
-    assert own_branding(onion).name == 'Onion name'
+    assert own_row(onion).name == 'Onion name'
 
 
 ICON_FIELDS = ('logo_180', 'logo_152', 'logo_32', 'logo_16')

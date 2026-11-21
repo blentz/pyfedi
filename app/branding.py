@@ -73,15 +73,11 @@ def _header_image(logo: str, logo_152: str) -> str:
     return logo if logo.lower().endswith('.svg') else logo_152
 
 
-def own_branding(domain: storefront.DomainInfo) -> models.DomainConfig | None:
-    """The row sister domain `domain` stores its own values in, or None (the first domain's are the site's)."""
-    return None if domain.is_default else domain_config.own_config(domain.id)
-
-
 def own_value(domain: storefront.DomainInfo, field: str) -> str:
-    """`domain`'s own non-blank `field`, else ''. What other servers and clients read (spec §3.3) publishes a sister
-    domain's own value where it set one and today's otherwise. The first domain has none: its branding is Site's."""
-    row = own_branding(domain)
+    """`domain`'s own non-blank `field`, else '': the first domain's own for the default domain, never the first
+    domain's for a sister. What other servers and clients read (spec §3.3) publishes a domain's own value; nothing a
+    sister domain publishes names the first domain (owner ruling)."""
+    row = domain_config.own_row(domain)
     return (getattr(row, field) if row is not None else None) or ''
 
 

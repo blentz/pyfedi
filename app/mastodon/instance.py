@@ -45,15 +45,9 @@ def _configuration() -> dict:
     }
 
 
-def _own(domain, field: str) -> str:
-    """`domain`'s own `field`, or the Site row's on the default domain alone: nothing a sister domain publishes names
-    the default domain (owner ruling, app.federation_urls.domain_site_name)."""
-    return own_value(domain, field) or ((getattr(g.site, field) or '') if domain.is_default else '')
-
-
 def _contact(domain) -> str:
-    """The default domain's contact email; a sister domain has none of its own to publish."""
-    return (g.site.contact_email or '') if domain.is_default else ''
+    """`domain`'s own contact email: the first domain's for the default domain, a sister's where it set one."""
+    return own_value(domain, 'contact_email')
 
 
 def _registration(domain) -> tuple[bool, bool]:
@@ -65,11 +59,11 @@ def instance_v1(domain, usage: dict) -> dict:
     enabled, approval = _registration(domain)
     return {
         'uri': domain_authority(domain), 'title': domain_site_name(domain, g.site),
-        'short_description': _own(domain, 'description'), 'description': _own(domain, 'about_html'),
+        'short_description': own_value(domain, 'description'), 'description': own_value(domain, 'about_html'),
         'email': _contact(domain), 'version': version(), 'urls': {},
         'stats': {'user_count': usage['users']['total'],
                   'status_count': usage['localPosts'] + usage['localComments'], 'domain_count': 1},
-        'thumbnail': absolute(_own(domain, 'logo'), LOGO), 'languages': _languages(), 'registrations': enabled,
+        'thumbnail': absolute(own_value(domain, 'logo'), LOGO), 'languages': _languages(), 'registrations': enabled,
         'approval_required': approval, 'invites_enabled': False, 'configuration': _configuration(),
         'contact_account': None, 'rules': [],
     }
@@ -85,9 +79,9 @@ def instance_v2(domain, usage: dict) -> dict:
     enabled, approval = _registration(domain)
     return {
         'domain': domain_authority(domain), 'title': domain_site_name(domain, g.site), 'version': version(),
-        'source_url': project_links().source_url, 'description': _own(domain, 'description'),
+        'source_url': project_links().source_url, 'description': own_value(domain, 'description'),
         'usage': {'users': {'active_month': usage['users']['activeMonth']}},
-        'thumbnail': {'url': absolute(_own(domain, 'logo'), LOGO)}, 'languages': _languages(),
+        'thumbnail': {'url': absolute(own_value(domain, 'logo'), LOGO)}, 'languages': _languages(),
         'configuration': {'urls': {}, **_configuration(), **_vapid(domain)},
         'registrations': {'enabled': enabled, 'approval_required': approval, 'message': None},
         'contact': {'email': _contact(domain), 'account': None}, 'rules': [],
