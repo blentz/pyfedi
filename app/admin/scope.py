@@ -7,7 +7,7 @@ narrows the list to one of the holder's domains; the choice is kept in the sessi
 """
 from typing import NamedTuple
 
-from flask import g, request, session
+from flask import g, session
 from flask_login import current_user
 from sqlalchemy import and_, or_, select, true
 
@@ -59,7 +59,7 @@ class Scope(NamedTuple):
 
 def domain_choices(held: frozenset[int] | None) -> list[tuple[int, str]]:
     """The domains a picker offers: those `held` covers, less any local-only domain other than this storefront,
-    which is never named off its own domain (follow-up F6)."""
+    which is never named off its own domain (follow-up F6), to an admin no more than to anyone else."""
     here_id = current_storefront().id
     return [(row.id, row.domain) for row in domain_rows()
             if row.id is not None and (held is None or row.id in held) and (row.federates or row.id == here_id)]
@@ -77,12 +77,10 @@ def creatable_domains() -> list:
 
 
 def scope_for(permission: str) -> Scope:
-    """The current user's scope for `permission`, narrowed by the picker. `?domain=<id>` picks one domain and
-    `?domain=0` picks them all again; a domain the holder may not see is ignored."""
+    """The current user's scope for `permission`, narrowed by the picker (app.admin.picker: `?domain=<id>` picks one
+    domain and `?domain=0` them all again); a domain the holder may not see is ignored."""
     held = domains_for(permission, current_user.get_id())
     choices = domain_choices(held)
-    if 'domain' in request.args:
-        session[SESSION_KEY] = request.args.get('domain', 0, type=int)
     picked = session.get(SESSION_KEY) or None
     if picked not in {domain_id for domain_id, _ in choices}:
         picked = None

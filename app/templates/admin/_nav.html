@@ -22,10 +22,10 @@
     {% if user_access('administer communities pages', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_content') }}">{{ _('Content') }}</a> |
     {% endif %}
-    {% if g.site.registration_mode == 'RequireApplication' and user_access('approve registrations', current_user.id, anywhere=True) %}
+    {% if 'RequireApplication' in admin_registration_modes() and user_access('approve registrations', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_approve_registrations') }}">{{ _('Registration applications') }}</a> |
     {% endif %}
-    {% if g.site.registration_mode == 'ReferralCode' and user_access('administer all users', current_user.id, anywhere=True) %}
+    {% if 'ReferralCode' in admin_registration_modes() and user_access('administer all users', current_user.id, anywhere=True) %}
         <a href="{{ url_for('admin.admin_referrals') }}">{{ _('Referrals') }}</a> |
     {% endif %}
     {% if user_access('administer all users', current_user.id, anywhere=True) %}

@@ -120,7 +120,7 @@ def test_the_themes_tab_opens_the_picked_domains_themes(admin_domain_branding_ad
     assert 'id="themes-tab"' in body and re.search(r'class="nav-link active"[^>]*id="themes-tab"', body)
     with admin_domain_branding_admin[0].session_transaction() as session:
         assert session[SESSION_KEY] == first.id   # the themes page is its domain's: the other pages follow
-    picker = re.search(r'<form method="get" action="/admin/themes"[^>]*id="domain-picker">', body)
+    picker = re.search(r'<form method="get" action="/admin/themes"[^>]*id="domain-picker"[^>]*>', body)
     shop_body = get(admin_domain_branding_admin[0], f'/admin/domains/{shop.id}/themes')
     assert picker or re.search(r'<form method="get" action="/admin/themes"', shop_body)
 

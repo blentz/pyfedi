@@ -89,7 +89,7 @@ def body(world, path):
     response = world.client.get(path)
     assert response.status_code == 200, (path, response.status_code, response.headers.get('Location'))
     page = response.get_data(as_text=True)
-    picker = re.search(r'<form method="get"[^>]*id="domain-picker">.*?</form>', page, re.S)
+    picker = re.search(r'<form method="get"[^>]*id="domain-picker"[^>]*>.*?</form>', page, re.S)
     return page.replace(picker.group(0), '<form id="domain-picker"></form>') if picker else page
 
 
@@ -150,7 +150,7 @@ def test_an_instance_wide_holder_sees_both_and_the_picker_narrows(world, permiss
 def test_a_holder_on_one_domain_is_told_which_and_cannot_pick_another(world):
     holder(world, 'xholder', 'administer all users', domain=world.x)
     page = body(world, f'/admin/users?local_remote=local&domain={world.y.id}')
-    assert 'Showing x.scoped.example.' in page and 'yyuser' not in page
+    assert 'Domain: x.scoped.example' in page and 'yyuser' not in page
 
 
 def test_a_holder_on_both_domains_picks_between_them(world):

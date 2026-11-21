@@ -1,32 +1,24 @@
-{# The domain picker (RB8, MT4). On an /admin list whose route asked scope_for, it narrows the list; on a settings page
-   whose route asked tenant_for, it chooses the one domain the page edits. Both keep the same choice. #}
-{% set admin_scope = g.admin_scope if g.admin_scope is defined else none %}
-{% set admin_tenant = g.admin_tenant if g.admin_tenant is defined else none %}
-{% if admin_tenant -%}
-{% if admin_tenant.choices|length > 1 -%}
-<form method="get"{% if picker_action is defined %} action="{{ picker_action }}"{% endif %} class="d-flex gap-2 align-items-center mt-2" id="domain-picker">
-    <label for="domain-picker-select" class="form-label mb-0">{{ _('Settings for') }}</label>
-    <select name="domain" id="domain-picker-select" class="form-select form-select-sm w-auto">
-        {% for domain_id, domain in admin_tenant.choices -%}
-        <option value="{{ domain_id }}"{{ ' selected' if admin_tenant.id == domain_id }}>{{ domain }}{{ ' (' + _('first domain') + ')' if domain_id == admin_tenant.first_id else '' }}</option>
-        {% endfor -%}
-    </select>
-    <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Show') }}</button>
-</form>
-{%- elif not admin_tenant.is_first -%}
-<p class="small mt-2" id="domain-picker">{{ _('Settings for %(domain)s.', domain=admin_tenant.domain.domain) }}</p>
-{%- endif %}
-{%- elif admin_scope and admin_scope.choices|length > 1 -%}
-<form method="get" class="d-flex gap-2 align-items-center mt-2" id="domain-picker">
+{# The domain picker on every admin page with the admin tabs (MT4, RB8; app.admin.picker). One choice, kept for every
+   page: a settings page edits the picked domain, a list shows its rows ("All": every domain's), and an instance-wide
+   page says its settings are every domain's. Picking applies at once; the button is for a browser without scripts. #}
+{% set picker = admin_picker() -%}
+{% if picker and picker.offered -%}
+<form method="get"{% if picker_action is defined %} action="{{ picker_action }}"{% endif %} class="d-flex flex-wrap gap-2 align-items-center mt-2" id="domain-picker" data-kind="{{ picker.kind }}">
     <label for="domain-picker-select" class="form-label mb-0">{{ _('Domain') }}</label>
     <select name="domain" id="domain-picker-select" class="form-select form-select-sm w-auto">
-        <option value="0"{{ ' selected' if not admin_scope.picked }}>{{ _('All') if admin_scope.unfiltered else _('All of mine') }}</option>
-        {% for domain_id, domain in admin_scope.choices -%}
-        <option value="{{ domain_id }}"{{ ' selected' if admin_scope.picked == domain_id }}>{{ domain }}</option>
+        {% if picker.all_label -%}
+        <option value="0"{{ ' selected' if not picker.selected }}>{{ picker.all_label }}</option>
+        {% endif -%}
+        {% for domain_id, domain in picker.choices -%}
+        <option value="{{ domain_id }}"{{ ' selected' if picker.selected == domain_id }}>{{ domain }}{{ ' (' + _('first domain') + ')' if domain_id == picker.first_id else '' }}</option>
         {% endfor -%}
     </select>
-    <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Show') }}</button>
+    <noscript><button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Show') }}</button></noscript>
+    {% if picker.kind == 'instance' -%}
+    <span class="small text-muted">{{ _('The settings on this page are instance-wide: they apply to every domain.') }}</span>
+    {%- endif %}
 </form>
-{%- elif admin_scope and admin_scope.choices|length == 1 and not admin_scope.unfiltered -%}
-<p class="small mt-2" id="domain-picker">{{ _('Showing %(domain)s.', domain=admin_scope.choices[0][1]) }}</p>
+<script type="module" src="{{ url_for('static', filename='js/admin_domain_picker.js', changed=getmtime('js/admin_domain_picker.js')) }}" nonce="{{ nonce }}"></script>
+{%- elif picker and picker.only -%}
+<p class="small mt-2" id="domain-picker">{{ _('Domain: %(domain)s', domain=picker.only) }}</p>
 {%- endif %}

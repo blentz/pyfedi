@@ -68,8 +68,8 @@ def tenant_for(may_edit: Callable[[DomainInfo], bool]) -> Tenant | None:
     have picked another domain since, and the save would otherwise land on that one. A save for a domain the user may
     not edit is refused (None), never written to another; it never changes the pick.
 
-    The picker offers a local-only domain only on itself (follow-up F6), as the list pickers do; one picked by its id
-    (the Domains page, which names every domain to those who manage them, links to each) is offered beside them."""
+    The picker offers the domains `app.admin.scope.domain_choices` names (a local-only one only on itself: follow-up
+    F6), and the one picked by its id (the Domains page links to each) beside them."""
     rows = [row for row in domain_rows() if may_edit(row)]
     if not rows:
         return None
@@ -81,9 +81,7 @@ def tenant_for(may_edit: Callable[[DomainInfo], bool]) -> Tenant | None:
         if domain is None:
             return None
     else:
-        if 'domain' in request.args:
-            session[SESSION_KEY] = request.args.get('domain', 0, type=int)
-        picked = session.get(SESSION_KEY) or None
+        picked = session.get(SESSION_KEY) or None   # app.admin.picker keeps `?domain=<id>` there
         domain = next((row for row in rows if picked is not None and row.id == picked), None) or \
             next((row for row in rows if row.is_default), rows[0])
     offered = {domain_id for domain_id, _domain in domain_choices(None)}

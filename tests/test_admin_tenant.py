@@ -29,7 +29,7 @@ def get(client, path) -> str:
 
 def picker(body: str) -> list[tuple[str, str, bool]]:
     """The picker's options: value, label, and whether it is the one selected."""
-    form = re.search(r'<form method="get"[^>]*id="domain-picker">.*?</form>', body, re.S)
+    form = re.search(r'<form method="get"[^>]*id="domain-picker"[^>]*>.*?</form>', body, re.S)
     assert form, 'no picker'
     return [(value, label.strip(), bool(selected)) for value, selected, label in
             re.findall(r'<option value="(\d+)"( selected)?>([^<]*)</option>', form.group(0))]
@@ -53,7 +53,7 @@ def brander(app, admin_domain_branding_domains):
 def test_the_site_page_offers_each_domain_and_names_the_first(admin_domain_branding_admin, admin_domain_branding_domains):
     first, shop = admin_domain_branding_domains['first'], admin_domain_branding_domains['shop']
     # the shop and the onion federate with nobody: named only on themselves, or once picked by id (F6), so the first
-    # domain's page has nothing else to offer
+    # domain's page has nothing else to offer, even to an admin who manages domains
     assert 'id="domain-picker"' not in get(admin_domain_branding_admin[0], '/admin/site')
     options = picker(get(admin_domain_branding_admin[0], f'/admin/site?domain={shop.id}'))
     assert options == [(str(first.id), f'{first.domain} (first domain)', False), (str(shop.id), shop.domain, True)]
@@ -76,7 +76,7 @@ def test_a_domain_the_user_may_not_edit_is_never_picked(brander, admin_domain_br
     for domain in ('onion', 'first'):
         body = get(client, f"/admin/site?domain={admin_domain_branding_domains[domain].id}")
         assert 'Site profile: shop.example.org' in body
-    assert 'id="domain-picker"' in body and 'Settings for shop.example.org.' in body   # one choice: named, not offered
+    assert 'id="domain-picker"' in body and 'Domain: shop.example.org' in body   # one choice: named, not offered
 
 
 def test_a_site_with_no_domain_rows_edits_the_first_domain(app, admin_site_profile_admin_client):
