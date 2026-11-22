@@ -6,7 +6,7 @@
 services:
 
   test-db:
-    image: docker.io/library/postgres:17.12
+    image: docker.io/library/postgres:19.0
     environment:
       POSTGRES_USER: pyfedi
       POSTGRES_PASSWORD: pyfedi
@@ -24,8 +24,9 @@ services:
       # that then runs in milliseconds (tests/test_test_database_settings.py).
       - -c
       - jit=off
+    # The image keeps its data under /var/lib/postgresql/<major>/docker from PostgreSQL 18 on: tmpfs the parent.
     tmpfs:
-      - /var/lib/postgresql/data
+      - /var/lib/postgresql
     # No published host ports on purpose. test-runner reaches these services over
     # the compose network by name, so nothing needs a host port -- and publishing
     # one would mean two checkouts of this repo (a git worktree, say) could never
