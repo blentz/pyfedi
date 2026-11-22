@@ -2,4 +2,4 @@ from flask import Blueprint, current_app
 
 bp = Blueprint('user', __name__)
 
-from app.user import routes, passkeys, referrals
+from app.user import routes, passkeys, referrals, sidebar_routes

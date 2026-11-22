@@ -5,6 +5,7 @@
         <option value="/user/settings" aria-label="{{ _('Trending now') }}" {{ 'selected'  if request.path == '/user/settings' }}>{{ _('Settings') }}</option>
         <option value="/u/{{ current_user.link() }}/profile" aria-label="{{ _('Latest posts') }}" {{ 'selected' if request.path.endswith('/profile') }}>{{ _('Profile') }}</option>
         <option value="/user/settings/filters" aria-label="{{ _('Recently commented on') }}" {{ 'selected'  if request.path == '/user/settings/filters' }}>{{ _('Blocks & Filters') }}</option>
+        <option value="{{ url_for('user.user_settings_sidebar') }}" {{ 'selected'  if request.path == '/user/settings/sidebar' }}>{{ _('Sidebar') }}</option>
         <option value="/user/settings/import_export" aria-label="{{ _('Trending in niche communities') }}" {{ 'selected'  if request.path == '/user/settings/import_export' }}>{{ _('Import & Export') }}</option>
         <option value="{{ url_for('user.user_settings_aliases') }}" {{ 'selected'  if request.path == '/user/settings/aliases' }}>{{ _('Account aliases') }}</option>
         <option value="{{ url_for('user.user_passkey_list') }}" aria-label="{{ _('Trending in niche communities') }}" {{ 'selected'  if request.path == '/user/passkeys' }}>{{ _('Passkeys') }}</option>
@@ -31,6 +32,9 @@
         </a>
         <a href="/user/settings/filters" class="btn {{ 'btn-primary' if request.path == '/user/settings/filters' else 'btn-outline-secondary' }}">
             {{ _('Blocks & Filters') }}
+        </a>
+        <a href="{{ url_for('user.user_settings_sidebar') }}" class="btn {{ 'btn-primary' if request.path == '/user/settings/sidebar' else 'btn-outline-secondary' }}">
+            {{ _('Sidebar') }}
         </a>
         <a href="/user/settings/import_export" class="btn {{ 'btn-primary' if request.path == '/user/settings/import_export' else 'btn-outline-secondary' }}">
             {{ _('Import & Export') }}

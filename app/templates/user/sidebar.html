@@ -1,0 +1,62 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'settings' %}
+
+{% block app_content %}
+
+<div class="row">
+    <main class="col-12 col-lg-8 position-relative main_pane">
+        <nav class="mb-2"  id="breadcrumb_nav" title="{{ _('Navigation') }}">
+          <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/">{{ _('Home') }}</a></li>
+            <li class="breadcrumb-item"><a href="/u/{{ user.link() }}">{{ user.display_name() }}</a></li>
+            <li class="breadcrumb-item active" aria-current="page">{{ _('Sidebar') }}</li>
+          </ol>
+        </nav>
+        <h1>{{ _('Change settings') }}</h1>
+        {% include "user/_user_nav.html" %}
+        <p>{{ _('Choose which boxes your sidebars show, and in what order. A shown box with nothing in it still shows nothing.') }}</p>
+        {% for sidebar in sidebars %}
+        <h5 id="sidebar-{{ sidebar.area }}">{{ _('Home page') if sidebar.area == 'home' else _('Community pages') }}</h5>
+        <form method="post" action="#sidebar-{{ sidebar.area }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <p>
+                {% if sidebar.own -%}
+                    {{ _('You have your own order.') }}
+                    <button type="submit" name="action" value="reset:{{ sidebar.area }}" class="btn btn-sm btn-outline-secondary">{{ _("Use the site's order") }}</button>
+                {%- else -%}
+                    {{ _("You see the site's order. A change here gives you your own.") }}
+                {%- endif %}
+            </p>
+            {% if sidebar.boxes -%}
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr><th scope="col">{{ _('Box') }}</th><th scope="col">{{ _('Shown') }}</th><th scope="col">{{ _('Change') }}</th></tr>
+                </thead>
+                <tbody>
+                {% for name, label, shown in sidebar.boxes %}
+                    <tr id="box-{{ sidebar.area }}-{{ name }}">
+                        <td>{{ label }}</td>
+                        <td>{{ _('Yes') if shown else _('Hidden') }}</td>
+                        <td>
+                            <button type="submit" name="action" value="{{ sidebar.area }}:up:{{ name }}" class="btn btn-sm btn-outline-secondary"
+                                    title="{{ _('Move up') }}" aria-label="{{ _('Move %(box)s up', box=label) }}" {{ 'disabled' if loop.first }}>&uarr;</button>
+                            <button type="submit" name="action" value="{{ sidebar.area }}:down:{{ name }}" class="btn btn-sm btn-outline-secondary"
+                                    title="{{ _('Move down') }}" aria-label="{{ _('Move %(box)s down', box=label) }}" {{ 'disabled' if loop.last }}>&darr;</button>
+                            <button type="submit" name="action" value="{{ sidebar.area }}:toggle:{{ name }}" class="btn btn-sm btn-outline-secondary">{{ _('Show') if not shown else _('Hide') }}</button>
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {%- else -%}
+            <p class="text-muted">{{ _('This site shows no boxes here.') }}</p>
+            {%- endif %}
+        </form>
+        {% endfor %}
+    </main>
+</div>
+{% endblock %}

@@ -6,11 +6,17 @@ shows the site's (app/branding.py). A blank value, a name no box has, or a box t
 every box is there once: unknown names and repeats are dropped, and a missing box is shown after the others, in its
 default place among them. A shown box with nothing in it (no new communities, say) still shows nothing.
 
+A signed-in user can arrange a sidebar for themselves (`User.home_sidebar`, `User.community_sidebar`, the same format):
+the boxes their domain shows, in the order they choose, some of them hidden. A box the domain hides stays hidden and
+is not offered, and a user whose value is NULL shows the domain's order. Their value names only the boxes they were
+offered, so a box the domain shows later appears, shown, after the boxes they arranged.
+
 Templates render each box into `boxes` by name and hand them to `sidebar_boxes`, which writes those shown in order.
 """
 from __future__ import annotations
 
 from flask_babel import lazy_gettext as _l
+from flask_login import current_user
 from markupsafe import Markup
 
 from app.branding import current_branding
@@ -78,9 +84,43 @@ def toggled(boxes: Layout, name: str) -> Layout:
     return [(box, not shown if box == name else shown) for box, shown in boxes]
 
 
-def shown_boxes(area: str) -> list[str]:
-    """The names of the boxes the request's domain shows in `area`'s sidebar, in order."""
+STEPS = {'up': -1, 'down': 1}
+
+
+def changed(boxes: Layout, op: str, name: str) -> Layout | None:
+    """`boxes` after the button `op` ('up', 'down' or 'toggle') on box `name`, or None for a button no box has."""
+    if op in STEPS:
+        return moved(boxes, name, STEPS[op])
+    if op == 'toggle':
+        return toggled(boxes, name)
+    return None
+
+
+def domain_shown(area: str) -> list[str]:
+    """The names of the boxes the request's domain shows in `area`'s sidebar, in its order."""
     return [name for name, shown in layout(getattr(current_branding(), FIELDS[area]), area) if shown]
+
+
+def personal_layout(own: str | None, area: str, offered: list[str]) -> Layout:
+    """The `offered` boxes of `area`'s sidebar in the order a user's value `own` gives, and whether each is shown;
+    with no value of their own, all of them in the order offered."""
+    if own is None:
+        return [(name, True) for name in offered]
+    return [(name, shown) for name, shown in layout(own, area) if name in offered]
+
+
+def own_value(user, area: str) -> str | None:
+    """`user`'s own arrangement of `area`'s sidebar, or None when they have none (or are not signed in)."""
+    if not getattr(user, 'is_authenticated', False):
+        return None
+    return getattr(user, FIELDS[area], None) or None
+
+
+def shown_boxes(area: str) -> list[str]:
+    """The names of the boxes `area`'s sidebar shows on this request, in order: the domain's, as the signed-in user
+    arranged them."""
+    offered = domain_shown(area)
+    return [name for name, shown in personal_layout(own_value(current_user, area), area, offered) if shown]
 
 
 def sidebar_boxes(area: str, boxes: dict) -> Markup:

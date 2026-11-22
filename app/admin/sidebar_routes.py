@@ -14,19 +14,8 @@ from app.admin import bp
 from app.admin.tenant import may_edit_branding, tenant_for
 from app.domain_config import own_config
 from app.models import SiteDomain, first_config
-from app.sidebar import BOXES, FIELDS, layout, moved, stored, toggled
+from app.sidebar import BOXES, FIELDS, changed, layout, stored
 from app.utils import login_required, render_template
-
-STEPS = {'up': -1, 'down': 1}
-
-
-def changed(boxes, op: str, name: str):
-    """`boxes` after the button `op` on box `name`, or None for a button no box has."""
-    if op in STEPS:
-        return moved(boxes, name, STEPS[op])
-    if op == 'toggle':
-        return toggled(boxes, name)
-    return None
 
 
 def apply_action(values: dict, inherited: dict, action: str) -> dict | None:

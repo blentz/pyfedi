@@ -220,10 +220,12 @@ SURFACES: dict[str, list[str]] = {
     'theme_archives': [
         'app.theme_code.read_archive',
     ],
-    # The sidebars' box order: the stored order every page reads, and the admin button posted to change it.
+    # The sidebars' box order: the stored order every page reads, and the admin and user buttons posted to change it.
     'sidebar': [
         'app.sidebar.layout',
+        'app.sidebar.personal_layout',
         'app.admin.sidebar_routes.apply_action',
+        'app.user.sidebar_routes.apply_action',
     ],
     # The source, bug report and get-involved links an admin sets, and the footer that writes two of them.
     'project_links': [
