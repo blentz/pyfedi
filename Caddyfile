@@ -10,6 +10,12 @@
 
 # Shared by the clearnet and onion sites, so their handlers cannot drift apart.
 (piefed_routes) {
+	# A deployment's own maintenance page, if it has one: Caddyfile snippets in /etc/caddy/maintenance/ (mount the
+	# directory into the Caddy container), imported into every site, may route requests while the site is down for
+	# maintenance (`error 503`) and answer what the app cannot (`handle_errors 502 503 504`). With no file there
+	# Caddy only logs that the pattern matched nothing, and the sites are as without this line.
+	import /etc/caddy/maintenance/*.caddy
+
 	encode zstd gzip
 
 	# Media uploads: the largest upload limit, max_video_upload_bytes

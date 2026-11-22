@@ -189,3 +189,14 @@ def test_the_onion_address_comes_from_the_environment():
     assert f'header Onion-Location http://{onion}{{uri}}' in site_block_directives(ENV['PIEFED_DOMAIN'], live)
     assert f'http://{onion}:8081 {{' in live
     assert 'request_header X-PieFed-Via onion' in site_block_directives(f'http://{onion}:8081', live)
+
+
+def test_every_site_imports_a_deployments_maintenance_page_if_it_has_one():
+    """piefed_routes imports /etc/caddy/maintenance/*.caddy first, so a deployment's maintenance snippet routes ahead
+    of the app in every site that imports the routes. A glob: with no file there Caddy only logs that it matched
+    nothing (a plain path would be an error), so a deployment without a page runs as before."""
+    lines = [line.split('#', 1)[0].strip() for line in caddyfile_lines()]
+    start = lines.index('(piefed_routes) {')
+    body = [line for line in lines[start + 1:] if line]
+    assert body[0] == 'import /etc/caddy/maintenance/*.caddy'
+    assert sum(line.startswith('import /etc/caddy/maintenance/') for line in lines) == 1
