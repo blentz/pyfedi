@@ -12390,6 +12390,29 @@ msgstr "Don récurrent annulé"
 msgid "Your donation has been cancelled."
 msgstr "Votre don a été annulé."
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "Ajouter une communauté"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "Essayez-vous d'ajouter une communauté ou une publication ?"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr ""
+"Certaines plateformes vous permettent d'entrer l'URL d'une publication ou"
+" d'une communauté dans la recherche pour l'ajouter ici. Dans PieFed, la "
+"recherche sert uniquement à rechercher."
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "Récupérer la publication"
+
 #~ msgid "Allow search engines to index this profile"
 #~ msgstr "Suchmaschinen erlauben, dieses Profil zu indizieren"
 

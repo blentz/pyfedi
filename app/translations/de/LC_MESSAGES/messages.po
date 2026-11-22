@@ -12315,6 +12315,29 @@ msgstr "Regelmäßige Spende storniert"
 msgid "Your donation has been cancelled."
 msgstr "Deine Spende wurde storniert."
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "Community hinzufügen"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "Versuchst du, eine Community oder einen Beitrag hinzuzufügen?"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr ""
+"Auf manchen Plattformen kannst du die URL eines Beitrags oder einer "
+"Community in die Suche eingeben, um sie hier hinzuzufügen. Bei PieFed ist"
+" die Suche nur zum Suchen da."
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "Beitrag empfangen"
+
 #~ msgid "Allow search engines to index this profile"
 #~ msgstr "Suchmaschinen erlauben, dieses Profil zu indizierencommunities:"
 

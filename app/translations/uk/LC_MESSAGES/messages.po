@@ -12093,6 +12093,28 @@ msgstr "Повторювані внески скасовано"
 msgid "Your donation has been cancelled."
 msgstr "Внесок скасовано."
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "Додати спільноту"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "Намагаєтесь додати спільноту чи допис?"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr ""
+"На деяких платформах, щоб додати допис чи спільноту сюди, можна вписати "
+"їхню адресу в пошук. Але пошуковий засіб у PieFed — лише для пошуку."
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "Завантажити допис"
+
 #~ msgid "More new communities"
 #~ msgstr "Більше нових спільнот"
 

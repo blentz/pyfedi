@@ -12375,6 +12375,28 @@ msgstr "Ohiko dohaintza bertan behera utzi da"
 msgid "Your donation has been cancelled."
 msgstr "Zure dohaintza bertan behera utzi da."
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "Gehitu komunitatea"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "Komunitate edo argitalpen bat gehitzen saiatzen ari zara?"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr ""
+"Plataforma batzuetan, argitalpen edo komunitate baten URLa bilaketan jar "
+"dezakezu hemen gehitzeko. PieFed-en, bilaketa bilatzeko baino ez da."
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "Berreskuratu argitalpena"
+
 #~ msgid "Throwaway email used for account %(username)s"
 #~ msgstr ""
 

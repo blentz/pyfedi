@@ -12371,6 +12371,29 @@ msgstr "Donació regular cancel·lada"
 msgid "Your donation has been cancelled."
 msgstr "El vostre donatiu ha estat cancel·lat."
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "Afegeix una comunitat"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "Vols afegir una comunitat o una publicació?"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr ""
+"Algunes plataformes et permeten introduir l'URL d'una publicació o "
+"comunitat a la cerca per afegir-la aquí. A PieFed la cerca és només per "
+"cercar."
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "Recupera la publicació"
+
 #~ msgid "Allow search engines to index this profile"
 #~ msgstr "Suchmaschinen erlauben, dieses Profil zu indizieren"
 

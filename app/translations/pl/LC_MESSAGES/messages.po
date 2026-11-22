@@ -12428,6 +12428,29 @@ msgstr "Regularne datki anulowane"
 msgid "Your donation has been cancelled."
 msgstr "Twój datek został wycofany."
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "Dodaj społeczność"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "Próbujesz dodać społeczność lub post?"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr ""
+"Niektóre platformy pozwalają wpisać URL posta lub społeczności w pole "
+"wyszukiwania, aby dodać je tutaj. W PieFed wyszukiwarka jest tylko do "
+"wyszukiwania."
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "Odzyskaj post"
+
 #~ msgid "Allow search engines to index this profile"
 #~ msgstr "Zezwól wyszukiwarkom na indeksowanie tego profilu"
 

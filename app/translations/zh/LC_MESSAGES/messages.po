@@ -11816,6 +11816,26 @@ msgstr "定期捐款已取消"
 msgid "Your donation has been cancelled."
 msgstr "您的捐款已被取消。"
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "添加社区"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "尝试添加社区或帖子？"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr "某些平台允许您将帖子或社区的 URL 放入搜索中，以便将其添加到这里。在 PieFed 中，搜索仅用于搜索。"
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "检索帖子"
+
 #~ msgid "Edit profile & settings"
 #~ msgstr "编辑个人资料和设置"
 

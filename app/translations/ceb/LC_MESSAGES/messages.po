@@ -12362,6 +12362,29 @@ msgstr "Ang regular nga donasyon gi-cancel"
 msgid "Your donation has been cancelled."
 msgstr "Ang imong donasyon gi-cancel na."
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "Pagdugang ug komunidad"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "Nagsulay ka sa pagdugang ug komunidad o post?"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr ""
+"Ang ubang mga plataporma motugot nimo sa pagbutang sa URL sa usa ka post "
+"o komunidad sa pagpangita aron madugang kini dinhi. Sa PieFed, ang "
+"pagpangita kay alang lamang sa pagpangita."
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "Kuhaa ang post"
+
 #~ msgid "Decrease reputation when posting only a gif as a comment"
 #~ msgstr "Ibani ang reputasyon kung mag-post ug usa ka gif ra isip komento"
 

@@ -12067,6 +12067,29 @@ msgstr ""
 msgid "Your donation has been cancelled."
 msgstr ""
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "Lisää yhteisö"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "Yritätkö lisätä yhteisön tai julkaisun?"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr ""
+"Joillakin alustoilla voit lisätä julkaisun tai yhteisön tänne "
+"kirjoittamalla sen URL-osoitteen hakuun. PieFedissä haku on vain "
+"hakemista varten."
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "Nouda julkaisu"
+
 #~ msgid "Defederated instances"
 #~ msgstr ""
 

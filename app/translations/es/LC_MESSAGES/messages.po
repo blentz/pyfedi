@@ -12560,6 +12560,29 @@ msgstr "Donación recurrente cancelada"
 msgid "Your donation has been cancelled."
 msgstr "Tu nueva comunidad ha sido creada."
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "Añadir comunidad"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "¿Intentas añadir una comunidad o publicación?"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr ""
+"Algunas plataformas te permiten introducir la URL de una publicación o "
+"comunidad en la búsqueda para añadirla aquí. En PieFed, la búsqueda solo "
+"sirve para buscar."
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "Recuperar publicación"
+
 #~ msgid "Message failed to send to %(name)s."
 #~ msgstr "No se pudo enviar el mensaje a %(name)s."
 

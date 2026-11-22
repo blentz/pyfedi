@@ -11887,6 +11887,26 @@ msgstr "定期寄付をキャンセルしました"
 msgid "Your donation has been cancelled."
 msgstr "寄付がキャンセルされました。"
 
+#: app/templates/communities_menu.html:16
+#: app/templates/list_communities.html:21
+#: app/templates/list_communities.html:22 app/templates/search/start.html:47
+msgid "Add community"
+msgstr "コミュニティを追加"
+
+#: app/templates/search/start.html:44
+msgid "Trying to add a community or post?"
+msgstr "コミュニティや投稿を追加したいですか？"
+
+#: app/templates/search/start.html:45
+msgid ""
+"Some platforms let you put the URL of a post or community into the search"
+" to add it here. In PieFed the search is just for searching."
+msgstr "一部のプラットフォームでは、投稿やコミュニティのURLを検索に入力してここに追加できます。PieFedの検索は検索専用です。"
+
+#: app/templates/search/start.html:48
+msgid "Retrieve post"
+msgstr "投稿を取得"
+
 #~ msgid "Allow search engines to index this profile"
 #~ msgstr "Suchmaschinen erlauben, dieses Profil zu indizieren"
 
