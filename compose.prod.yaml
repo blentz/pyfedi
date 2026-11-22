@@ -38,6 +38,11 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:z
       - caddy_data:/data       # certificates + ACME account key -- MUST persist
       - caddy_config:/config
+      # Optional maintenance page (see the Caddyfile's `import /etc/caddy/maintenance/*.caddy`): mount a directory
+      # holding a *.caddy snippet and the page it serves. The snippet may answer 502/503/504 with the page
+      # (`handle_errors`) and show it to everyone while a flag file exists (`error 503`). Without this mount the
+      # sites behave as before.
+      # - ./maintenance:/etc/caddy/maintenance:ro,z
     depends_on:
       - web
       - piefednotifs
