@@ -1555,6 +1555,10 @@ class CreatePostRequest(DefaultSchema):
     gallery = fields.List(fields.Nested(AlbumImage), metadata={"description": GALLERY_DESCRIPTION})
     visibility = fields.String(metadata={"description": "'public' (default) or 'followers'. 'followers' is accepted "
                                                         "only in the local microblogs community"})
+    local_only = fields.Boolean(metadata={"description": "True keeps the post on this server: never federated, and "
+                                                         "seen only by signed-in users here. In the local microblogs "
+                                                         "community, false makes it public and leaving it out uses "
+                                                         "the author's setting; elsewhere only true counts"})
 
 
 class CreateScheduledPostRequest(CreatePostRequest):

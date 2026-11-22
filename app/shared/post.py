@@ -258,6 +258,27 @@ def requested_visibility(input, src, community) -> str:
     return visibility
 
 
+def requested_local_only(input, src, user, community) -> bool:
+    """Whether a new local post stays on this server: stamped local_only, so it is never federated and only signed-in
+    readers here see it (spec 2026-11-22-private-microblogs).
+
+    A local-only author or community always decides it. In the local microblogs community the author chooses per post
+    (the web form's `private_microblog`, the API's `local_only`), and saying nothing there means their
+    `microblogs_private` setting. Elsewhere only an API caller asking for it counts (PeerTube's Internal, W2.3 ruling
+    U1): a post can only be made more private."""
+    if content_local_only(user, community):
+        return True
+    if src == SRC_API:
+        asked = input.get('local_only')
+    else:
+        # a form without the field, or one that did not submit it (it is shown only in microblogs), says nothing
+        field = getattr(input, 'private_microblog', None)
+        asked = field.data == 'private' if field is not None and field.raw_data else None
+    if is_local_microblogs(community):
+        return bool(user.microblogs_private) if asked is None else asked is True
+    return src == SRC_API and asked is True
+
+
 # Tag.name and Tag.display_as are String(256): a longer body #word is linked in the Note but not stored as a tag.
 TAG_NAME_MAX = 256
 
@@ -354,8 +375,7 @@ def make_post(input, community, type, src, auth=None, uploaded_file=None, album=
     post = Post(user_id=user.id, community_id=community.id, instance_id=user.instance_id,
                 from_bot=user.bot or user.bot_override, from_reposter=user.reposter or user.reposter_override,
                 posted_at=utcnow(), ap_id=gibberish(), title=title, language_id=language_id, visibility=visibility,
-                # an API caller may also ask for it (PeerTube's Internal, W2.3 ruling U1): a post only more private
-                local_only=content_local_only(user, community) or (src == SRC_API and input.get('local_only') is True))
+                local_only=requested_local_only(input, src, user, community))
     if user.ban_posts:
         post.status = POST_STATUS_REVIEWING
     if media_upload:   # A13.1: committed below, before the file is copied: never listed, not even for that while

@@ -181,6 +181,8 @@ def write_status(fields: dict):
     fields_in = {'title': _title(text), 'body': text, 'url': None, 'nsfw': _truthy(fields.get('sensitive')),
                  'language_id': language_id, 'notify_author': True, 'ai_generated': False, 'visibility': visibility,
                  'content_warning': warning}
+    if fields.get('local_only') is not None:   # glitch-soc's name; left out, the author's setting decides
+        fields_in['local_only'] = _truthy(fields['local_only'])
     kind, album = POST_TYPE_ARTICLE, None
     if len(files) == 1:   # one picture: a link to it, which edit_post makes an image post, as the alpha API's upload
         kind = POST_TYPE_LINK

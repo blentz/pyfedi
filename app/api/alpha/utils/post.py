@@ -843,6 +843,8 @@ def post_post(auth, data):
 
     if 'visibility' in data:
         input['visibility'] = data['visibility']
+    if 'local_only' in data:
+        input['local_only'] = data['local_only']
 
     community = a_community(community_id)
 

@@ -93,6 +93,11 @@ class SettingsForm(FlaskForm):
                        ]
     microblog_feed = SelectField(_l('Shown in Microblog Feed'), choices=select_choices(microblog_feeds),
                                  validators=[DataRequired()], coerce=str, render_kw={'class': 'form-select'})
+    microblog_privacies = [('public', _l('Public and federated')),
+                           ('private', _l('Private: this server only, not federated')),
+                           ]
+    microblog_privacy = SelectField(_l('My microblog posts'), choices=select_choices(microblog_privacies),
+                                    validators=[DataRequired()], coerce=str, render_kw={'class': 'form-select'})
     feed_auto_follow = BooleanField(_l('Enable Automatic Follow of Feed Communities.'), default=True)
     feed_auto_leave = BooleanField(_l('Enable Automatic Leave of Feed Communities.'), default=False)
     sorts = [('hot', _l('Hot')),

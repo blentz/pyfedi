@@ -87,8 +87,11 @@ from app.form_choices import select_choices
 def visibility_name(post) -> str:
     """The audience of a post as the edit form tells it: visibility is chosen at creation and never edited."""
     if post.visibility == VISIBILITY_FOLLOWERS:
-        return _('Followers only')
-    return _('Unlisted') if post.visibility == VISIBILITY_UNLISTED else _('Public')
+        name = _('Followers only')
+    else:
+        name = _('Unlisted') if post.visibility == VISIBILITY_UNLISTED else _('Public')
+    # so is whether it federates (spec 2026-11-22-private-microblogs)
+    return _('%(visibility)s, private: this server only', visibility=name) if post.local_only else name
 
 
 def can_view_private(community):
@@ -1370,6 +1373,7 @@ def post_edit(post_id: int):
 
     del form.communities
     del form.visibility     # Amendment B: visibility is fixed at creation
+    del form.private_microblog     # and so is whether it federates (spec 2026-11-22-private-microblogs)
     if 'episode_number' in form and not episode_form_wanted(post.community, post):
         del form.episode_number, form.season, form.explicit
 

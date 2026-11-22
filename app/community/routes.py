@@ -58,7 +58,7 @@ from app.post.util import form_tags_string
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.feed_domains import feed_view_domain, feeds_shown_here_clause, listed_feeds_clause
-from app.local_only import community_local_only, found_here, hidden_here, hidden_here_sql, local_only_visible_rss, \
+from app.local_only import community_local_only, content_local_only, found_here, hidden_here, hidden_here_sql, local_only_visible_rss, \
     without_local_only, without_local_only_actors
 from app.visibility import is_open, listable_clause, visible_to_clause
 from app.utils import etag_stamp, max_album_images
@@ -1544,6 +1544,7 @@ def add_post(actor, type=None):
 
         form.timezone.data = current_user.timezone
         form.language_id.data = current_user.language_id or g.site.language_id
+        form.private_microblog.data = 'private' if current_user.microblogs_private else 'public'
 
         if community.default_hashtag:
             form.tags.data = community.default_hashtag
@@ -1559,6 +1560,9 @@ def add_post(actor, type=None):
             # A followers-only post is never prefilled for anyone, author and followers included: copying it into
             # a form would let it be re-published as a public post. Same 404 as refuse_invisible.
             if not is_open(source_post):
+                abort(404)
+            # Nor is a private (local-only) post copied where it would federate (spec 2026-11-22-private-microblogs)
+            if source_post.local_only and not content_local_only(current_user, community):
                 abort(404)
 
             # And the caller has to be able to SEE it. This block copies the

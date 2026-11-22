@@ -81,7 +81,8 @@ def settings_payload(token, **overrides):
             'code_style': 'fruity', 'additional_css': '',
             'page_length': '20', 'compaction': '',
             'max_hours_per_day': '', 'max_hours_change_restriction': 'anytime',
-            'accept_private_messages': '3', 'microblog_feed': 'microblog', 'submit': 'Save',
+            'accept_private_messages': '3', 'microblog_feed': 'microblog', 'microblog_privacy': 'public',
+            'submit': 'Save',
             'csrf_token': token}
     data.update(overrides)
     return data

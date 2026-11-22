@@ -734,6 +734,7 @@ def user_settings():
         session['ui_language'] = form.interface_language.data
         current_user.vote_privately = not form.federate_votes.data
         current_user.microblog_feed = form.microblog_feed.data
+        current_user.microblogs_private = form.microblog_privacy.data == 'private'
         current_user.show_subscribed_communities = form.show_subscribed_communities.data
         current_user.ap_manually_approves_followers = form.manually_approves_followers.data
         if propagate_indexable:
@@ -840,6 +841,7 @@ def user_settings():
         form.interface_language.data = current_user.interface_language
         form.federate_votes.data = not current_user.vote_privately
         form.microblog_feed.data = current_user.microblog_feed
+        form.microblog_privacy.data = 'private' if current_user.microblogs_private else 'public'
         form.feed_auto_follow.data = current_user.feed_auto_follow
         form.feed_auto_leave.data = current_user.feed_auto_leave
         form.read_languages.data = current_user.read_language_ids

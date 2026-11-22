@@ -2458,6 +2458,8 @@ class User(UserMixin, db.Model):
     show_instance_details = db.Column(db.Boolean, default=False, server_default="0")
     # What Mastodon and other microblog software see of this user (app.microblog_feed, spec 2026-11-21)
     microblog_feed = db.Column(db.String(16), nullable=False, default='microblog', server_default='microblog')
+    # A new microblog post is private (local_only: not federated) unless the author says otherwise (spec 2026-11-22)
+    microblogs_private = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     community_keyword_filter = db.Column(db.String(150))
     referrer = db.Column(db.String(256))
     # Referral codes (spec 2026-10-31): NULL until the user generates one; regenerating replaces both (app/referral.py)

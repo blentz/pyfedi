@@ -79,6 +79,8 @@
             <small class="field_hint d-none d-md-block">{{ _('Hold down the mouse button to vote differently.') }}</small>
             {{ render_field(form.microblog_feed) }}
             <small class="field_hint">{{ _('What Mastodon and other microblog apps show of you. Followers-only posts always reach your followers.') }}</small>
+            {{ render_field(form.microblog_privacy) }}
+            <small class="field_hint">{{ _('The default for your new microblog posts; you can choose for each post too. A private post is not sent to other servers, and only people signed in here can see it. Posts you have already made keep their setting.') }}</small>
             <hr>
             <h5>{{ _('Feeds') }}</h5>
             {{ render_field(form.feed_auto_follow) }}

@@ -252,6 +252,10 @@
 
             {{ render_field(form.language_id) }}
             {% if show_visibility and form.visibility %}{{ render_field(form.visibility) }}{% endif %}
+            {% if show_visibility and form.private_microblog %}
+                {{ render_field(form.private_microblog) }}
+                <div class="form-text mb-3">{{ _('A private post is not sent to other servers, and only people signed in here can see it. Your default is in your settings.') }}</div>
+            {% endif %}
             {% if visibility_text %}
                 <div class="mb-3">
                     <label class="form-label">{{ _('Visibility') }}</label>

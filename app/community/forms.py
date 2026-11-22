@@ -292,6 +292,11 @@ class CreatePostForm(FlaskForm):
     # deleted from the edit form -- visibility is fixed when the post is created
     visibility = SelectField(_l('Visibility'), choices=select_choices([('public', _l('Public')), ('followers', _l('Followers only'))]),
                              default='public', render_kw={'class': 'form-select'})
+    # Spec 2026-11-22-private-microblogs: offered with visibility, and deleted from the edit form likewise. Not sent
+    # means the author's setting (shared.post.requested_local_only), so it is a select: an unticked box sends nothing
+    private_microblog = SelectField(_l('Privacy'), choices=select_choices([('public', _l('Public and federated')),
+                                                                          ('private', _l('Private: this server only'))]),
+                                    default='public', render_kw={'class': 'form-select'})
     nsfl = BooleanField(_l('Gore/gross'))
     ai_generated = BooleanField(_l('AI generated'))
     notify_author = BooleanField(_l('Notify about replies'))
