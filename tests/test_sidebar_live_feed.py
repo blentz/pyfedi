@@ -13,15 +13,17 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app import db
+from app.activitypub.util import find_microblogging_community
+from app.constants import VISIBILITY_UNLISTED
 from app.community.live import SIDEBAR_LIVE_LIMIT, sidebar_live_filter, sidebar_live_hidden
 from app.models import User
 from app.sidebar import COMMUNITY, HOME, domain_offered, layout, shows_box
 from app.utils import utcnow
 from tests.conftest import forget_login
-from tests.factories import make_community, make_follow, make_post, make_user
+from tests.factories import make_community, make_follow, make_post, make_user, make_user_block
 from tests.test_branding import load_migration
 from tests.test_branding_pages import page
-from tests.test_home_live import home, login  # noqa: F401 -- fixture
+from tests.test_home_live import home, login, teaser_ids  # noqa: F401 -- fixture
 from tests.test_user_sidebar import press, reader, reader_row, set_reader, set_site, settings_page, signed_in  # noqa: F401
 from tests.two_domains import default_request
 
@@ -187,6 +189,84 @@ def test_followed_only_includes_a_followed_persons_post_in_a_community_not_joine
     db.session.commit()
     login(home.client, home.reader)
     assert post.id in item_ids(home.client.get(f'{URL}?after=0').get_data(as_text=True))
+
+
+# All posts takes in every microblog, which the All tab leaves out (amendment A)
+
+def microblog(home, community, **columns):
+    post = make_post(community, home.author, f'https://test.piefed.local/m/{community.name}/{len(columns)}', microblog=True)
+    for name, value in columns.items():
+        setattr(post, name, value)
+    db.session.commit()
+    return post
+
+
+def shown_in_all_community(name):
+    community = make_community(name)
+    community.show_all = True
+    db.session.commit()
+    return community
+
+
+def test_all_takes_in_microblogs_the_all_tab_leaves_out(home):
+    landed = microblog(home, find_microblogging_community())
+    in_all = microblog(home, shown_in_all_community('elsewhere'))
+    login(home.client, home.reader)
+    assert {landed.id, in_all.id} <= set(item_ids(home.client.get(f'{URL}?after=0').get_data(as_text=True)))
+    tab = home.client.get(f'/home/live_posts/all?after={home.baseline.post2.id}')
+    assert landed.id not in teaser_ids(tab.get_data(as_text=True)) and in_all.id not in teaser_ids(tab.get_data(as_text=True))
+
+
+def test_a_microblog_outside_all_is_not_taken_in(home):
+    quiet = make_community('quietplace')
+    quiet.show_all = False
+    db.session.commit()
+    hidden = microblog(home, quiet)
+    login(home.client, home.reader)
+    assert hidden.id not in item_ids(home.client.get(f'{URL}?after=0').get_data(as_text=True))
+
+
+def test_a_microblog_not_publicly_listed_is_not_taken_in(home):
+    unlisted = microblog(home, find_microblogging_community(), visibility=VISIBILITY_UNLISTED)
+    login(home.client, home.reader)
+    assert unlisted.id not in item_ids(home.client.get(f'{URL}?after=0').get_data(as_text=True))
+
+
+def test_a_microblog_in_a_low_quality_community_is_left_out_for_who_hides_them(home):
+    poor = shown_in_all_community('poorplace')
+    poor.low_quality = True
+    home.reader.hide_low_quality = True
+    db.session.commit()
+    post = microblog(home, poor)
+    login(home.client, home.reader)
+    assert post.id not in item_ids(home.client.get(f'{URL}?after=0').get_data(as_text=True))
+
+
+def test_a_blocked_authors_microblog_is_left_out(home):
+    post = microblog(home, find_microblogging_community())
+    make_user_block(home.reader, home.author)
+    login(home.client, home.reader)
+    assert post.id not in item_ids(home.client.get(f'{URL}?after=0').get_data(as_text=True))
+
+
+def test_followed_only_still_needs_a_follow_for_a_microblog(home):
+    in_joined = microblog(home, home.community)
+    home.reader.sidebar_live_feed = 'subscribed'
+    db.session.commit()
+    login(home.client, home.reader)
+    assert in_joined.id not in item_ids(home.client.get(f'{URL}?after=0').get_data(as_text=True))
+    make_follow(home.reader, home.author)
+    db.session.commit()
+    assert in_joined.id in item_ids(home.client.get(f'{URL}?after=0').get_data(as_text=True))
+
+
+@pytest.mark.parametrize('body_html, label', [('<p>Hello <b>world</b> from a toot</p>', 'Hello world from a toot'),
+                                              ('', 'Microblog post')])
+def test_a_microblog_without_a_title_is_listed_by_its_text(home, body_html, label):
+    microblog(home, find_microblogging_community(), body_html=body_html)
+    login(home.client, home.reader)
+    body = home.client.get(f'{URL}?after={home.baseline.post2.id}').get_data(as_text=True)
+    assert f'>{label}</a>' in body
 
 
 def test_a_post_the_teaser_would_blur_is_left_out_but_the_cursor_passes_it(home):

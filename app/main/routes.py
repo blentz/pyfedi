@@ -164,16 +164,17 @@ def home_live_posts(view_filter):
 @login_required
 @limiter.limit('12/minute', key_func=lambda: f'live:{current_user.id}:sidebar')
 def sidebar_live_posts():
-    """New posts for the sidebar's live feed box: the home page's All tab, or its Subscribed tab when the viewer
-    chose followed people and communities, filtered as that tab is, as a list of titles (spec
+    """New posts for the sidebar's live feed box: the home page's All tab with every microblog added, or its
+    Subscribed tab when the viewer chose followed people and communities, filtered as that tab is, as a list of titles (spec
     2026-11-22-sidebar-live-feed). 204 when nothing is new; the client advances its cursor from X-Live-Cursor."""
     after = request.args.get('after', type=int)
     if after is None:
         abort(400)
     view_filter = sidebar_live_filter(current_user)
     community_ids, community_sql = home_feed_source(view_filter)
+    # All posts takes in every microblog too, which the All tab leaves out (spec amendment A)
     post_ids = get_deduped_post_ids('', community_ids, 'new', include_following=view_filter == 'subscribed',
-                                    community_sql=community_sql,
+                                    community_sql=community_sql, include_microblogs=view_filter == 'all',
                                     newer_than=(after, utcnow() - LIVE_WINDOW))[:SIDEBAR_LIVE_LIMIT]
     if not post_ids:
         return '', 204

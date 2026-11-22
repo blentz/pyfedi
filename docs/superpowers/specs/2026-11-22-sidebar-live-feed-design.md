@@ -55,3 +55,18 @@ starts both `#live_feed` and `#sidebar_live_feed`: a page with both loads the mo
 `user.sidebar_live_feed` (`'all'` or `'subscribed'`, `NOT NULL`, default `'all'`; migration `8d2f6a1c4e70`). Settings,
 Sidebar: "Live feed": *All posts* / *People and communities I follow*, one POST each (`live:all`, `live:subscribed`),
 CSRF-checked. Any other `live:` value is a 400. Showing, hiding and placing the box are the page's ordinary buttons.
+
+## Amendment A: All posts takes in every microblog (2026-11-22)
+
+The box is a stream of what arrives, and on a server that relays Mastodon most of what arrives is microblogs, which
+the All tab leaves out (`MICROBLOG_GATE`: a microblog reaches an aggregate feed only through a follow). Set to *All
+posts*, the box now adds `MICROBLOG_SQL`: a publicly listable microblog (`p.private`) in a community shown in All or
+in the local microblogs community, where Mastodon posts land. It is a source of its own in `get_deduped_post_ids`
+(`include_microblogs`), passed by `/sidebar/live_posts` alone: every home tab, the Live tabs included, is unchanged.
+Everything else the All source filters still applies to it (blocks, languages, NSFW, low quality, private
+communities).
+
+*People and communities I follow* is unchanged: a microblog comes in through a followed author or booster or a joined
+server view, never through a community membership alone.
+
+A microblog may have no title (an image-only post): its item shows its text, and *Microblog post* when it has none.
