@@ -13,13 +13,13 @@
                 <div class="d-flex justify-content-end align-items-center">
                     {% if can_create_local or not create_admin_only -%}
                         <div class="p-1">
-                            <a href="{{ url_for('community.add_local') }}" class="btn btn-sm btn-primary" aria-label="{{ _('Create local community') }}">{{ _('Create local community') }}</a>
+                            <a href="{{ url_for('community.add_local') }}" class="btn btn-sm btn-primary" aria-label="{{ _('Create local community') if instance_details_shown() else _('Create community') }}">{{ _('Create local community') if instance_details_shown() else _('Create community') }}</a>
                         </div>
                     {% endif -%}
                     {% if default_user_add_remote or can_add_remote %}
                         <div class="p-1">
-                            <a href="{{ url_for('community.add_remote') }}" class="btn btn-sm btn-primary" aria-label="{{ _('Add community from another instance') }}">
-                                {{ _('Add remote community') }}
+                            <a href="{{ url_for('community.add_remote') }}" class="btn btn-sm btn-primary" aria-label="{{ _('Add community from another instance') if instance_details_shown() else _('Add community') }}">
+                                {{ _('Add remote community') if instance_details_shown() else _('Add community') }}
                             </a>
                         </div>
                     {% endif %}
@@ -38,6 +38,7 @@
                         placeholder=""
                         value="{{ search }}">
             </div>
+            {% if instance_details_shown() -%}
             <div class="w-100 d-block d-lg-none"></div>
             <div class="col-auto ps-lg-0 ps-2 mt-2 mt-lg-0">
                 <label for="home_select">
@@ -57,6 +58,7 @@
                     </option>
                 </select>
             </div>
+            {% endif -%}
             {% if current_user.is_authenticated -%}
                 <div class="col-auto ps-0 mt-2 mt-lg-0">
                     <label for="subscribe_select">

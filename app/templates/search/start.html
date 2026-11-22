@@ -37,10 +37,15 @@
                     </tr>
                 </table>
                 {% if default_user_add_remote or can_add_remote %}
+                    {% if instance_details_shown() -%}
                     <h6 class="mt-5">{{ _('Trying to add a community or post from another instance?') }} </h6>
                     <p>{{ _('In many types of federated platforms you can put a URL of a post or community into the search in order to add it to your local instance. In PieFed the search is just for searching.') }}</p>
-                    <p><a href="{{ url_for('community.add_remote') }}" class="btn btn-primary">{{ _('Add remote community') }}</a></p>
-                    <p><a href="{{ url_for('search.retrieve_remote_post') }}" class="btn btn-primary">{{ _('Retrieve remote post') }}</a></p>
+                    {% else -%}
+                    <h6 class="mt-5">{{ _('Trying to add a community or post?') }} </h6>
+                    <p>{{ _('Some platforms let you put the URL of a post or community into the search to add it here. In PieFed the search is just for searching.') }}</p>
+                    {% endif -%}
+                    <p><a href="{{ url_for('community.add_remote') }}" class="btn btn-primary">{{ _('Add remote community') if instance_details_shown() else _('Add community') }}</a></p>
+                    <p><a href="{{ url_for('search.retrieve_remote_post') }}" class="btn btn-primary">{{ _('Retrieve remote post') if instance_details_shown() else _('Retrieve post') }}</a></p>
                 {% endif %}
             </div>
         </div>

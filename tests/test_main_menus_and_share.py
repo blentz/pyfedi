@@ -72,6 +72,63 @@ class TestTheMenus:
         assert response.status_code == 200
         assert 'probeland' in response.get_data(as_text=True)
 
+    @pytest.mark.parametrize('details', [False, True])
+    def test_the_communities_menu_with_and_without_instance_details(self, env, details):
+        """Without instance details the menu drops "Local communities" and offers "Add community" rather than
+        "Add remote community"; with them it shows both as before."""
+        # env.author has joined probeland, so the full menu renders
+        env.author.show_instance_details = details
+        db.session.commit()
+        login(env.client, env.author)
+        page = env.client.get('/communities_menu').get_data(as_text=True)
+        assert ('Local communities' in page) is details
+        assert ('Add remote community' in page) is details
+        assert ('>Add community<' in page) is not details
+        assert '/community/add_remote' in page
+
+    def test_the_short_communities_menu_hides_local_communities_without_instance_details(self, env):
+        """The signed-out menu: anonymous readers never see instance details."""
+        page = env.client.get('/communities_menu').get_data(as_text=True)
+        assert 'Local communities' not in page
+        assert 'All communities' in page
+
+    @pytest.mark.parametrize('details', [False, True])
+    def test_the_communities_page_with_and_without_instance_details(self, env, details):
+        """Without instance details the communities page drops the local/remote "Community Location" filter and its
+        add button reads "Add community"; with them it shows the filter and "Add remote community"."""
+        env.author.show_instance_details = details
+        db.session.commit()
+        login(env.client, env.author)
+        page = env.client.get('/communities').get_data(as_text=True)
+        assert ('id="home_select"' in page) is details
+        assert ('Add remote community' in page) is details
+        assert ('Add community from another instance' in page) is details
+        assert ('aria-label="Add community"' in page) is not details
+        assert '/community/add_remote' in page
+        assert ('Create local community' in page) is details
+        assert ('>Create community<' in page) is not details
+        assert '/community/add_local' in page
+
+    @pytest.mark.parametrize('details', [False, True])
+    def test_the_search_page_add_button_with_and_without_instance_details(self, env, details):
+        env.author.show_instance_details = details
+        db.session.commit()
+        login(env.client, env.author)
+        page = env.client.get('/search').get_data(as_text=True)
+        assert ('Add remote community' in page) is details
+        assert ('from another instance?' in page) is details
+        assert ('your local instance' in page) is details
+        assert ('Trying to add a community or post?' in page) is not details
+        assert ('add it here' in page) is not details
+        assert ('Retrieve remote post' in page) is details
+        assert ('>Retrieve post<' in page) is not details
+        assert ('>Add community<' in page) is not details
+        assert '/community/add_remote' in page
+
+    def test_the_communities_page_signed_out_has_no_location_filter(self, env):
+        page = env.client.get('/communities').get_data(as_text=True)
+        assert 'id="home_select"' not in page
+
     @pytest.mark.parametrize('path', ['/topics', '/feeds', '/explore'])
     def test_the_directory_pages(self, env, path):
         assert env.client.get(path).status_code == 200
