@@ -109,6 +109,8 @@ def test_replies_and_context_of_a_federated_post_omit_local_only_replies(app, lo
 
 
 def test_outbox_and_featured_omit_local_only_posts(app, local_only_invisible_world):
+    local_only_invisible_world.alice.microblog_feed = 'all'   # her outbox lists her community posts and comments
+    db.session.commit()
     federated = _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.alice, sticky=True)
     _post(app, local_only_invisible_world.clearnet, local_only_invisible_world.alice, local_only=True, sticky=True)
     ordinary = _reply(app, federated, local_only_invisible_world.alice)

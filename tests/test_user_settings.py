@@ -81,7 +81,7 @@ def settings_payload(token, **overrides):
             'code_style': 'fruity', 'additional_css': '',
             'page_length': '20', 'compaction': '',
             'max_hours_per_day': '', 'max_hours_change_restriction': 'anytime',
-            'accept_private_messages': '3', 'submit': 'Save',
+            'accept_private_messages': '3', 'microblog_feed': 'microblog', 'submit': 'Save',
             'csrf_token': token}
     data.update(overrides)
     return data
@@ -850,3 +850,37 @@ def test_each_block_form_renders(app, env, path, template):
 
     assert response.status_code == 200
     assert render.call_args.args[0] == template
+
+
+def test_the_microblog_feed_is_microblog_posts_only_until_changed(app, env):
+    """The microblog feed setting (app.microblog_feed): its default, the three choices it saves, and the form opening
+    on the stored one."""
+    client, viewer, other = env
+    assert viewer.microblog_feed == 'microblog'
+    token = csrf(app, client)
+
+    with patch('app.user.routes.render_template', return_value='rendered') as render:
+        client.get('/user/settings')
+        form = render.call_args.kwargs['form']
+        assert form.microblog_feed.data == 'microblog'
+        assert [choice.value for choice in form.microblog_feed.choices] == ['microblog', 'community', 'all']
+        for feed in ('community', 'all', 'microblog'):
+            assert client.post('/user/settings', data=settings_payload(token, microblog_feed=feed)).status_code == 302
+            db.session.refresh(viewer)
+            assert viewer.microblog_feed == feed
+            client.get('/user/settings')
+            assert render.call_args.kwargs['form'].microblog_feed.data == feed
+
+
+@pytest.mark.parametrize('value', ['everything', ''])
+def test_a_microblog_feed_outside_the_choices_is_refused(app, env, value):
+    client, viewer, other = env
+    viewer.microblog_feed = 'community'
+    db.session.commit()
+
+    response, render = save_settings(app, client, microblog_feed=value)
+
+    assert response.status_code == 200   # the form again, not the redirect a save gives
+    assert render.call_args.kwargs['form'].microblog_feed.errors
+    db.session.refresh(viewer)
+    assert viewer.microblog_feed == 'community'

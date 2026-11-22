@@ -40,6 +40,7 @@ def peertube_video_sent(monkeypatch):
 def peertube_video_video_post(db_session, monkeypatch):
     local = make_instance('test.piefed.local', software='piefed')
     alice = make_user(local, 'alice', local=True, with_keys=True)
+    alice.microblog_feed = 'community'   # her followers are sent her community posts (app.microblog_feed)
     community = make_community('chan', kind=COMMUNITY_KIND_VIDEO_CHANNEL)
     community.private_key, community.public_key = a_keypair()
     post = make_post(community, alice, ap_id='https://test.piefed.local/post/1', title='A video')

@@ -733,6 +733,7 @@ def user_settings():
         current_user.page_length = form.page_length.data
         session['ui_language'] = form.interface_language.data
         current_user.vote_privately = not form.federate_votes.data
+        current_user.microblog_feed = form.microblog_feed.data
         current_user.show_subscribed_communities = form.show_subscribed_communities.data
         current_user.ap_manually_approves_followers = form.manually_approves_followers.data
         if propagate_indexable:
@@ -838,6 +839,7 @@ def user_settings():
         form.low_bandwidth_mode.data = request.cookies.get('low_bandwidth', '0') == '1'
         form.interface_language.data = current_user.interface_language
         form.federate_votes.data = not current_user.vote_privately
+        form.microblog_feed.data = current_user.microblog_feed
         form.feed_auto_follow.data = current_user.feed_auto_follow
         form.feed_auto_leave.data = current_user.feed_auto_leave
         form.read_languages.data = current_user.read_language_ids

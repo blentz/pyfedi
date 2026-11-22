@@ -87,6 +87,12 @@ class SettingsForm(FlaskForm):
     show_subscribed_communities = BooleanField(_l("Show communities I've joined on my profile"))
     manually_approves_followers = BooleanField(_l('Manually approve followers'))
     federate_votes = BooleanField(_l('Federate votes'))
+    microblog_feeds = [('microblog', _l('Microblog posts only')),
+                       ('community', _l('Community + microblog posts')),
+                       ('all', _l('All activity (includes comments & replies)')),
+                       ]
+    microblog_feed = SelectField(_l('Shown in Microblog Feed'), choices=select_choices(microblog_feeds),
+                                 validators=[DataRequired()], coerce=str, render_kw={'class': 'form-select'})
     feed_auto_follow = BooleanField(_l('Enable Automatic Follow of Feed Communities.'), default=True)
     feed_auto_leave = BooleanField(_l('Enable Automatic Leave of Feed Communities.'), default=False)
     sorts = [('hot', _l('Hot')),

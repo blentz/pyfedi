@@ -2456,6 +2456,8 @@ class User(UserMixin, db.Model):
     allow_community_themes = db.Column(db.Boolean, default=True, server_default="1")
     # Plain community names (spec 2026-11-19): off hides instance details from the web view
     show_instance_details = db.Column(db.Boolean, default=False, server_default="0")
+    # What Mastodon and other microblog software see of this user (app.microblog_feed, spec 2026-11-21)
+    microblog_feed = db.Column(db.String(16), nullable=False, default='microblog', server_default='microblog')
     community_keyword_filter = db.Column(db.String(150))
     referrer = db.Column(db.String(256))
     # Referral codes (spec 2026-10-31): NULL until the user generates one; regenerating replaces both (app/referral.py)

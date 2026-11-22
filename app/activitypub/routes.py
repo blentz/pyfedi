@@ -49,6 +49,7 @@ from app.activitypub.util import MEDIA_OBJECT_TYPES, NEW_CONTENT_TYPES, follow_a
 import app.chat.util as chat_util
 from app.chat import membership
 import app.community.live as community_live
+import app.microblog_feed as microblog_feed
 import app.community.routes as community_routes
 import app.plain_names as plain_names
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
@@ -716,12 +717,19 @@ def user_outbox_rows(user: User):
     local-only. A community that deleted itself
     (Community.is_gone) stays readable, so what was posted there stays listed. A private message is a ChatMessage,
     never one of these rows. The author is already known to be active: local_actor_user refused a banned or deleted
-    one."""
+    one.
+
+    The user's microblog feed setting (app.microblog_feed) narrows it: by default only their posts in the microblogs
+    community, their other posts too at `community`, and their comments only at `all`."""
     posts = (select(literal_column("'post'").label('kind'), Post.id.label('id'), Post.posted_at.label('posted_at'))
              .join(Community, Community.id == Post.community_id)
              .where(Post.user_id == user.id, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                     Post.local_only.isnot(True), visible_to_clause(Post, None), listable_clause(Post),
                     Community.private.isnot(True), Community.local_only.isnot(True), Community.banned.isnot(True)))
+    if not microblog_feed.shows_community_posts(user):
+        posts = posts.where(Post.community_id.in_(microblog_feed.microblog_community_ids()))
+    if not microblog_feed.shows_replies(user):
+        return posts.subquery()
     replies = (select(literal_column("'reply'").label('kind'), PostReply.id.label('id'),
                       PostReply.posted_at.label('posted_at'))
                .join(Post, Post.id == PostReply.post_id)

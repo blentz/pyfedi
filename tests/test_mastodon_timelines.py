@@ -7,11 +7,11 @@ from itertools import count
 import pytest
 
 from app import db
-from app.constants import POST_TYPE_IMAGE, VISIBILITY_FOLLOWERS
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_IMAGE, VISIBILITY_FOLLOWERS
 from app.mastodon import ids
 from app.models import Tag
 from app.oauth_server import tokens
-from tests.factories import make_community, make_community_member, make_file, make_follow, make_post, \
+from tests.factories import make_community, make_community_member, make_file, make_follow, make_instance, make_post, \
     make_post_reply, make_user
 
 _SERIAL = count()
@@ -23,6 +23,8 @@ def world(app, api_baseline):
     registered, _secret = tokens.register_app('Tusky', ['https://app.example/cb'], 'read write follow', None)
     me = make_user(None, 'tlviewer', local=True)
     friend, stranger = make_user(None, 'tlfriend', local=True), make_user(None, 'tlstranger', local=True)
+    for person in (me, friend, stranger):   # their feeds carry all they do (test_microblog_feed.py: the narrower ones)
+        person.microblog_feed = 'all'
     make_follow(me, friend)
     community = make_community('timelines')
     community.show_all = True
@@ -313,3 +315,85 @@ def test_a_bound_naming_a_status_the_viewer_may_not_read_tells_nothing_of_it(wor
     db.session.delete(hidden)
     db.session.commit()
     assert _ids(_get(world, '/api/v1/timelines/public', max_id=raw), (before, after)) == shown == _sid(before)
+
+
+# --------------------------------------------------------------------------
+# The microblog feed setting (app.microblog_feed, spec 2026-11-21-microblog-feed-setting)
+# --------------------------------------------------------------------------
+
+
+def _feed_rows(world, author):
+    """A microblog post, a community post and a comment by `author`, oldest first."""
+    microblogs = make_community('tlmicroblogs', kind=COMMUNITY_KIND_MICROBLOGS)
+    note = _post(world, author=author, community=microblogs, minutes=1)
+    page = _post(world, author=author, minutes=2)
+    return note, page, _reply(world, page, author, minutes=3)
+
+
+@pytest.mark.parametrize('feed, shown', [('microblog', (0,)), ('community', (1, 0)), ('all', (2, 1, 0))])
+def test_an_accounts_statuses_are_what_its_feed_carries(world, feed, shown):
+    friend = world['friend']
+    friend.microblog_feed = feed
+    db.session.commit()
+    rows = _feed_rows(world, friend)
+    path = f"/api/v1/accounts/{friend.id}/statuses"
+    assert _ids(_get(world, path)) == _sid(*(rows[index] for index in shown))
+    assert _ids(_get(world, path, token=False)) == _sid(*(rows[index] for index in shown))   # anyone: one answer
+
+
+@pytest.mark.parametrize('feed, shown', [('microblog', (0,)), ('community', (1, 0)), ('all', (2, 1, 0))])
+def test_home_carries_what_each_followed_feed_carries(world, feed, shown):
+    friend = world['friend']
+    friend.microblog_feed = feed
+    db.session.commit()
+    rows = _feed_rows(world, friend)
+    assert _ids(_get(world, '/api/v1/timelines/home')) == _sid(*(rows[index] for index in shown))
+
+
+def test_ones_own_home_follows_ones_own_setting(world):
+    """The setting is what any Mastodon client shows of the person, their own included."""
+    me = world['me']
+    me.microblog_feed = 'microblog'
+    db.session.commit()
+    note, _page, _comment = _feed_rows(world, me)
+    assert _ids(_get(world, '/api/v1/timelines/home')) == _sid(note)
+
+
+def test_followers_only_content_is_not_narrowed_by_the_setting(world):
+    """Followers-only posts and comments are addressed to the followers by their author: always shown to them."""
+    friend = world['friend']
+    friend.microblog_feed = 'microblog'
+    db.session.commit()
+    post = _post(world, author=friend, minutes=1, visibility=VISIBILITY_FOLLOWERS)
+    comment = _reply(world, post, friend, minutes=2)
+    comment.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    assert _ids(_get(world, '/api/v1/timelines/home')) == _sid(comment, post)
+    assert _ids(_get(world, f"/api/v1/accounts/{friend.id}/statuses")) == _sid(comment, post)
+
+
+def test_a_remote_person_has_no_setting_and_shows_all(world):
+    """A remote account's posts and comments, however they reached us, are all shown: the setting is ours to keep."""
+    remote = make_user(make_instance('remote.example'), 'tlremote')
+    remote.microblog_feed = 'microblog'   # the column default, which a remote row also carries
+    make_follow(world['me'], remote)
+    db.session.commit()
+    post = _post(world, author=remote, minutes=1)
+    comment = _reply(world, post, remote, minutes=2)
+    assert _ids(_get(world, f"/api/v1/accounts/{remote.id}/statuses")) == _sid(comment, post)
+    assert _ids(_get(world, '/api/v1/timelines/home'), (post, comment)) == _sid(comment, post)
+
+
+def test_a_remote_microblogs_community_is_not_the_microblog_feed(world):
+    """Only the local microblogs community holds the posts every feed carries."""
+    friend = world['friend']
+    friend.microblog_feed = 'microblog'
+    elsewhere = make_community('tlremoteblogs', kind=COMMUNITY_KIND_MICROBLOGS)
+    elsewhere.ap_id = 'tlremoteblogs@remote.example'
+    db.session.commit()
+    post = _post(world, author=friend, community=elsewhere, minutes=1)
+    path = f"/api/v1/accounts/{friend.id}/statuses"
+    assert _ids(_get(world, path)) == []
+    friend.microblog_feed = 'community'   # the post is readable: only the setting kept it out
+    db.session.commit()
+    assert _ids(_get(world, path)) == _sid(post)

@@ -84,3 +84,15 @@ def test_an_undeliverable_author_follower_instance_is_skipped(peertube_video_sen
     make_instance_block(peertube_video_video_post.author, blocked)
     send_post(peertube_video_video_post.id, session=db.session)
     assert 'https://blocked.example/inbox' not in peertube_video_sent and len(peertube_video_sent.calls) == 5
+
+
+def test_a_feed_of_microblog_posts_only_keeps_the_video_from_the_authors_followers(peertube_video_sent,
+                                                                                  peertube_video_video_post):
+    """The microblog feed setting (app.microblog_feed): a video channel is a community, so by default the author's
+    followers are not sent it. The users it mentions still are, and the community's followers still get theirs."""
+    peertube_video_video_post.author.microblog_feed = 'microblog'
+    db.session.commit()
+    send_post(peertube_video_video_post.id, session=db.session)
+    assert 'https://follower.example/inbox' not in peertube_video_sent
+    assert peertube_video_sent['https://mention.example/inbox'][0]['type'] == 'Create'
+    assert len(peertube_video_sent.calls) == 4

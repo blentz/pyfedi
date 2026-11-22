@@ -12,6 +12,7 @@ from app.models import Instance, Notification, Poll, PollChoice, Post, User, Use
     Community, more_info_link
 from app.local_only import federated_mentions
 from app.mentions import mentioned_users_found_by
+from app.microblog_feed import post_in_feed
 from app.shared.media import media_of
 from app.storefront import hosted_instance_ids
 from app.user.utils import search_for_user
@@ -172,8 +173,8 @@ def send_peertube_video(post, user, community, recipients: list, edit: bool) -> 
     §6.1, §10 A11, A15.5). One activity per instance. PeerTube gets the author's Create (or Update): it ignores the
     Announce of a Create that threadiverse followers get. Microblog apps get the community's Announce of the id, or the
     author's Update on edit, as for any post. Other followers get the community's Announce of the author's activity,
-    naming the community as its audience (§10 A9). Then the author's followers and the users the body mentions get the
-    author's activity."""
+    naming the community as its audience (§10 A9). Then the users the body mentions and, when the author's microblog
+    feed setting carries community posts, the author's followers get the author's activity."""
     video = peertube_video(post)
     verb = 'update' if edit else 'create'
     remote_author = not user.is_local()   # as send_post: only the community's Announce goes out for it
@@ -206,7 +207,8 @@ def send_peertube_video(post, user, community, recipients: list, edit: bool) -> 
         return
     hosted = hosted_instance_ids()
     targets = [recipient.instance for recipient in recipients if recipient.instance_id not in hosted]
-    for instance in targets + user.following_instances():
+    followers = user.following_instances() if post_in_feed(user, post) else []   # their microblog feed setting
+    for instance in targets + followers:
         if instance.domain in sent_to or not can_deliver_to(user, instance):
             continue
         if instance.software == 'loops':   # Loops stores only a Note with a video/mp4 Document (spec 2026-10-30 §3.3)
@@ -479,6 +481,8 @@ def send_post(post_id, edit=False, session=None):
                 send_post_request(recipient.instance.inbox, create, user.private_key, user.public_url() + '#main-key')
                 domains_sent_to.append(recipient.instance.domain)
 
+    if not followers_only and not post_in_feed(user, post):   # their microblog feed setting leaves it out
+        return
     follower_query = session.query(UserFollower).filter_by(local_user_id=post.user_id, is_inward=True)
     if followers_only:      # a pending follower has not been let in yet
         follower_query = follower_query.filter_by(is_accepted=True)

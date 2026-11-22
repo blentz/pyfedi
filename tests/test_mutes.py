@@ -23,6 +23,7 @@ def world(app, api_baseline):
     registered, _secret = tokens.register_app('Tusky', ['https://app.example/cb'], 'read write follow', None)
     me = make_user(None, 'muter', local=True)
     loud, quiet = make_user(None, 'loudone', local=True), make_user(None, 'quietone', local=True)
+    loud.microblog_feed = quiet.microblog_feed = 'community'   # their feeds carry their community posts
     make_follow(me, loud)
     make_follow(me, quiet)
     community = make_community('mutes')

@@ -269,6 +269,8 @@ def test_a_shop_users_post_in_a_first_community_reaches_community_and_author_fol
     masto_fan = make_user(_peer('masto.example', 'mastodon'), 'max')
     for fan in (piefed_fan, masto_fan):
         make_follow(world.sam, fan, is_inward=True)
+    world.sam.microblog_feed = 'community'   # his followers are sent his community posts (app.microblog_feed)
+    db.session.commit()
 
     _, post = _act(app, world.shop, world.sam,
                    lambda: shared_make_post(_api_input(title='from the shop'), world.pit, POST_TYPE_ARTICLE, SRC_API,

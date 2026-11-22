@@ -3,10 +3,12 @@ rulings M2-M5). Every list of posts or comments comes from the shared read layer
 so a viewer is shown here exactly what their blocks, memberships and visibility allow there.
 
 - public: the posts of the communities shown in All; `local` this domain's communities, `remote` the others.
-- home (M2): the posts and comments of the people the viewer follows, and their own.
+- home (M2): the posts and comments of the people the viewer follows, and their own, as far as each local author's
+  microblog feed setting carries them (app.microblog_feed).
 - list/:id (M2): a community the viewer joined is a list; its timeline is the community's posts.
 - tag/:name: posts carrying the hashtag.
-- accounts/:id/statuses: a person's posts and, unless `exclude_replies`, comments."""
+- accounts/:id/statuses: a person's posts and, unless `exclude_replies`, comments; for a local person, only what their
+  microblog feed setting carries."""
 from flask import g, jsonify, request
 from sqlalchemy import and_
 from sqlalchemy.orm.exc import NoResultFound
@@ -16,6 +18,7 @@ from app.constants import POST_TYPE_GALLERY, POST_TYPE_IMAGE
 from app.local_only import hidden_here
 from app.mastodon import bp
 from app.mastodon.ids import find_status
+from app.microblog_feed import feed_posts_clause, feed_replies_clause
 from app.mastodon.paging import Source, link_header, page, window
 from app.mastodon.statuses import Page
 from app.models import Community, CommunityMember, Post, PostReply, Tag, UserFollower
@@ -106,8 +109,9 @@ def _followed_ids(user_id: int) -> tuple[int, ...]:
 @require_oauth('read:statuses')
 def home_timeline():
     people = _followed_ids(g.oauth_user.id)
-    return _respond(_without_muted([Source(_posts(Listing(sort='', person_ids=people, ignore_sticky=True)), Post),
-                                    Source(_comments(CommentListing(person_ids=people)), PostReply)]))
+    posts = _posts(Listing(sort='', person_ids=people, ignore_sticky=True)).filter(feed_posts_clause())
+    comments = _comments(CommentListing(person_ids=people)).filter(feed_replies_clause())
+    return _respond(_without_muted([Source(posts, Post), Source(comments, PostReply)]))
 
 
 def _joined(user_id: int, community_id: int) -> Community | None:
@@ -137,9 +141,10 @@ def account_statuses(account_id):
         return _not_found()
     if _truthy('pinned'):
         return jsonify([])   # a profile pins nothing
-    sources = [Source(_only_media(_posts(Listing(sort='', person_id=person.id, ignore_sticky=True))), Post)]
+    posts = _posts(Listing(sort='', person_id=person.id, ignore_sticky=True)).filter(feed_posts_clause())
+    sources = [Source(_only_media(posts), Post)]
     if not _truthy('exclude_replies') and not _truthy('only_media'):
-        sources.append(Source(_comments(CommentListing(person_id=person.id)), PostReply))
+        sources.append(Source(_comments(CommentListing(person_id=person.id)).filter(feed_replies_clause()), PostReply))
     return _respond(sources)
 
 

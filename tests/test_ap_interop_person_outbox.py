@@ -14,7 +14,7 @@ from sqlalchemy import event
 
 from app import db
 from app.activitypub import routes as activitypub_routes
-from app.constants import POST_STATUS_REVIEWING, VISIBILITY_FOLLOWERS, VISIBILITY_UNLISTED
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, VISIBILITY_FOLLOWERS, VISIBILITY_UNLISTED
 from app.models import Community, Post, PostReply, User, utcnow
 from tests.factories import make_chat_message, make_community, make_instance, make_instance_block, make_post, \
     make_post_reply, make_user
@@ -26,8 +26,12 @@ OUTBOX = f'{SERVER}/u/alice/outbox'
 
 
 def _world():
+    """Alice's microblog feed carries all she does, so every row these tests write is the outbox's to judge
+    (test_microblog_feed.py covers the narrower settings)."""
     seed_actors()
-    return make_user(None, 'alice', local=True), make_community(name='books')
+    alice = make_user(None, 'alice', local=True)
+    alice.microblog_feed = 'all'
+    return alice, make_community(name='books')
 
 
 def _post(community, author, minutes_ago, **columns):
@@ -349,3 +353,33 @@ def test_a_stored_create_id_is_still_used(app, db_session):
 
     assert [item['id'] for item in ap_get(app, '/u/alice/outbox').json['orderedItems']] == \
         ['https://elsewhere.example/activities/create/1']
+
+
+# --------------------------------------------------------------------------
+# The microblog feed setting (app.microblog_feed, spec 2026-11-21-microblog-feed-setting)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('feed, listed', [('microblog', ('note',)), ('community', ('page', 'note')),
+                                          ('all', ('comment', 'page', 'note'))])
+def test_the_outbox_lists_what_the_users_feed_carries(app, db_session, feed, listed):
+    author, community = _world()
+    author.microblog_feed = feed
+    microblogs = make_community(name='notes', kind=COMMUNITY_KIND_MICROBLOGS)
+    rows = {'note': _post(microblogs, author, 30), 'page': _post(community, author, 20)}
+    rows['comment'] = _reply(rows['page'], author, 10)
+
+    document = ap_get(app, '/u/alice/outbox').json
+
+    assert document['totalItems'] == len(listed)
+    assert _object_ids(document) == [rows[name].ap_id for name in listed]
+
+
+def test_a_new_user_lists_their_microblog_posts_only(app, db_session):
+    """The column default is the setting's default, and a row it never named keeps it."""
+    seed_actors()
+    author = make_user(None, 'alice', local=True)
+    assert author.microblog_feed == 'microblog'
+    _post(make_community(name='books'), author, 20)
+
+    assert ap_get(app, '/u/alice/outbox').json['totalItems'] == 0

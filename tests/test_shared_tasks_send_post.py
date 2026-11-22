@@ -60,7 +60,7 @@ import pytest
 
 from app import db
 from app.constants import (
-    NOTIF_MENTION, POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
+    COMMUNITY_KIND_MICROBLOGS, VISIBILITY_FOLLOWERS, NOTIF_MENTION, POST_TYPE_ARTICLE, POST_TYPE_EVENT, POST_TYPE_IMAGE,
     POST_TYPE_GALLERY, POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_VIDEO,
 )
 from app.activitypub.signature import default_context
@@ -109,6 +109,7 @@ def _seed(body=None, post_type=POST_TYPE_ARTICLE, url=None, local_community=True
     """
     instance = make_instance('test.piefed.local', software='piefed')
     user = make_user(instance, 'author', local=True, with_keys=with_keys)
+    user.microblog_feed = 'community'   # their followers are sent their community posts (app.microblog_feed)
     community = make_community('c1')
     post = make_post(community, user, ap_id='https://test.piefed.local/post/1')
     post.type = post_type
@@ -3363,3 +3364,59 @@ def test_a_gallery_post_pushes_every_picture_in_order_then_a_link_to_the_post(db
             for item in _attachment_of(route)] == [('Document', 'https://example.com/0.png', 'zero'),
                                                    ('Document', 'https://example.com/1.png', 'one'),
                                                    ('Link', s.post.public_url(), None)]
+
+
+# ---------------------------------------------------------------------------
+# The microblog feed setting (app.microblog_feed, spec 2026-11-21-microblog-feed-setting): whether the author's
+# followers are sent their community posts
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sent_inboxes(monkeypatch):
+    """Every inbox send_post delivers to, in order, in place of the delivery (no signing, no HTTP)."""
+    inboxes = []
+    monkeypatch.setattr('app.shared.tasks.pages.send_post_request',
+                        lambda inbox, *args, **kwargs: inboxes.append(inbox))
+    return inboxes
+
+
+@pytest.mark.parametrize('feed, followers_sent', [('microblog', False), ('community', True), ('all', True)])
+def test_a_community_post_reaches_the_authors_followers_as_their_feed_says(db_session, sent_inboxes, feed,
+                                                                          followers_sent):
+    s = _seed(local_community=False)
+    s.user.microblog_feed = feed
+    s.community.instance_id = _peer().id
+    s.community.ap_inbox_url = PEER_INBOX
+    _inward_follower(s)
+
+    _send(s.post)
+
+    assert sent_inboxes == [PEER_INBOX] + ([FOLLOWER_INBOX] if followers_sent else [])
+
+
+def test_a_followers_only_post_reaches_the_followers_whatever_the_feed(db_session, sent_inboxes):
+    """Addressed to the followers by its author: the setting does not narrow it."""
+    s = _seed()
+    s.user.microblog_feed = 'microblog'
+    s.post.visibility = VISIBILITY_FOLLOWERS
+    _inward_follower(s)
+    UserFollower.query.filter_by(local_user_id=s.user.id).one().is_accepted = True   # only accepted ones are let in
+    db.session.commit()
+
+    _send(s.post)
+
+    assert sent_inboxes == [FOLLOWER_INBOX]
+
+
+def test_an_event_in_the_microblogs_community_reaches_the_followers_by_default(db_session, sent_inboxes):
+    """An event keeps the Page path (uses_microblog_note) but is still a microblog post: every feed carries it."""
+    s = _seed(post_type=POST_TYPE_EVENT)
+    s.community.kind = COMMUNITY_KIND_MICROBLOGS
+    assert s.user.microblog_feed == 'community'
+    s.user.microblog_feed = 'microblog'
+    _inward_follower(s)
+
+    _send(s.post)
+
+    assert sent_inboxes == [FOLLOWER_INBOX]

@@ -81,10 +81,10 @@ import pytest
 from sqlalchemy.exc import NoResultFound
 
 from app import db
-from app.constants import NOTIF_MENTION
+from app.constants import NOTIF_MENTION, VISIBILITY_FOLLOWERS
 from app.models import (
     ActivityPubLog, BannedInstances, CommunityBan, Emoji, Instance,
-    Notification, PostReply, UserFlair,
+    Notification, PostReply, UserFlair, UserFollower,
 )
 from app.shared.tasks.notes import edit_reply, make_reply, send_reply
 from app.user.utils import search_for_user
@@ -1749,3 +1749,106 @@ def test_make_reply_closes_the_session_on_the_happy_path(
     make_reply(None, s.reply.id, None)
 
     assert record.calls == ['close']
+
+
+# ---------------------------------------------------------------------------
+# The microblog feed setting (app.microblog_feed, spec 2026-11-21-microblog-feed-setting): at `all`, the author's
+# followers are sent their comments too
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    """(inbox, activity type) per delivery send_reply makes, in place of the delivery (no signing, no HTTP)."""
+    deliveries = []
+    monkeypatch.setattr('app.shared.tasks.notes.send_post_request',
+                        lambda inbox, activity, *args, **kwargs: deliveries.append((inbox, activity['type'])))
+    return deliveries
+
+
+def _follower_on(s, domain, software='mastodon'):
+    """A remote follower of the author on `domain`; its instance's inbox is returned."""
+    instance = make_instance(domain, software=software)
+    instance.inbox = f'https://{domain}/inbox'
+    fan = make_user(instance, f'fan{instance.id}')
+    db.session.add(UserFollower(local_user_id=s.user.id, remote_user_id=fan.id, is_inward=True, is_accepted=True))
+    db.session.commit()
+    return instance.inbox
+
+
+@pytest.mark.parametrize('feed', ['microblog', 'community'])
+def test_a_feed_without_replies_keeps_a_comment_from_the_followers(db_session, sent, feed):
+    s = _seed()
+    s.user.microblog_feed = feed
+    _follower_on(s, 'mastodon.example')
+
+    _send(s)
+
+    assert sent == []
+
+
+def test_a_feed_of_all_activity_sends_a_comment_to_the_followers(db_session, sent):
+    s = _seed()
+    s.user.microblog_feed = 'all'
+    inbox = _follower_on(s, 'mastodon.example')
+
+    _send(s)
+
+    assert sent == [(inbox, 'Create')]
+
+
+def test_an_edited_comment_reaches_the_followers_as_an_update(db_session, sent):
+    s = _seed()
+    s.user.microblog_feed = 'all'
+    inbox = _follower_on(s, 'mastodon.example')
+
+    _send(s, edit=True)
+
+    assert sent == [(inbox, 'Update')]
+
+
+def test_a_piefed_follower_host_is_left_out_as_for_a_post(db_session, sent):
+    """It shows comments in their threads, as send_post leaves it out of a post's follower copy."""
+    s = _seed()
+    s.user.microblog_feed = 'all'
+    _follower_on(s, 'piefed.example', software='piefed')
+
+    _send(s)
+
+    assert sent == []
+
+
+def test_a_follower_host_the_author_blocked_is_left_out(db_session, sent):
+    s = _seed()
+    s.user.microblog_feed = 'all'
+    _follower_on(s, 'blocked.example')
+    make_instance_block(s.user, Instance.query.filter_by(domain='blocked.example').one())
+
+    _send(s)
+
+    assert sent == []
+
+
+def test_a_follower_host_that_had_the_announce_is_not_sent_it_twice(db_session, sent):
+    s = _seed()
+    s.user.microblog_feed = 'all'
+    inbox = _follower_on(s, 'mastodon.example')
+    member = make_user(Instance.query.filter_by(domain='mastodon.example').one(), 'member')
+    make_community_member(member, s.community)
+
+    _send(s)
+
+    assert sent == [(inbox, 'Announce')]
+
+
+def test_a_followers_only_comment_reaches_the_followers_whatever_the_feed(db_session, sent):
+    """Addressed to the followers by its author: the setting does not narrow it."""
+    s = _seed()
+    s.user.microblog_feed = 'microblog'
+    s.reply.visibility = VISIBILITY_FOLLOWERS
+    db.session.commit()
+    inbox = _follower_on(s, 'mastodon.example')
+
+    _send(s)
+
+    assert sent == [(inbox, 'Create')]

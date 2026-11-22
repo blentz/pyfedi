@@ -4,6 +4,7 @@ from app.activitypub.signature import default_context, post_request, send_post_r
 from app.constants import NOTIF_MENTION
 from app.federation_urls import activity_id, hosted_domain_names
 from app.local_only import federated_mentions
+from app.microblog_feed import shows_replies
 from app.models import Community, CommunityJoinRequest, CommunityMember, Notification, Post, \
     PostReply, utcnow, User
 from app.shared.tasks.pages import can_deliver_to, reply_recipients
@@ -230,6 +231,13 @@ def send_reply(reply_id, parent_id, edit=False, session=None):
     if followers_only:
         for instance in follower_instances(user):
             if instance.domain not in domains_sent_to and can_deliver_to(user, instance):
+                send_post_request(instance.inbox, create, user.private_key, user.public_url() + '#main-key')
+                domains_sent_to.append(instance.domain)
+    elif shows_replies(user):
+        # Their microblog feed carries comments (app.microblog_feed): the hosts of their followers get it as their status,
+        # as send_post sends a post. A PieFed host is left out there too: it shows comments in their threads.
+        for instance in user.following_instances():
+            if instance.domain not in domains_sent_to and instance.software != 'piefed' and can_deliver_to(user, instance):
                 send_post_request(instance.inbox, create, user.private_key, user.public_url() + '#main-key')
                 domains_sent_to.append(instance.domain)
 
