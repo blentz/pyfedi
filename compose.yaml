@@ -2,7 +2,7 @@ services:
 
   db:
     shm_size: 2gb
-    image: docker.io/library/postgres:17.11
+    image: docker.io/library/postgres:17.12
     restart: unless-stopped
     user: "1000:1000"
     env_file:

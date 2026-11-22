@@ -8,7 +8,7 @@
 # tests/test_payments_btcpay_regtest.py then needs a new stack: this server allows its admin's password only at first.
 services:
   btcpay-db:
-    image: docker.io/library/postgres:17.11
+    image: docker.io/library/postgres:17.12
     environment:
       POSTGRES_HOST_AUTH_METHOD: trust
     tmpfs:

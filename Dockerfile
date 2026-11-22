@@ -49,16 +49,18 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=pip-py314-slim \
 FROM python:3.14-slim AS runtime
 
 ARG TARGETARCH
-ARG SUPERCRONIC_VERSION=v0.2.49
+ARG SUPERCRONIC_VERSION=v0.2.51
 
 
 # apt as root, as in builder above, and the python user made without copying skeleton files into a home it already
 # owns (that copy, too, needs CAP_DAC_OVERRIDE): same uid/gid 1000, same /home/python, mode 700.
+# apt-get upgrade: the base image's Debian packages as patched since it was built (a zlib fix was waiting in one).
 RUN adduser --disabled-password --gecos "" --no-create-home python && \
     install -d -m 700 -o python -g python /home/python && \
     echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-sandbox-root \
     && chown root:root /var/lib/apt/lists/partial /var/cache/apt/archives/partial \
-    && apt-get update && apt-get install -y --no-install-recommends \
+    && apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     tini \
     ffmpeg \
     curl \
@@ -69,8 +71,8 @@ RUN adduser --disabled-password --gecos "" --no-create-home python && \
     tesseract-ocr-eng && \
     curl -fsSLO "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${TARGETARCH}" && \
     case "${TARGETARCH}" in \
-      amd64) echo "e63c11a9726b775a6a11801e81af4f3fb926aa68  supercronic-linux-${TARGETARCH}" ;; \
-      arm64) echo "0b6c5bb743e0b0dafed1132198c81807927ac413  supercronic-linux-${TARGETARCH}" ;; \
+      amd64) echo "1692066e350a88ff4d7d6474fe3c7a6c41ec5e89  supercronic-linux-${TARGETARCH}" ;; \
+      arm64) echo "9d4c2000493215a1898502b2fc2dada3e8ea8c7a  supercronic-linux-${TARGETARCH}" ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac | sha1sum -c - && \
     chmod +x "supercronic-linux-${TARGETARCH}" && \
