@@ -18,13 +18,29 @@
           </ol>
         </nav>
         <h1 class="mt-2">{{ tag.name }}</h1>
-        <div class="post_list">
+        <div class="row">
+            <div class="col-12 col-xl-auto">
+                {% include "tag/_tag_nav.html" %}
+            </div>
+        </div>
+        {% if live -%}
+            {% include '_live_bar.html' %}
+        {% endif -%}
+        <div class="post_list"{% if live %} id="live_feed"
+             data-posts-url="{{ url_for('tag.tag_live_posts', tag=tag.name) }}"
+             data-cursor="{{ live_cursor }}"
+             data-sse-url=""
+             data-str-live="{{ _('Live') }}" data-str-paused="{{ _('Paused') }}"
+             data-str-new-posts="{{ _('New posts: %(num)s', num='%d') }}"{% endif %}>
             {% for post in posts.items %}
                 {% include 'post/_post_teaser.html' %}
             {% else %}
                 <p>{{ _('No posts in this tag yet.') }}</p>
             {% endfor %}
         </div>
+        {% if live -%}
+            <script type="module" src="{{ url_for('static', filename='js/live_feed.js', changed=getmtime('js/live_feed.js')) }}" nonce="{{ nonce }}"></script>
+        {% endif -%}
 
         <nav aria-label="{{ _('Pagination') }}" class="mt-4" role="navigation">
                 {% if prev_url %}
@@ -34,7 +50,7 @@
                 {% endif %}
                 {% if next_url %}
                     <a href="{{ next_url }}" class="btn btn-primary" rel='nofollow'>
-                        {{ _('Next page') }} <span aria-hidden="true">&rarr;</span>
+                        {{ _('Older posts') if live else _('Next page') }} <span aria-hidden="true">&rarr;</span>
                     </a>
                 {% endif %}
         </nav>

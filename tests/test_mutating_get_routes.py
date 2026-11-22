@@ -50,7 +50,7 @@ KNOWN_GET_MUTATORS = {
     'chat.chat_conversation', 'instance.list_instances',
     'main.about_page', 'main.bot_challenge_result', 'main.find_voters',
     'main.index_rss', 'main.modlog', 'main.random', 'main.random_nsfw',
-    'main.test', 'tag.show_tag', 'tag.tag_cloud', 'tag.tag_posts',
+    'main.test', 'tag.tag_cloud', 'tag.tag_posts',
     'topic.show_topic', 'topic.show_topic_rss', 'user.user_hidden_posts',
     'main.statistics',   # v1.8.10: caches the instance's monthly active count, at most daily
 

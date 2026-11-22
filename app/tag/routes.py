@@ -1,14 +1,15 @@
-from datetime import timezone
+from datetime import timedelta, timezone
 from random import randint
 
 import flask
 from flask import redirect, url_for, flash, request, make_response, current_app, abort, g
 from flask_babel import _
 from flask_login import current_user
-from sqlalchemy import desc, or_, text
+from sqlalchemy import asc, desc, or_, text
 
-from app import db, constants
+from app import db, constants, limiter
 from app.branding import current_branding
+from app.community.live import live_posts
 from app.constants import POST_STATUS_REVIEWING
 # The module, not the name: app.feed.routes reaches this file through
 # app.activitypub before get_all_child_feed_ids is defined (import cycle: feed.routes)
@@ -16,7 +17,7 @@ import app.feed.routes as feed_routes
 from app.inoculation import inoculation
 from app.models import Post, Community, Tag, post_tag, Topic, FeedItem, Feed
 from app.federation_urls import domain_site_name
-from app.storefront import current_storefront, storefront_link, storefront_url
+from app.storefront import boosted_order_by, current_storefront, storefront_link, storefront_url
 from app.tag import bp
 # The module, not the name: app.topic.routes reaches this file through
 # app.activitypub before get_all_child_topic_ids is defined (import cycle: topic.routes)
@@ -27,107 +28,153 @@ from app.utils import render_template, permission_required, user_filters_posts, 
     blocked_users, \
     blocked_domains, feed_entry_body, \
     blocked_communities, login_required, moderating_communities_ids, community_membership_private, \
-    login_required_if_private_instance, feed_readable_by, refuse_if_private_instance, as_rss_reader
+    login_required_if_private_instance, feed_readable_by, refuse_if_private_instance, as_rss_reader, utcnow
 from app.rss_extras import RSSFeed
 
 
 from app.permissions import user_access
+
+# The front page's sorts (app/templates/_home_nav.html); each top_* sort keeps the posts of its window only
+TOP_WINDOWS = {'top_1h': timedelta(hours=1), 'top_6h': timedelta(hours=6), 'top_12h': timedelta(hours=12),
+               'top': timedelta(days=1), 'top_1w': timedelta(days=7), 'top_1m': timedelta(days=28),
+               'top_1y': timedelta(days=365), 'top_all': None}
+TAG_SORTS = ('hot', 'new', 'live', 'old', 'active', 'scaled', *TOP_WINDOWS)
+
+
+def tag_sort(requested: str | None) -> str:
+    """The sort a tag page uses: the one asked for, else the viewer's default as the front page takes it, else hot."""
+    if requested in TAG_SORTS:
+        return requested
+    default = current_user.default_sort if current_user.is_authenticated else None
+    return default if default in TAG_SORTS else 'hot'
+
+
+def sort_tag_posts(posts, sort: str):
+    """`posts` ordered, and narrowed, as get_deduped_post_ids orders and narrows the front page for `sort`. The id
+    ends every order so that a page boundary falls in the same place on each request."""
+    if sort == 'hot':
+        return posts.order_by(*boosted_order_by(Post.ranking, (Post.posted_at,)))
+    if sort == 'scaled':
+        posts = posts.filter(Post.from_bot == False)    # ranking_scaled is NOT NULL, so no test for null here
+        return posts.order_by(*boosted_order_by(Post.ranking_scaled, (Post.ranking, Post.posted_at)))
+    if sort in TOP_WINDOWS:
+        if TOP_WINDOWS[sort] is not None:
+            posts = posts.filter(Post.posted_at > utcnow() - TOP_WINDOWS[sort])
+        return posts.order_by(desc(Post.score), desc(Post.id))
+    if sort == 'old':
+        return posts.order_by(asc(Post.posted_at), asc(Post.id))
+    if sort == 'active':
+        return posts.filter(Post.reply_count > 0).order_by(desc(Post.last_active), desc(Post.id))
+    return posts.order_by(desc(Post.posted_at), desc(Post.id))    # new, and live's first page
+
+
+def tag_post_query(tag: Tag, category: str = '', category_id: int | None = None):
+    """The posts a tag page lists for the current viewer, unordered: (query, content_filters)."""
+    posts = Post.query.join(Community, Community.id == Post.community_id). \
+        join(post_tag, post_tag.c.post_id == Post.id).filter(post_tag.c.tag_id == tag.id). \
+        filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
+               Post.private == False, listable_clause(Post))
+    posts = without_local_only(posts, Post)
+
+    if current_user.is_anonymous or current_user.ignore_bots == 1:
+        posts = posts.filter(Post.from_bot == False)
+
+    if current_user.is_authenticated:
+        if current_user.ignore_reposters == 1:
+            posts = posts.filter(Post.from_reposter == False)
+        domains_ids = blocked_domains(current_user.id)
+        if domains_ids:
+            posts = posts.filter(or_(Post.domain_id.not_in(domains_ids), Post.domain_id == None))
+        instance_ids = blocked_or_banned_instances(current_user.id)
+        if instance_ids:
+            posts = posts.filter(or_(Post.instance_id.not_in(instance_ids), Post.instance_id == None))
+        community_ids = blocked_communities(current_user.id)
+        if community_ids:
+            posts = posts.filter(Post.community_id.not_in(community_ids))
+        # filter blocked users
+        blocked_accounts = blocked_users(current_user.id)
+        if blocked_accounts:
+            posts = posts.filter(Post.user_id.not_in(blocked_accounts))
+        content_filters = user_filters_posts(current_user.id)
+        posts = posts.filter(or_(Community.private == False, Community.id.in_(community_membership_private(current_user.id))))
+    else:
+        posts = posts.filter(Community.private == False)
+        content_filters = {}
+
+    community_ids = []
+    if category and category == 'community' and category_id:
+        posts = posts.filter(Post.community_id == category_id)
+    elif category and category == 'topic' and category_id:
+        topic = db.session.get(Topic, category_id) or abort(404)
+        # get posts from communities in that topic
+        if topic.show_posts_in_children:  # include posts from child topics
+            topic_ids = topic_routes.get_all_child_topic_ids(topic)
+        else:
+            topic_ids = [topic.id]
+
+        community_ids = db.session.execute(
+            text('SELECT id FROM community WHERE banned is false AND topic_id IN :topic_ids'),
+            {'topic_ids': tuple(topic_ids)}).scalars()
+
+        posts = posts.filter(Post.community_id.in_(community_ids))
+
+    elif category and category == 'feed' and category_id:
+        feed = db.session.get(Feed, category_id) or abort(404)
+        # D1394. The id comes from the query string and this route takes no
+        # login, so a private feed answered here with the posts of the
+        # communities inside it -- a readout of its membership, which
+        # `/f/<its name>` refuses. Unreadable gets the same 404 as absent.
+        if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
+            abort(404)
+        # get the feed_ids
+        if feed.show_posts_in_children:  # include posts from child feeds
+            feed_ids = feed_routes.get_all_child_feed_ids(feed)
+        else:
+            feed_ids = [feed.id]
+
+        # for each feed get the community ids (FeedItem) in the feed
+        # used for the posts searching
+        for fid in feed_ids:
+            for item in FeedItem.query.filter_by(feed_id=fid).all():
+                community_ids.append(item.community_id)
+
+        posts = posts.filter(Post.community_id.in_(community_ids))
+
+    return posts, content_filters
+
+
 @bp.route('/tag/<tag>', methods=['GET'])
 @login_required_if_private_instance
 def show_tag(tag):
     page = request.args.get('page', 1, type=int)
     category = request.args.get('category', '')
     category_id = request.args.get('category_id', type=int)
+    sort = tag_sort(request.args.get('sort'))
+    # Live is the first page of New, kept current by live_feed.js; its fragment takes no category filter
+    live = sort == 'live' and current_user.is_authenticated and page == 1 and not category
+    if sort == 'live' and not live:
+        sort = 'new'
 
     tag = Tag.query.filter(Tag.name == tag.lower()).first()
     if tag:
-
-        posts = Post.query.join(Community, Community.id == Post.community_id). \
-            join(post_tag, post_tag.c.post_id == Post.id).filter(post_tag.c.tag_id == tag.id). \
-            filter(Community.banned == False, Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
-                   Post.private == False, listable_clause(Post))
-        posts = without_local_only(posts, Post)
-
-        if current_user.is_anonymous or current_user.ignore_bots == 1:
-            posts = posts.filter(Post.from_bot == False)
-
-        if current_user.is_authenticated:
-            if current_user.ignore_reposters == 1:
-                posts = posts.filter(Post.from_reposter == False)
-            domains_ids = blocked_domains(current_user.id)
-            if domains_ids:
-                posts = posts.filter(or_(Post.domain_id.not_in(domains_ids), Post.domain_id == None))
-            instance_ids = blocked_or_banned_instances(current_user.id)
-            if instance_ids:
-                posts = posts.filter(or_(Post.instance_id.not_in(instance_ids), Post.instance_id == None))
-            community_ids = blocked_communities(current_user.id)
-            if community_ids:
-                posts = posts.filter(Post.community_id.not_in(community_ids))
-            # filter blocked users
-            blocked_accounts = blocked_users(current_user.id)
-            if blocked_accounts:
-                posts = posts.filter(Post.user_id.not_in(blocked_accounts))
-            content_filters = user_filters_posts(current_user.id)
-            posts = posts.filter(or_(Community.private == False, Community.id.in_(community_membership_private(current_user.id))))
-        else:
-            posts = posts.filter(Community.private == False)
-            content_filters = {}
-
-        community_ids = []
-        if category and category == 'community' and category_id:
-            posts = posts.filter(Post.community_id == category_id)
-        elif category and category == 'topic' and category_id:
-            topic = db.session.get(Topic, category_id) or abort(404)
-            # get posts from communities in that topic
-            if topic.show_posts_in_children:  # include posts from child topics
-                topic_ids = topic_routes.get_all_child_topic_ids(topic)
-            else:
-                topic_ids = [topic.id]
-
-            community_ids = db.session.execute(
-                text('SELECT id FROM community WHERE banned is false AND topic_id IN :topic_ids'),
-                {'topic_ids': tuple(topic_ids)}).scalars()
-
-            posts = posts.filter(Post.community_id.in_(community_ids))
-
-        elif category and category == 'feed' and category_id:
-            feed = db.session.get(Feed, category_id) or abort(404)
-            # D1394. The id comes from the query string and this route takes no
-            # login, so a private feed answered here with the posts of the
-            # communities inside it -- a readout of its membership, which
-            # `/f/<its name>` refuses. Unreadable gets the same 404 as absent.
-            if not feed_readable_by(feed, current_user.id if current_user.is_authenticated else None):
-                abort(404)
-            # get the feed_ids
-            if feed.show_posts_in_children:  # include posts from child feeds
-                feed_ids = feed_routes.get_all_child_feed_ids(feed)
-            else:
-                feed_ids = [feed.id]
-
-            # for each feed get the community ids (FeedItem) in the feed
-            # used for the posts searching
-            for fid in feed_ids:
-                for item in FeedItem.query.filter_by(feed_id=fid).all():
-                    community_ids.append(item.community_id)
-
-            posts = posts.filter(Post.community_id.in_(community_ids))
-
-        posts = posts.order_by(desc(Post.posted_at))
+        posts, content_filters = tag_post_query(tag, category, category_id)
+        posts = sort_tag_posts(posts, sort)
 
         # pagination
         posts = posts.paginate(page=page, per_page=50, error_out=False)
+        live_cursor = max((post.id for post in posts.items), default=0) if live else 0
         # tag.name, not tag: `tag` is the Tag row from the lookup above, and the
         # URL builder has nothing but str() for a model -- which wrote
         # /tag/%3CTag%201%3E into both links and made page 2 unreachable.
-        next_url = url_for('tag.show_tag', tag=tag.name, page=posts.next_num,
+        next_url = url_for('tag.show_tag', tag=tag.name, page=posts.next_num, sort='new' if live else sort,
                            category=category, category_id=category_id) if posts.has_next else None
-        prev_url = url_for('tag.show_tag', tag=tag.name, page=posts.prev_num,
+        prev_url = url_for('tag.show_tag', tag=tag.name, page=posts.prev_num, sort=sort,
                            category=category, category_id=category_id) if posts.has_prev and page != 1 else None
 
         return render_template('tag/tag.html', tag=tag, title=tag.name, posts=posts,
                                POST_TYPE_IMAGE=constants.POST_TYPE_IMAGE, POST_TYPE_LINK=constants.POST_TYPE_LINK,
                                POST_TYPE_VIDEO=constants.POST_TYPE_VIDEO,
-                               next_url=next_url, prev_url=prev_url,
+                               next_url=next_url, prev_url=prev_url, sort=sort, live=live, live_cursor=live_cursor,
                                content_filters=content_filters, category=category, category_id=category_id,
                                moderated_community_ids=moderating_communities_ids(current_user.get_id()),
                                rss_feed=f"{storefront_url()}/tag/{tag.name}/feed",
@@ -136,6 +183,32 @@ def show_tag(tag):
                                )
     else:
         abort(404)
+
+
+@bp.route('/tag/<tag>/live_posts', methods=['GET'])
+@login_required
+@limiter.limit('12/minute', key_func=lambda: f'live:{current_user.id}:tag:{request.view_args["tag"].lower()}')
+def tag_live_posts(tag):
+    """New teasers for a tag page's Live view, filtered for the viewer exactly as the page is. `after` is the newest
+    Post.id the page already has; 204 when nothing is new. The client advances its cursor from X-Live-Cursor, not
+    from the teasers, because a keyword filter can hide every one of them."""
+    tag = Tag.query.filter(Tag.name == tag.lower()).first() or abort(404)
+    after = request.args.get('after', type=int)
+    if after is None:
+        abort(400)
+
+    posts_query, content_filters = tag_post_query(tag)
+    posts = live_posts(posts_query, after)
+    if not posts:
+        return '', 204
+
+    response = make_response(render_template(
+        'community/_live_posts.html', posts=posts, sort='new', content_filters=content_filters,
+        POST_TYPE_IMAGE=constants.POST_TYPE_IMAGE, POST_TYPE_LINK=constants.POST_TYPE_LINK,
+        POST_TYPE_VIDEO=constants.POST_TYPE_VIDEO,
+        moderated_community_ids=moderating_communities_ids(current_user.get_id())))
+    response.headers['X-Live-Cursor'] = str(max(post.id for post in posts))
+    return response
 
 
 @bp.route('/tag/<tag>/feed', methods=['GET'])

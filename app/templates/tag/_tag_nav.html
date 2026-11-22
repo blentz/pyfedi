@@ -1,0 +1,84 @@
+{# The tag page's sorts: the front page's (_home_nav.html), as ?sort= on /tag/<name>, keeping any category filter.
+   Live is offered to a logged-in reader only, and not while a category filter is on. #}
+{%- macro sort_url(s) -%}
+    {{ url_for('tag.show_tag', tag=tag.name, sort=s, category=category or None, category_id=category_id or None) }}
+{%- endmacro -%}
+{%- set live_offered = current_user.is_authenticated and not category -%}
+<div class="d-xl-none">
+    <select class="form-control form-select navigate_on_change" name="sort_by" aria-label="{{ _('Sort by') }}">
+        <option value="{{ sort_url('hot') }}" aria-label="{{ _('Trending now') }}" {{ 'selected' if sort == 'hot' }}>
+            {{ _('Hot') }}
+        </option>
+        <option value="{{ sort_url('new') }}" aria-label="{{ _('Latest posts') }}" {{ 'selected' if sort == 'new' }}>
+            {{ _('New') }}
+        </option>
+        {% if live_offered -%}
+        <option value="{{ sort_url('live') }}" aria-label="{{ _('Live feed of new posts') }}" {{ 'selected' if sort == 'live' }}>
+            {{ _('Live') }}
+        </option>
+        {% endif -%}
+        <option value="{{ sort_url('old') }}" aria-label="{{ _('Oldest posts') }}" {{ 'selected' if sort == 'old' }}>
+            {{ _('Old') }}
+        </option>
+        <option value="{{ sort_url('active') }}" aria-label="{{ _('Recently commented on') }}" {{ 'selected' if sort == 'active' }}>
+            {{ _('Active') }}
+        </option>
+        <option value="{{ sort_url('scaled') }}" aria-label="{{ _('Trending in niche communities') }}" {{ 'selected' if sort == 'scaled' }}>
+            {{ _('Scaled') }}
+        </option>
+        <optgroup label="{{ _('Top') }}">
+            <option value="{{ sort_url('top_1h') }}" aria-label="{{ _('Most upvotes in the last hour') }}" {{ 'selected' if sort == 'top_1h' }}>
+                {{ _('1 hour') }}
+            </option>
+            <option value="{{ sort_url('top_6h') }}" aria-label="{{ _('Most upvotes in the last 6 hours') }}" {{ 'selected' if sort == 'top_6h' }}>
+                {{ _('6 hours') }}
+            </option>
+            <option value="{{ sort_url('top_12h') }}" aria-label="{{ _('Most upvotes in the last 12 hours') }}" {{ 'selected' if sort == 'top_12h' }}>
+                {{ _('12 hours') }}
+            </option>
+            <option value="{{ sort_url('top') }}" aria-label="{{ _('Most upvotes in the last day') }}" {{ 'selected' if sort == 'top' }}>
+                {{ _('Day') }}
+            </option>
+            <option value="{{ sort_url('top_1w') }}" aria-label="{{ _('Most upvotes in the last week') }}" {{ 'selected' if sort == 'top_1w' }}>
+                {{ _('Week') }}
+            </option>
+            <option value="{{ sort_url('top_1m') }}" aria-label="{{ _('Most upvotes in the last month') }}" {{ 'selected' if sort == 'top_1m' }}>
+                {{ _('Month') }}
+            </option>
+            <option value="{{ sort_url('top_1y') }}" aria-label="{{ _('Most upvotes in the last year') }}" {{ 'selected' if sort == 'top_1y' }}>
+                {{ _('Year') }}
+            </option>
+            <option value="{{ sort_url('top_all') }}" aria-label="{{ _('Most upvotes all time') }}" {{ 'selected' if sort == 'top_all' }}>
+                {{ _('All Time') }}
+            </option>
+        </optgroup>
+    </select>
+</div>
+<div class="d-none sort_methods d-xl-inline-block btn-group mt-1 mb-2" aria-label="{{ _('Sorting methods: ') }}">
+    <a href="{{ sort_url('hot') }}" class="btn {{ 'btn-primary' if sort == 'hot' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Trending now') }}">
+        {{ _('Hot') }}
+    </a><div class="btn-group" role="group">
+        <button id="tagSortTop" type="button" class="btn {{ 'btn-primary' if sort.startswith('top') else 'btn-outline-secondary' }} dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+            {{ _('Top') }}
+        </button>
+        <ul class="dropdown-menu" aria-labelledby="tagSortTop">
+            {% for value, label in [('top_1h', _('1 hour')), ('top_6h', _('6 hours')), ('top_12h', _('12 hours')),
+                                    ('top', _('Day')), ('top_1w', _('Week')), ('top_1m', _('Month')),
+                                    ('top_1y', _('Year')), ('top_all', _('All Time'))] -%}
+            <li>
+                <a class="dropdown-item {{ 'active' if sort == value else '' }}" href="{{ sort_url(value) }}" rel="nofollow noindex">
+                    {{ label }}
+                </a>
+            </li>
+            {% endfor -%}
+        </ul>
+    </div><a href="{{ sort_url('new') }}" class="btn {{ 'btn-primary' if sort == 'new' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Latest posts') }}">
+        {{ _('New') }}
+    </a>{% if live_offered -%}<a href="{{ sort_url('live') }}" class="btn {{ 'btn-primary' if sort == 'live' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Live feed of new posts') }}">
+        {{ _('Live') }}
+    </a>{% endif -%}<a href="{{ sort_url('active') }}" class="btn {{ 'btn-primary' if sort == 'active' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Recently commented on') }}">
+        {{ _('Active') }}
+    </a><a href="{{ sort_url('scaled') }}" class="btn {{ 'btn-primary' if sort == 'scaled' else 'btn-outline-secondary' }}" rel="nofollow noindex" title="{{ _('Trending in niche communities') }}">
+        {{ _('Scaled') }}
+    </a>
+</div>
