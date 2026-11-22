@@ -445,7 +445,8 @@ aarch64 wheel, which is why it must stay out of the production install.
   brings its stylesheet, base theme, script, templates and files up to date,
   leaves a theme already up to date alone, checks every domain before storing
   anything, and with `--check` only reports what would change, so a site can
-  keep its themes in files.
+  keep its themes in files. `--default` also makes it each domain's default
+  theme.
 
 ### 2.3 Behaviour changes operators and users will notice
 

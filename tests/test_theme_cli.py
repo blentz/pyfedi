@@ -199,3 +199,58 @@ def test_more_files_than_a_theme_may_hold(app, monkeypatch):
     monkeypatch.setitem(app.config, 'CUSTOM_THEME_MAX_FILES', 1)
     with pytest.raises(ThemeImportError, match='more than a theme may hold'):
         read_input(make_zip(entries={'files/a.png': PNG, 'files/b.png': PNG}), False)
+
+
+# --- --default: the theme is also each domain's default theme
+
+def default_of(domain):
+    db.session.expire_all()
+    row = db.session.get(SiteDomain, domain.id)
+    config = row.config() if row.is_default else row.own_config
+    return config.default_theme if config is not None else None
+
+
+def test_default_makes_a_new_theme_each_domains_default(run, domains):
+    result = result_of(run('--default', '--domain', 'one.example', '--domain', 'two.example', input=make_zip()))
+    assert result['changed'] == {'one.example': ['new theme', 'default theme'],
+                                 'two.example': ['new theme', 'default theme']}
+    for name in ('one.example', 'two.example'):
+        (theme,) = themes_on(domains[name])
+        assert default_of(domains[name]) == f'custom:{theme.id}'
+    assert default_of(domains['abcdef.onion']) is None
+    again = result_of(run('--default', '--domain', 'one.example', '--domain', 'two.example', input=make_zip()))
+    assert again['changed'] == {} and again['unchanged'] == ['one.example', 'two.example']
+
+
+def test_default_on_a_theme_already_up_to_date_only_sets_the_default(run, domains):
+    result_of(run('--domain', 'two.example', input=make_zip()))
+    (theme,) = themes_on(domains['two.example'])
+    before = theme.updated_at
+    result = result_of(run('--default', '--domain', 'two.example', input=make_zip()))
+    assert result['changed'] == {'two.example': ['default theme']}
+    assert default_of(domains['two.example']) == f'custom:{theme.id}'
+    assert themes_on(domains['two.example'])[0].updated_at == before   # the theme itself was not saved again
+
+
+def test_default_with_check_changes_nothing(run, domains):
+    result_of(run('--domain', 'two.example', input=make_zip()))
+    result = result_of(run('--default', '--check', '--domain', 'two.example', input=make_zip()))
+    assert result['changed'] == {'two.example': ['default theme']}
+    assert default_of(domains['two.example']) is None
+
+
+def test_without_default_the_domains_default_is_left_alone(run, domains):
+    result_of(run('--default', '--domain', 'two.example', input=make_zip()))
+    db.session.get(SiteDomain, domains['two.example'].id).config().default_theme = 'forest'
+    db.session.commit()
+    assert result_of(run('--domain', 'two.example', input=make_zip()))['changed'] == {}
+    assert default_of(domains['two.example']) == 'forest'
+
+
+def test_a_retired_theme_cannot_be_made_the_default(run, domains):
+    result_of(run('--domain', 'two.example', input=make_zip()))
+    themes_on(domains['two.example'])[0].retired = True
+    db.session.commit()
+    outcome = run('--default', input=make_zip())
+    assert outcome.exit_code == 1 and 'two.example: its theme Brand is retired' in outcome.output
+    assert default_of(domains['two.example']) is None and themes_on(domains['one.example']) == []

@@ -5,7 +5,8 @@ The archive is read on standard input (raw, or base64 with `--base64`) and check
 each domain the theme is found by its name, ignoring case: a domain without one gets a new theme, and a domain with
 one has its stylesheet, base theme, script, template overrides and files set to the archive's, each only where it
 differs. A theme already as the archive has it is left alone, so running the import twice changes nothing the second
-time. Retired themes stay retired. Every domain is checked before anything is stored."""
+time. Retired themes stay retired. With `--default` the theme is also made each domain's default theme, as the admin's
+site page does. Every domain is checked before anything is stored."""
 import base64
 import binascii
 import json
@@ -14,13 +15,14 @@ import sys
 import click
 from flask import current_app
 
-from app import db
+from app import cache, db
 from app.branding import offsite_references
 from app.clock import utcnow
-from app.custom_themes import (ThemeNameError, add_theme_file, check_name, is_shipped, read_stored,
+from app.custom_themes import (ThemeNameError, add_theme_file, check_name, custom_identifier, is_shipped, read_stored,
                                remove_theme_files)
 from app.models import CustomTheme, CustomThemeTemplate, SiteDomain
 from app.theme_code import ThemeArchive, ThemeCodeError, read_archive
+from app.utils import get_site_as_dict
 
 
 class ThemeImportError(ValueError):
@@ -98,13 +100,23 @@ def differences(found: ThemeArchive, theme: CustomTheme | None) -> list[str]:
     return changes
 
 
-def check_domain(found: ThemeArchive, domain: SiteDomain) -> None:
-    """Refuses a domain the theme cannot go on: off-site references on an onion, or a name it may not take."""
+def is_default_on(theme: CustomTheme | None, domain: SiteDomain) -> bool:
+    """Whether `theme` is what domain `domain` has set itself as its default theme."""
+    config = domain.config() if domain.is_default else domain.own_config
+    return theme is not None and config is not None and config.default_theme == custom_identifier(theme.id)
+
+
+def check_domain(found: ThemeArchive, domain: SiteDomain, make_default: bool) -> None:
+    """Refuses a domain the theme cannot go on: off-site references on an onion, a name it may not take, or (to be
+    its default) a retired theme of that name, which no picker offers."""
     if domain.is_onion:
         offsite = offsite_references(css=found.css, own_host=domain.domain)
         if offsite:
             raise ThemeImportError(f'{domain.domain}: styles.css: off the onion: {", ".join(offsite)}')
-    if existing_theme(found, domain) is None:
+    theme = existing_theme(found, domain)
+    if make_default and theme is not None and theme.retired:
+        raise ThemeImportError(f'{domain.domain}: its theme {theme.name} is retired, so it cannot be the default.')
+    if theme is None:
         try:
             check_name(found.name, domain.id)
         except ThemeNameError as error:
@@ -145,20 +157,34 @@ def apply(found: ThemeArchive, domain: SiteDomain) -> CustomTheme:
     return theme
 
 
-def import_theme(found: ThemeArchive, domains: list[SiteDomain], check: bool) -> dict:
-    """Install `found` on each of `domains`; with `check`, only say what would change. Every domain is checked
-    before any is changed. Returns {"theme", "changed": {domain: [what]}, "unchanged": [domain]}."""
+def make_default_on(theme: CustomTheme, domain: SiteDomain) -> None:
+    """Make `theme` domain `domain`'s default theme, as the admin's site page saves it."""
+    domain.config().default_theme = custom_identifier(theme.id)
+    db.session.commit()   # the commit clears each domain's memoised configuration (app.domain_config)
+    if domain.is_default:
+        cache.delete_memoized(get_site_as_dict)
+
+
+def import_theme(found: ThemeArchive, domains: list[SiteDomain], check: bool, make_default: bool = False) -> dict:
+    """Install `found` on each of `domains`, and with `make_default` make it each one's default theme; with `check`,
+    only say what would change. Every domain is checked before any is changed.
+    Returns {"theme", "changed": {domain: [what]}, "unchanged": [domain]}."""
     for domain in domains:
-        check_domain(found, domain)
+        check_domain(found, domain, make_default)
     changed, unchanged = {}, []
     for domain in domains:
-        what = differences(found, existing_theme(found, domain))
+        theme = existing_theme(found, domain)
+        what = differences(found, theme)
+        if make_default and not is_default_on(theme, domain):
+            what.append('default theme')
         if not what:
             unchanged.append(domain.domain)
             continue
         changed[domain.domain] = what
         if not check:
-            apply(found, domain)
+            theme = apply(found, domain) if what != ['default theme'] else theme
+            if 'default theme' in what:
+                make_default_on(theme, domain)
     return {'theme': found.name, 'changed': changed, 'unchanged': unchanged}
 
 
@@ -171,14 +197,15 @@ def register_theme_commands(app) -> None:
     @click.option('--domain', 'domains', multiple=True, help='A domain to install it on (repeatable; default: every '
                                                               'domain)')
     @click.option('--base64', 'encoded', is_flag=True, help='Standard input is the archive in base64')
+    @click.option('--default', 'make_default', is_flag=True, help="Also make it each domain's default theme")
     @click.option('--check', is_flag=True, help='Say what would change, and change nothing')
-    def import_(domains, encoded, check):
+    def import_(domains, encoded, make_default, check):
         """Install the theme archive on standard input as a custom theme of each domain, creating it or bringing it
-        up to date by name. Prints JSON: the theme's name, what changed on each domain, and the domains already up to
+        up to date by name (and with --default, making it the domain's default theme). Prints JSON: the theme's name, what changed on each domain, and the domains already up to
         date."""
         try:
             found = read_input(sys.stdin.buffer.read(), encoded)
-            result = import_theme(found, target_domains(domains), check)
+            result = import_theme(found, target_domains(domains), check, make_default)
         except ThemeImportError as error:
             click.echo(str(error))
             sys.exit(1)
