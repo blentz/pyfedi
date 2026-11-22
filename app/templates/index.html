@@ -198,9 +198,11 @@
         </div>
         {% endif -%}
         {%- endset %}
+        {%- set live_feed_box %}{% if shows_box('home', 'live_feed') %}{% include '_sidebar_live_feed.html' %}{% endif %}{% endset %}
         {{ sidebar_boxes('home', {'new_communities': new_communities_box, 'active_communities': active_communities_box,
                                   'upcoming_events': upcoming_events_box, 'recent_tags': recent_tags_box,
-                                  'about': about_box, 'new_instances': new_instances_box}) }}
+                                  'about': about_box, 'new_instances': new_instances_box,
+                                  'live_feed': live_feed_box}) }}
 
         {% include "_inoculation_links.html" %}
     </aside>

@@ -14,8 +14,8 @@ order of their own and sees the domain's.
 
 `shown_boxes(area)`:
 
-1. The boxes the request's domain shows, in its order (`domain_shown`). A box the domain hides is never shown and not
-   offered to users.
+1. The boxes the request's domain shows, in its order (`domain_offered`). A box the domain hides is never shown and
+   not offered to users, except an optional box (spec 2026-11-22-sidebar-live-feed), which is always offered.
 2. For a signed-in user with an order of their own, those boxes in the user's order, without the ones they hid
    (`personal_layout`). A box their value does not name (one the domain started showing after they saved) comes
    after the boxes they arranged, shown. Names their value has that the domain does not show are ignored.

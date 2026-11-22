@@ -17,7 +17,7 @@ from app.theme_code import install as install_theme_code
 from app.referral import referral_page_available, referrals_available
 from app.branding import DERIVED_FIELDS, Branding, current_branding
 from app.project_links import footer_invitation, project_links
-from app.sidebar import sidebar_boxes
+from app.sidebar import shows_box, sidebar_boxes
 from app.activitypub.entitlement import secure_mode_cache_headers, signed_fetch_refusal
 from app.community.live import post_community_link
 from app.community.util import actor_to_community
@@ -135,6 +135,7 @@ def register_request_hooks(app):
     app.jinja_env.globals['plans_page_url'] = plans_page_url
     app.jinja_env.globals['subscription_settings_shown'] = subscription_settings_shown
     app.jinja_env.globals['sidebar_boxes'] = sidebar_boxes
+    app.jinja_env.globals['shows_box'] = shows_box
     app.jinja_env.globals['project_links'] = project_links
     app.jinja_env.globals['footer_invitation'] = footer_invitation
     app.jinja_env.globals['target_link'] = target_link

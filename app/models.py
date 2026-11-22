@@ -2463,6 +2463,8 @@ class User(UserMixin, db.Model):
     # The sidebars' boxes as this user arranged them, NULL for the domain's order (app/sidebar.py)
     home_sidebar = db.Column(db.Text)
     community_sidebar = db.Column(db.Text)
+    # What the sidebar's live feed box shows: 'all' posts, or 'subscribed' (followed people and communities)
+    sidebar_live_feed = db.Column(db.String(16), nullable=False, default='all', server_default='all')
     community_keyword_filter = db.Column(db.String(150))
     referrer = db.Column(db.String(256))
     # Referral codes (spec 2026-10-31): NULL until the user generates one; regenerating replaces both (app/referral.py)

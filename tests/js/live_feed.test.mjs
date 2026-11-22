@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     createLiveFeed, shouldHold, nextBackoff, dedupeNodes, trimCount, teaserNodes,
-    POLL_MS, SAFETY_POLL_MS, COALESCE_MS, MAX_BACKOFF_MS, HIGHLIGHT_MS, MAX_TEASERS, TEASER_SETUPS,
+    POLL_MS, SAFETY_POLL_MS, COALESCE_MS, MAX_BACKOFF_MS, HIGHLIGHT_MS, MAX_TEASERS, TEASER_SETUPS, COMPACT_MAX_ITEMS,
 } from '../../app/static/js/live_feed.js';
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -80,7 +80,7 @@ function makeEventSource() {
 // Builds a feed. `replies` is consumed one per fetch; once empty, every fetch answers 204.
 // A reply that is an Error makes the fetch reject.
 function setup({ replies = [], ids = ['post_1'], sseUrl = '', EventSource, lowBandwidth = false,
-                 hidden = false, scrollY = 0, withHelpers = true } = {}) {
+                 hidden = false, scrollY = 0, withHelpers = true, compact = undefined } = {}) {
     const clock = fakeClock();
     const list = new FakeList(ids);
     const pill = Object.assign(new FakeTarget(), { hidden: true, textContent: '' });
@@ -105,7 +105,7 @@ function setup({ replies = [], ids = ['post_1'], sseUrl = '', EventSource, lowBa
     const feed = createLiveFeed({
         list, pill, status, fetch, EventSource, document, window, parse,
         setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, now: clock.now,
-        config: { postsUrl: '/live/posts', cursor: 1, sseUrl, lowBandwidth,
+        config: { postsUrl: '/live/posts', cursor: 1, sseUrl, lowBandwidth, compact,
                   strings: { live: 'Live', paused: 'Paused', newPosts: 'New posts: %d' } },
     });
     return { feed, clock, list, pill, status, document, window, urls, calls };
@@ -121,6 +121,7 @@ test('pure helpers', () => {
     assert.deepEqual(kept.map(node => node.id), ['post_2']);
     assert.equal(trimCount(MAX_TEASERS), 0);
     assert.equal(trimCount(MAX_TEASERS + 3), 3);
+    assert.equal(trimCount(COMPACT_MAX_ITEMS + 2, COMPACT_MAX_ITEMS), 2);
 });
 
 test('teaserNodes keeps post_teaser nodes in order and drops the rest', () => {
@@ -128,6 +129,54 @@ test('teaserNodes keeps post_teaser nodes in order and drops the rest', () => {
     const nodes = [make('post_1', true), make('script', false), make('post_2', true), make('div', false)];
     assert.deepEqual(teaserNodes(nodes).map(node => node.id), ['post_1', 'post_2']);
     assert.deepEqual(teaserNodes([]), []);
+    const items = [make('a', false), make('b', false)];
+    items[1].classList.add('live_item');
+    assert.deepEqual(teaserNodes(items, 'live_item').map(node => node.id), ['b']);
+});
+
+// The sidebar box (spec 2026-11-22-sidebar-live-feed)
+
+test('compact: inserted at once even when scrolled down, with no pill and no teaser setup', async () => {
+    const { feed, list, pill, calls, window } = setup({
+        compact: true, scrollY: 500, ids: [], replies: [response(200, { body: 'post_3,post_2', cursor: '3' })],
+    });
+    feed.start();
+    await settle();
+    assert.deepEqual(list.ids(), ['post_3', 'post_2']);
+    assert.equal(pill.hidden, true);
+    assert.deepEqual(calls, []);
+    assert.equal(window.listeners.scroll, undefined);   // the page's scrolling is not the box's business
+    assert.equal(pill.listeners.click, undefined);
+});
+
+test('compact: the list keeps the newest few', async () => {
+    const ids = Array.from({ length: COMPACT_MAX_ITEMS }, (_, index) => `old_${index}`);
+    const { feed, list } = setup({ compact: true, ids, replies: [response(200, { body: 'new_2,new_1', cursor: '9' })] });
+    feed.start();
+    await settle();
+    assert.equal(list.children.length, COMPACT_MAX_ITEMS);
+    assert.deepEqual(list.ids().slice(0, 3), ['new_2', 'new_1', 'old_0']);
+    assert.ok(!list.ids().includes(`old_${COMPACT_MAX_ITEMS - 1}`));
+});
+
+test('compact: works without a pill element', async () => {
+    const { FakeEventSource } = makeEventSource();
+    const clock = fakeClock();
+    const list = new FakeList([]);
+    const status = { textContent: '', classList: new FakeClassList() };
+    const window = Object.assign(new FakeTarget(), { scrollY: 0 });
+    const feed = createLiveFeed({
+        list, pill: null, status, fetch: () => Promise.resolve(response(200, { body: 'post_5', cursor: '5' })),
+        EventSource: FakeEventSource, document: Object.assign(new FakeTarget(), { hidden: false }), window,
+        parse: html => html.split(',').map(id => new FakeNode(id)),
+        setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, now: clock.now,
+        config: { postsUrl: '/sidebar/live_posts', cursor: 0, sseUrl: '', compact: true,
+                  strings: { live: 'Live', paused: 'Paused', newPosts: '' } },
+    });
+    feed.start();
+    await settle();
+    assert.deepEqual(list.ids(), ['post_5']);
+    assert.equal(status.textContent, 'Live');
 });
 
 test('starting visible fetches at once from the cursor, then polls every 15 s', async () => {

@@ -12,7 +12,7 @@ from alembic.operations import Operations
 
 from app import db
 from app.models import Site, User
-from app.sidebar import BOXES, COMMUNITY, HOME, own_value, personal_layout, shown_boxes, stored
+from app.sidebar import BOXES, COMMUNITY, HOME, OPTIONAL, own_value, personal_layout, shown_boxes, stored
 from app.storefront import clear_domain_cache
 from app.user.sidebar_routes import apply_action
 from tests.conftest import forget_login
@@ -21,8 +21,12 @@ from tests.test_branding import load_migration
 from tests.test_branding_pages import DEFAULT_BASE, log_in, onion_branding, page, visit
 from tests.two_domains import default_request
 
-HOME_DEFAULT = list(BOXES[HOME])
-COMMUNITY_DEFAULT = list(BOXES[COMMUNITY])
+HOME_DEFAULT = [name for name in BOXES[HOME] if name not in OPTIONAL]          # shown unless a value says otherwise
+COMMUNITY_DEFAULT = [name for name in BOXES[COMMUNITY] if name not in OPTIONAL]
+
+
+def shown(*names):
+    return [(name, True) for name in names]
 PATH = '/user/settings/sidebar'
 
 pytestmark = pytest.mark.usefixtures('site')
@@ -31,17 +35,17 @@ pytestmark = pytest.mark.usefixtures('site')
 # ---------------------------------------------------------------------------------------------------------------------
 # Reading a user's order
 
-def test_no_order_of_their_own_is_the_offered_boxes_all_shown():
-    assert personal_layout(None, HOME, ['about', 'recent_tags']) == [('about', True), ('recent_tags', True)]
+def test_no_order_of_their_own_is_the_offered_boxes_as_offered():
+    assert personal_layout(None, HOME, [('about', True), ('live_feed', False)]) == [('about', True), ('live_feed', False)]
 
 
 def test_their_order_is_read_over_the_offered_boxes_only():
-    boxes = personal_layout('recent_tags,-about,new_instances', HOME, ['about', 'recent_tags', 'new_communities'])
+    boxes = personal_layout('recent_tags,-about,new_instances', HOME, shown('about', 'recent_tags', 'new_communities'))
     assert boxes == [('recent_tags', True), ('about', False), ('new_communities', True)]
 
 
 def test_a_box_offered_later_is_shown_after_the_users_boxes():
-    assert personal_layout('about,-recent_tags', HOME, ['new_communities', 'about', 'recent_tags']) == \
+    assert personal_layout('about,-recent_tags', HOME, shown('new_communities', 'about', 'recent_tags')) == \
         [('about', True), ('recent_tags', False), ('new_communities', True)]
 
 
@@ -145,7 +149,7 @@ def test_the_order_follows_the_user_onto_another_domain_within_what_it_shows(app
 # ---------------------------------------------------------------------------------------------------------------------
 # The buttons
 
-OFFERED = {HOME: HOME_DEFAULT, COMMUNITY: ['actions', 'about_community']}
+OFFERED = {HOME: shown(*HOME_DEFAULT), COMMUNITY: shown('actions', 'about_community')}
 
 
 def test_a_first_change_starts_from_the_offered_order():
@@ -223,7 +227,7 @@ def test_the_page_lists_the_boxes_the_domain_shows(app, signed_in):
     body = settings_page(signed_in)
     for name in HOME_DEFAULT[:-1]:
         assert f'id="box-home-{name}"' in body
-    assert 'id="box-home-new_instances"' not in body
+    assert HOME_DEFAULT[-1] == 'new_instances' and 'id="box-home-new_instances"' not in body
     for name in COMMUNITY_DEFAULT:
         assert f'id="box-community-{name}"' in body
     assert "You see the site's order" in body and 'reset:home' not in body
@@ -232,9 +236,8 @@ def test_the_page_lists_the_boxes_the_domain_shows(app, signed_in):
 def test_the_buttons_change_the_users_order_alone(app, signed_in):
     response = press(signed_in, 'home:up:about')
     assert response.status_code == 302 and response.headers['Location'].endswith(f'{PATH}#sidebar-home')
-    assert reader_row().home_sidebar == stored([(name, True) for name in
-                                                ['new_communities', 'active_communities', 'upcoming_events',
-                                                 'about', 'recent_tags', 'new_instances']])
+    assert reader_row().home_sidebar == stored(shown('new_communities', 'active_communities', 'upcoming_events',
+                                                     'about', 'recent_tags', 'new_instances') + [('live_feed', False)])
     assert reader_row().community_sidebar is None
     assert not db.session.get(Site, 1).home_sidebar
     press(signed_in, 'community:toggle:actions')
@@ -270,9 +273,13 @@ def test_a_visitor_who_is_not_signed_in_is_sent_to_log_in(app, reader):
     assert response.status_code == 302 and '/auth/login' in response.headers['Location']
 
 
-def test_a_sidebar_with_no_boxes_says_so(app, signed_in):
+def test_a_sidebar_the_site_hides_everything_in_still_offers_the_optional_boxes(app, signed_in):
     set_site(community_sidebar=','.join('-' + name for name in COMMUNITY_DEFAULT))
-    assert 'This site shows no boxes here.' in settings_page(signed_in)
+    body = settings_page(signed_in)
+    community = body[body.index('id="sidebar-community"'):]
+    assert 'id="box-community-live_feed"' in community   # optional: offered whatever the site chose
+    for name in COMMUNITY_DEFAULT:
+        assert f'id="box-community-{name}"' not in community
 
 
 def test_the_settings_nav_links_to_it(app, signed_in):

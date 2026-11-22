@@ -245,10 +245,11 @@
             </div>
         {% endif -%}
     {%- endset %}
+    {%- set live_feed_box %}{% if shows_box('community', 'live_feed') %}{% include '_sidebar_live_feed.html' %}{% endif %}{% endset %}
     {{ sidebar_boxes('community', {'actions': actions_box, 'upcoming_events': upcoming_events_box,
                                    'microblog_servers': microblog_servers_box, 'about_community': about_community_box,
                                    'related_communities': related_communities_box,
-                                   'community_feeds': community_feeds_box}) }}
+                                   'community_feeds': community_feeds_box, 'live_feed': live_feed_box}) }}
 {% endif %}
 
     {% include "_inoculation_links.html" %}

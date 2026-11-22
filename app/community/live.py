@@ -126,6 +126,26 @@ def home_live_key(view_filter: str) -> str:
     return 'any' if view_filter in ('subscribed', 'all') else view_filter
 
 
+# The sidebar's live feed box (spec 2026-11-22-sidebar-live-feed): the All tab's posts, or the Subscribed tab's
+SIDEBAR_LIVE_FILTERS = ('all', 'subscribed')
+SIDEBAR_LIVE_LIMIT = 10
+
+
+def sidebar_live_filter(user) -> str:
+    """The home tab whose posts `user`'s live feed box shows."""
+    return user.sidebar_live_feed if user.sidebar_live_feed in SIDEBAR_LIVE_FILTERS else 'all'
+
+
+def sidebar_live_hidden(post, user, content_filters) -> bool:
+    """Whether the box leaves `post` out: a title alone cannot be blurred, so a post the teaser would filter or blur
+    is not listed."""
+    return bool(post.blocked_by_content_filter(content_filters, user.id)
+                or (post.nsfw and user.hide_nsfw in (2, 3)) or (post.nsfl and user.hide_nsfl in (2, 3))
+                or (post.from_bot and user.ignore_bots in (2, 3))
+                or (post.from_reposter and user.ignore_reposters in (2, 3))
+                or (post.ai_generated and user.hide_gen_ai == 3) or post.spoiler_flair())
+
+
 def live_posts(posts_query, after: int) -> list:
     """Posts from `posts_query` newer than the cursor `after` (a Post.id: local ids only grow,
     unlike a peer's `published`), recent, unpinned, newest first."""

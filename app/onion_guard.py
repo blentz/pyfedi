@@ -68,6 +68,7 @@ ONION_SESSION_EXEMPT: frozenset[str] = frozenset({
     'main.receive_webhook',
     # Keyed by the logged-in user's id (their own key_func), not by session; anonymous callers are sent to log in.
     'main.home_live_posts',
+    'main.sidebar_live_posts',
     'community.live_posts_fragment',
     'tag.tag_live_posts',
     # App registration: apps keep no cookies, and both refuse on the onion anyway (API registration ruling AR3).

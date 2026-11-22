@@ -11,6 +11,10 @@ the boxes their domain shows, in the order they choose, some of them hidden. A b
 is not offered, and a user whose value is NULL shows the domain's order. Their value names only the boxes they were
 offered, so a box the domain shows later appears, shown, after the boxes they arranged.
 
+An optional box (`OPTIONAL`: the live feed, which keeps fetching while it is open) is hidden until someone shows it:
+a value that leaves it out hides it, and it is offered to every user whatever the domain chose, the domain's choice
+being only what a user who has not chosen sees.
+
 Templates render each box into `boxes` by name and hand them to `sidebar_boxes`, which writes those shown in order.
 """
 from __future__ import annotations
@@ -34,6 +38,7 @@ BOXES = {
         'recent_tags': _l('Recent tags'),
         'about': _l('About this site'),
         'new_instances': _l('New instances'),
+        'live_feed': _l('Live feed'),
     },
     COMMUNITY: {
         'actions': _l('Actions: create post, join, settings, search'),
@@ -42,8 +47,11 @@ BOXES = {
         'about_community': _l('About the community'),
         'related_communities': _l('Related communities'),
         'community_feeds': _l('Feeds'),
+        'live_feed': _l('Live feed'),
     },
 }
+# Boxes hidden until shown, and offered to users even where the domain hides them
+OPTIONAL = frozenset({'live_feed'})
 # The Site and DomainConfig column (and Branding field) each sidebar is stored in
 FIELDS = {HOME: 'home_sidebar', COMMUNITY: 'community_sidebar'}
 
@@ -60,7 +68,7 @@ def layout(stored: str | None, area: str) -> Layout:
         if name in known and name not in boxes:
             boxes[name] = not item.startswith(HIDDEN)
     for name in known:
-        boxes.setdefault(name, True)
+        boxes.setdefault(name, name not in OPTIONAL)
     return list(boxes.items())
 
 
@@ -96,17 +104,20 @@ def changed(boxes: Layout, op: str, name: str) -> Layout | None:
     return None
 
 
-def domain_shown(area: str) -> list[str]:
-    """The names of the boxes the request's domain shows in `area`'s sidebar, in its order."""
-    return [name for name, shown in layout(getattr(current_branding(), FIELDS[area]), area) if shown]
+def domain_offered(area: str) -> Layout:
+    """The boxes the request's domain offers users in `area`'s sidebar, in its order, and whether it shows each: those
+    it shows, and the optional ones."""
+    return [(name, shown) for name, shown in layout(getattr(current_branding(), FIELDS[area]), area)
+            if shown or name in OPTIONAL]
 
 
-def personal_layout(own: str | None, area: str, offered: list[str]) -> Layout:
+def personal_layout(own: str | None, area: str, offered: Layout) -> Layout:
     """The `offered` boxes of `area`'s sidebar in the order a user's value `own` gives, and whether each is shown;
-    with no value of their own, all of them in the order offered."""
+    with no value of their own, as offered."""
     if own is None:
-        return [(name, True) for name in offered]
-    return [(name, shown) for name, shown in layout(own, area) if name in offered]
+        return list(offered)
+    names = {name for name, _shown in offered}
+    return [(name, shown) for name, shown in layout(own, area) if name in names]
 
 
 def own_value(user, area: str) -> str | None:
@@ -119,8 +130,13 @@ def own_value(user, area: str) -> str | None:
 def shown_boxes(area: str) -> list[str]:
     """The names of the boxes `area`'s sidebar shows on this request, in order: the domain's, as the signed-in user
     arranged them."""
-    offered = domain_shown(area)
+    offered = domain_offered(area)
     return [name for name, shown in personal_layout(own_value(current_user, area), area, offered) if shown]
+
+
+def shows_box(area: str, name: str) -> bool:
+    """Whether this request's `area` sidebar shows box `name`: so a template builds a costly box only when shown."""
+    return name in shown_boxes(area)
 
 
 def sidebar_boxes(area: str, boxes: dict) -> Markup:

@@ -12,7 +12,7 @@ from alembic.operations import Operations
 from app import db
 from app.branding import branding_for
 from app.models import DomainConfig, Site
-from app.sidebar import BOXES, COMMUNITY, HOME, layout, moved, shown_boxes, sidebar_boxes, stored, toggled
+from app.sidebar import BOXES, COMMUNITY, HOME, OPTIONAL, layout, moved, shown_boxes, sidebar_boxes, stored, toggled
 from app.storefront import clear_domain_cache
 from tests.schema_history import DomainConfigMigrations
 from tests.conftest import forget_login
@@ -31,12 +31,17 @@ HOME_DEFAULT = list(BOXES[HOME])
 COMMUNITY_DEFAULT = list(BOXES[COMMUNITY])
 
 
+def default(area):
+    """Every box of `area` in the default order, an optional one hidden."""
+    return [(name, name not in OPTIONAL) for name in BOXES[area]]
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Reading and changing a stored order
 
-def test_a_blank_order_is_every_box_shown_in_the_default_order():
-    assert layout('', HOME) == [(name, True) for name in HOME_DEFAULT]
-    assert layout(None, COMMUNITY) == [(name, True) for name in COMMUNITY_DEFAULT]
+def test_a_blank_order_is_every_box_in_the_default_order_the_optional_ones_hidden():
+    assert layout('', HOME) == default(HOME)
+    assert layout(None, COMMUNITY) == default(COMMUNITY)
 
 
 def test_a_stored_order_is_read_with_its_hidden_boxes():
@@ -49,7 +54,7 @@ def test_a_stored_order_is_read_with_its_hidden_boxes():
 def test_unknown_names_and_repeats_are_dropped_and_missing_boxes_shown_after(value):
     boxes = layout(value, HOME)
     assert [name for name, _shown in boxes] == ['about'] + [name for name in HOME_DEFAULT if name != 'about']
-    assert all(shown for _name, shown in boxes)
+    assert all(shown == (name not in OPTIONAL) for name, shown in boxes)
 
 
 def test_a_stored_order_reads_back_as_itself():
@@ -68,13 +73,13 @@ def test_moving_a_box(name, step, first_three):
 
 
 def test_moving_the_last_box_down_leaves_it_last():
-    boxes = moved(layout('', HOME), 'new_instances', 1)
+    boxes = moved(layout('', HOME), HOME_DEFAULT[-1], 1)
     assert boxes == layout('', HOME)
 
 
 def test_toggling_hides_then_shows_one_box():
     hidden = toggled(layout('', HOME), 'about')
-    assert dict(hidden)['about'] is False and sum(not shown for _name, shown in hidden) == 1
+    assert dict(hidden)['about'] is False and sum(not shown for _name, shown in hidden) == 1 + len(OPTIONAL)
     assert toggled(hidden, 'about') == layout('', HOME)
 
 
@@ -99,7 +104,7 @@ def test_a_domains_own_order_is_its_alone(app, two_domains, site):
     clear_domain_cache()
     with onion_request(app):
         assert shown_boxes(COMMUNITY) == ['related_communities'] + \
-            [name for name in COMMUNITY_DEFAULT if name != 'related_communities']
+            [name for name in COMMUNITY_DEFAULT if name not in OPTIONAL | {'related_communities'}]
     with default_request(app):
         assert 'actions' not in shown_boxes(COMMUNITY)
 

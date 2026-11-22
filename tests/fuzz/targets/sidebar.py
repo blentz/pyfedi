@@ -56,8 +56,8 @@ def check_sidebar_action(data: bytes) -> None:
 def check_sidebar_user_action(data: bytes) -> None:
     home, community, action, picks = (_text(field) for field in _fields(data[:MAX_INPUT], 4))
     values = {'home': home or None, 'community': community or None}
-    offered = {area: [name for index, name in enumerate(BOXES[area]) if index < len(picks) and ord(picks[index]) % 2]
-               for area in BOXES}
+    offered = {area: [(name, ord(picks[index]) % 4 != 1) for index, name in enumerate(BOXES[area])
+                      if index < len(picks) and ord(picks[index]) % 2] for area in BOXES}
     result = apply_user_action(values, offered, action)
     if result is None:
         return
@@ -68,7 +68,8 @@ def check_sidebar_user_action(data: bytes) -> None:
             assert values[area] is None or action == f'reset:{area}', f'{action!r} cleared {area}'
         elif area in changed:
             boxes = personal_layout(result[area], area, offered[area])
-            assert sorted(name for name, _shown in boxes) == sorted(offered[area]), f'{result[area]!r} read as {boxes!r}'
+            assert sorted(name for name, _shown in boxes) == sorted(dict(offered[area])), \
+                f'{result[area]!r} read as {boxes!r}'
 
 
 TARGETS = [

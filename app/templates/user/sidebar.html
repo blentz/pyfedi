@@ -31,7 +31,6 @@
                     {{ _("You see the site's order. A change here gives you your own.") }}
                 {%- endif %}
             </p>
-            {% if sidebar.boxes -%}
             <table class="table table-sm align-middle">
                 <thead>
                     <tr><th scope="col">{{ _('Box') }}</th><th scope="col">{{ _('Shown') }}</th><th scope="col">{{ _('Change') }}</th></tr>
@@ -52,11 +51,19 @@
                 {% endfor %}
                 </tbody>
             </table>
-            {%- else -%}
-            <p class="text-muted">{{ _('This site shows no boxes here.') }}</p>
-            {%- endif %}
         </form>
         {% endfor %}
+        <h5 id="live_feed_choice">{{ _('Live feed') }}</h5>
+        <p>{{ _('What the live feed box shows, where you show it.') }}</p>
+        <form method="post" action="#live_feed_choice">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="btn-group" role="group">
+                <button type="submit" name="action" value="live:all" class="btn btn-sm {{ 'btn-primary' if live_feed == 'all' else 'btn-outline-secondary' }}"
+                        aria-pressed="{{ 'true' if live_feed == 'all' else 'false' }}">{{ _('All posts') }}</button>
+                <button type="submit" name="action" value="live:subscribed" class="btn btn-sm {{ 'btn-primary' if live_feed == 'subscribed' else 'btn-outline-secondary' }}"
+                        aria-pressed="{{ 'true' if live_feed == 'subscribed' else 'false' }}">{{ _('People and communities I follow') }}</button>
+            </div>
+        </form>
     </main>
 </div>
 {% endblock %}

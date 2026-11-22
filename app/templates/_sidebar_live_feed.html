@@ -1,0 +1,22 @@
+{#- The sidebar's live feed box (spec 2026-11-22-sidebar-live-feed): signed-in readers only, because its posts come
+    from a login-only fragment. Filled and kept current by static/js/live_feed.js. -#}
+{% if current_user.is_authenticated -%}
+<div class="card" id="live_feed_card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+        <h2>{{ _('Live feed') }}</h2>
+        <span id="sidebar_live_status" class="badge text-bg-secondary" aria-live="polite">{{ _('Paused') }}</span>
+    </div>
+    <div class="card-body">
+        <p class="small text-muted mb-2">
+            {{ _('Posts from people and communities you follow') if current_user.sidebar_live_feed == 'subscribed' else _('All posts') }}
+            · <a href="{{ url_for('user.user_settings_sidebar') }}#live_feed_choice">{{ _('Change') }}</a>
+        </p>
+        <ul class="list-group list-group-flush" id="sidebar_live_feed"
+            data-posts-url="{{ url_for('main.sidebar_live_posts') }}" data-cursor="0"
+            data-sse-url="{{ notif_server ~ '/live/stream?feed=any' if notif_server else '' }}"
+            data-str-live="{{ _('Live') }}" data-str-paused="{{ _('Paused') }}" data-str-new-posts=""></ul>
+        <noscript><p class="small mb-0">{{ _('The live feed needs JavaScript.') }}</p></noscript>
+    </div>
+</div>
+<script type="module" src="{{ url_for('static', filename='js/live_feed.js', changed=getmtime('js/live_feed.js')) }}" nonce="{{ nonce }}"></script>
+{%- endif %}

@@ -1,5 +1,7 @@
 // Live view of /c/microblogs: new posts arrive without a reload, the way Mastodon's Live Feeds does.
 // Spec: docs/superpowers/specs/2026-10-07-microblog-live-feed-design.md
+// The sidebar's live feed box runs the same loop over a short list of titles (config.compact):
+// spec 2026-11-22-sidebar-live-feed.
 //
 // Every browser dependency is passed in, so tests/js/live_feed.test.mjs drives all of it under node
 // with fakes. Only the bootstrap at the bottom touches real globals.
@@ -12,6 +14,7 @@ export const COALESCE_MS = 5000;
 export const MAX_BACKOFF_MS = 120000;
 export const SSE_ERROR_LIMIT = 3;
 export const HIGHLIGHT_MS = 2000;
+export const COMPACT_MAX_ITEMS = 10;
 // scripts.js setups that are safe to re-run over the whole page: some skip what they already
 // bound; setupVotableElements and setupVideoSpoilers re-bind their listeners on every call, but
 // the effect is idempotent. setupDynamicContent needs no call: scripts.js's
@@ -37,13 +40,14 @@ export function dedupeNodes(seenIds, incoming) {
     });
 }
 
-// The top-level nodes that are post teasers, in order. (`:scope` matches nothing on a DocumentFragment.)
-export function teaserNodes(nodes) {
-    return Array.from(nodes).filter(node => node.classList.contains('post_teaser'));
+// The top-level nodes that carry `className` (post teasers by default), in order. (`:scope` matches
+// nothing on a DocumentFragment.)
+export function teaserNodes(nodes, className = 'post_teaser') {
+    return Array.from(nodes).filter(node => node.classList.contains(className));
 }
 
-export function trimCount(length) {
-    return Math.max(0, length - MAX_TEASERS);
+export function trimCount(length, max = MAX_TEASERS) {
+    return Math.max(0, length - max);
 }
 
 export function createLiveFeed({ list, pill, status, fetch, EventSource, document, window, setTimeout,
@@ -60,6 +64,10 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
     let inFlight = false;
     let paused = false;
     let stopped = false;
+    // compact: the sidebar box. Nothing is held back while the reader scrolls (it is not the page they
+    // read), the list keeps the newest few, and its items are titles, with no teaser behaviour to set up.
+    const compact = Boolean(config.compact);
+    const maxItems = compact ? COMPACT_MAX_ITEMS : MAX_TEASERS;
 
     function setStatus(live) {
         status.textContent = live ? config.strings.live : config.strings.paused;
@@ -73,6 +81,7 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
     }
 
     function initTeasers(nodes) {
+        if (compact) return;
         for (const node of nodes) window.htmx?.process(node);
         const setups = config.lowBandwidth ? TEASER_SETUPS : TEASER_SETUPS.concat('setupLightboxTeaser');
         for (const name of setups) window[name]?.();
@@ -85,7 +94,7 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
             setTimeout(() => node.classList.remove('bg-warning-subtle'), HIGHLIGHT_MS);
         }
         initTeasers(nodes);
-        for (let extra = trimCount(list.children.length); extra > 0; extra--) list.lastElementChild.remove();
+        for (let extra = trimCount(list.children.length, maxItems); extra > 0; extra--) list.lastElementChild.remove();
     }
 
     function flush() {
@@ -100,7 +109,7 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
         const seen = Array.from(list.children, node => node.id).concat(held.map(node => node.id));
         const nodes = dedupeNodes(seen, parse(html));
         if (nodes.length === 0) return;
-        if (shouldHold(window.scrollY)) {
+        if (!compact && shouldHold(window.scrollY)) {
             held = nodes.concat(held).slice(0, MAX_TEASERS);
             pill.textContent = config.strings.newPosts.replace('%d', held.length);
             pill.hidden = false;
@@ -194,13 +203,15 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
             if (document.hidden) pause();
             else if (!stopped) resume();
         });
-        window.addEventListener('scroll', () => {
-            if (held.length > 0 && !shouldHold(window.scrollY)) flush();
-        }, { passive: true });
-        pill.addEventListener('click', () => {
-            window.scrollTo({ top: 0 });
-            flush();
-        });
+        if (!compact) {
+            window.addEventListener('scroll', () => {
+                if (held.length > 0 && !shouldHold(window.scrollY)) flush();
+            }, { passive: true });
+            pill.addEventListener('click', () => {
+                window.scrollTo({ top: 0 });
+                flush();
+            });
+        }
         if (document.hidden) pause();
         else resume();
     }
@@ -210,12 +221,10 @@ export function createLiveFeed({ list, pill, status, fetch, EventSource, documen
 
 /* node:coverage disable */
 if (typeof window !== 'undefined') {
-    const list = window.document.getElementById('live_feed');
-    if (list) {
+    const boot = (list, pill, status, className, compact) => {
+        if (!list) return;
         createLiveFeed({
-            list,
-            pill: window.document.getElementById('live_pill'),
-            status: window.document.getElementById('live_status'),
+            list, pill, status,
             fetch: window.fetch.bind(window),
             EventSource: window.EventSource,
             document: window.document,
@@ -226,17 +235,24 @@ if (typeof window !== 'undefined') {
             parse: html => {
                 const template = window.document.createElement('template');
                 template.innerHTML = html;
-                return teaserNodes(Array.from(template.content.children));
+                return teaserNodes(Array.from(template.content.children), className);
             },
             config: {
                 postsUrl: list.dataset.postsUrl,
                 cursor: Number(list.dataset.cursor),
                 sseUrl: list.dataset.sseUrl,
+                compact,
                 lowBandwidth: window.document.body.classList.contains('low_bandwidth'),
                 strings: { live: list.dataset.strLive, paused: list.dataset.strPaused,
                            newPosts: list.dataset.strNewPosts },
             },
         }).start();
-    }
+    };
+    const page = window.document;
+    // One module run serves both: a page with the Live view and the sidebar box loads this file once.
+    boot(page.getElementById('live_feed'), page.getElementById('live_pill'), page.getElementById('live_status'),
+         'post_teaser', false);
+    boot(page.getElementById('sidebar_live_feed'), null, page.getElementById('sidebar_live_status'),
+         'live_item', true);
 }
 /* node:coverage enable */

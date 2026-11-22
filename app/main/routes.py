@@ -30,7 +30,8 @@ from app.constants import MICROBLOGS_COMMUNITY_NAME, SUBSCRIPTION_PENDING, SUBSC
 from app.email import send_email, send_registration_approved_email, mail_name
 from app.inoculation import inoculation
 from app.community import server_view_list
-from app.community.live import HOME_LIVE_FILTERS, LIVE_LIMIT, LIVE_WINDOW, home_live_available, home_live_key
+from app.community.live import HOME_LIVE_FILTERS, LIVE_LIMIT, LIVE_WINDOW, SIDEBAR_LIVE_LIMIT, home_live_available, \
+    home_live_key, sidebar_live_filter, sidebar_live_hidden
 from app.main import bp
 from app.onion import is_onion_request
 from flask import g, flash, request, current_app, url_for, redirect, make_response, jsonify, send_file, abort, session
@@ -156,6 +157,31 @@ def home_live_posts(view_filter):
         joined_communities=joined_or_modding_communities(user_id),
         moderated_community_ids=moderating_communities_ids(user_id), user_pronouns=user_pronouns()))
     response.headers['X-Live-Cursor'] = str(max(post_ids))
+    return response
+
+
+@bp.route('/sidebar/live_posts', methods=['GET'])
+@login_required
+@limiter.limit('12/minute', key_func=lambda: f'live:{current_user.id}:sidebar')
+def sidebar_live_posts():
+    """New posts for the sidebar's live feed box: the home page's All tab, or its Subscribed tab when the viewer
+    chose followed people and communities, filtered as that tab is, as a list of titles (spec
+    2026-11-22-sidebar-live-feed). 204 when nothing is new; the client advances its cursor from X-Live-Cursor."""
+    after = request.args.get('after', type=int)
+    if after is None:
+        abort(400)
+    view_filter = sidebar_live_filter(current_user)
+    community_ids, community_sql = home_feed_source(view_filter)
+    post_ids = get_deduped_post_ids('', community_ids, 'new', include_following=view_filter == 'subscribed',
+                                    community_sql=community_sql,
+                                    newer_than=(after, utcnow() - LIVE_WINDOW))[:SIDEBAR_LIVE_LIMIT]
+    if not post_ids:
+        return '', 204
+    content_filters = user_filters_home(current_user.id)
+    posts = [post for post in post_ids_to_models(post_ids, 'new')
+             if not sidebar_live_hidden(post, current_user, content_filters)]
+    response = make_response(render_template('_sidebar_live_posts.html', posts=posts))
+    response.headers['X-Live-Cursor'] = str(max(post_ids))   # past the ones left out too
     return response
 
 

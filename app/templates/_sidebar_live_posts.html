@@ -1,0 +1,8 @@
+{#- The live feed box's new posts, newest first: a title, its author and where it was posted. -#}
+{% for post in posts -%}
+{% set v = shown(post) -%}
+<li class="list-group-item px-0 live_item" id="sidebar_live_{{ post.id }}">
+    <a href="{{ post.slug if post.slug else url_for('activitypub.post_ap', post_id=post.id) }}" lang="{{ v.code }}">{{ v.title|shorten(90) }}</a>
+    <div class="small text-muted">{{ post.author.display_name() }} · {{ post.community.display_name() }} · <time datetime="{{ post.posted_at }}">{{ post.posted_at_localized('new', locale) }}</time></div>
+</li>
+{% endfor -%}
