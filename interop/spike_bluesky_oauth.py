@@ -15,6 +15,7 @@ import json
 import os
 import secrets
 import struct
+import sys
 import threading
 import time
 import traceback
@@ -33,6 +34,13 @@ REDIRECT_URI = f'{CLIENT_ORIGIN}/callback'
 HANDLE = 'alice.pds.test'
 PASSWORD = 'interop-alice-bsky-pw'
 SCOPE = 'atproto repo:app.bsky.feed.post?action=create&action=delete blob:*/*'
+# ATProto spec 2026-11-23 §5: a connected account that is the member's identity asks for these as well
+IDENTITY_SCOPE = (' repo:app.bsky.feed.like?action=create&action=delete repo:app.bsky.feed.repost?action=create&action=delete'
+                  ' repo:app.bsky.graph.follow?action=create&action=delete repo:app.bsky.graph.block?action=create&action=delete'
+                  ' rpc:app.bsky.notification.listNotifications?aud=*')
+IDENTITY = '--identity' in sys.argv   # `interop/run.sh bluesky-spike --identity`
+if IDENTITY:
+    SCOPE += IDENTITY_SCOPE
 OUT = os.path.join(os.path.dirname(__file__), 'spike_bluesky')
 
 report = {'started': datetime.now(timezone.utc).isoformat(), 'steps': []}
@@ -224,7 +232,44 @@ def connect(s, asm, issuer, did, label):
     return tokens if r.status_code == 200 else None
 
 
+class StubAppView(BaseHTTPRequestHandler):
+    """appview.test for the identity scope steps: records what the PDS forwards, answers with nothing."""
+    seen = []
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        StubAppView.seen.append(self.path)
+        data = json.dumps({'notifications': []}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+def identity_steps(s, pds, did, access, tokens):
+    """ATProto spec 2026-11-23 P0: the wider OAuth scope of a connected account used as the member's identity."""
+    step('identity scope granted', all(part in str(tokens.get('scope', '')).split() for part in IDENTITY_SCOPE.split()),
+         scope=tokens.get('scope'))
+    now = datetime.now(timezone.utc).isoformat()
+    for collection, record in (('app.bsky.feed.like', {'subject': {'uri': f'at://{did}/app.bsky.feed.post/x',
+                                                                    'cid': 'bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm'}}),
+                               ('app.bsky.graph.follow', {'subject': did})):
+        r = s.xrpc('POST', pds, 'com.atproto.repo.createRecord', access, json={
+            'repo': did, 'collection': collection, 'validate': False,
+            'record': dict(record, **{'$type': collection, 'createdAt': now})})
+        step(f'identity scope: create {collection}', r.status_code == 200, status=r.status_code, body=r.text[:200])
+    r = s.xrpc('GET', pds, 'app.bsky.notification.listNotifications', access,
+               headers={'atproto-proxy': 'did:web:appview.test#bsky_appview'})
+    step('identity scope: listNotifications through the PDS proxy', r.status_code == 200 and bool(StubAppView.seen),
+         status=r.status_code, body=r.text[:300], forwarded=StubAppView.seen[-1:] or None)
+
+
 def main():
+    stub = ThreadingHTTPServer(('0.0.0.0', 8701), StubAppView)
+    threading.Thread(target=stub.serve_forever, daemon=True).start()
     os.makedirs(OUT, exist_ok=True)
     server = ThreadingHTTPServer(('0.0.0.0', 8700), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -259,6 +304,9 @@ def main():
     if not tokens:
         return
     access = tokens['access_token']
+
+    if IDENTITY:
+        identity_steps(s, pds, did, access, tokens)
 
     # what PieFed does with it
     r = s.xrpc('POST', pds, 'com.atproto.repo.uploadBlob', access, content=tiny_png(),

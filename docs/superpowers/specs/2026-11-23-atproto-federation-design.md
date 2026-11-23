@@ -59,8 +59,9 @@ Owner rulings, 2026-11-23:
   2,600 an hour and 21,000 a day. They are raised by asking Bluesky.
 - **Jetstream v2**: `wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents` (and
   us-west). It filters by `dids` (at most 10,000) and `collections` (at most 100). The cursor is a `seq`, delivered
-  at least once, and reconnects reach back 36 hours. **Unconfirmed:** whether a filter can change on a live socket.
-  Until P0 settles it, the design reconnects with the new filter from the last cursor, which loses nothing.
+  at least once, and reconnects reach back 36 hours. **A v2 filter cannot change on a live socket** (P0, §16): a
+  client data frame closes it (1008). The consumer reconnects with the new filter from the last cursor, which loses
+  nothing.
 - **Reads.** Repos are public: `getRecord`, `listRecords` and `sync.getBlob` on the author's PDS need no auth.
   `public.api.bsky.app` needs no auth, and its limits are unpublished ("generous").
 - **OAuth scopes** are granular and enforced (CA §2). CA asks for `repo:app.bsky.feed.post?action=create&action=delete
@@ -177,7 +178,9 @@ recorded locally only.
 **The consumer** subscribes to the collections `app.bsky.feed.post`, `feed.repost`, `feed.like`, `actor.profile`
 and `graph.follow`, plus `identity` and `account` events. Its DIDs are every ATProto actor with a local follower,
 plus every identity's DID (for A7 imports and for follows of our members). When that set changes, it reconnects
-with the new filter, at most once a minute. Above 10,000 DIDs it opens another socket.
+with the new filter, at most once a minute. Each socket carries at most 5,000 DIDs, and more DIDs mean more sockets.
+The filter travels in the URL: Jetstream's cap is 10,000 query parameters, DIDs and collections together, and the
+harness took 9,000 DIDs (a 342 KB URL). 5,000 leaves headroom for proxies in front of a public endpoint (§16).
 
 | ATProto | PieFed |
 |---|---|
@@ -271,8 +274,8 @@ viewers. Remote content blocklists and blocked phrases apply as usual.
 
 ## 12. Phases (each merges on its own)
 
-- **P0 spike.** Harness PDS with two handle domains and well-known through the proxy. `createAccount` with invite
-  and email choices (does the PDS send mail?). Self-hosted Jetstream on a PDS without a relay, and whether a filter
+- **P0 spike (done 2026-11-23, §16).** Harness PDS with two handle domains and well-known through the proxy.
+  `createAccount` with invite and email choices. Self-hosted Jetstream on a PDS without a relay, and whether a filter
   can change live. `listNotifications` through the proxy. Session refresh and re-login. Whether the OAuth `rpc:`
   scope's `aud` form works on the harness PDS.
 - **P1 integration groundwork.** Move the shared code into `app/atproto/`, the `Session` interface, the migration
@@ -308,3 +311,57 @@ PDS. It also runs `flask atproto jetstream` as a long-lived service. `env.sample
 - Jetstream: `bsky.network/docs/jetstream/`; `github.com/bluesky-social/jetstream-legacy`.
 - Labels: the moderation guide on `docs.bsky.app`; `atproto.com/specs/label`.
 - OAuth scopes: CA §2 and §13.
+- Jetstream v0.4.4 source: `internal/subscribe/doc.go` (v2 is server-push only), `internal/ingest/orchestrator/config.go`.
+
+## 16. P0 spike (2026-11-23)
+
+There are two runs, both on the harness PDS (0.4.5051), its PLC directory, and Jetstream v0.4.4:
+- `interop/run.sh atproto-spike` runs `interop/spike_atproto.py`, which plays the hosted variant with the PDS admin
+  password and also serves a stand-in AppView at `appview.test`. 34/34 steps passed.
+- `interop/run.sh bluesky-spike --identity` runs CA's OAuth spike with §5's identity scope. 29/29 steps passed.
+
+The report is `interop/spike_atproto/report.json`.
+
+**Hosted accounts**
+- **Handles.** `PDS_SERVICE_HANDLE_DOMAINS=.pds.test,.piefed.test,.tube.test` makes `describeServer` list all
+  three. `alice.piefed.test` and `carol.tube.test` resolve by `/.well-known/atproto-did` through the reverse proxy
+  (`*.piefed.test, *.tube.test → pds`). The DID document names the handle and the PDS.
+- **Invites.** With `PDS_INVITE_REQUIRED=true`, `createAccount` refuses without a code (`InvalidInviteCode`). A code
+  minted with admin auth and `useCount: 1` works once and is then "not available".
+- **Email.** A made-up address (`atproto+<id>@<domain>`) is accepted, and the account reads
+  `emailConfirmed: false`. The harness PDS has no SMTP, so whether a PDS with SMTP mails it was not observed.
+  Deployments should leave the PDS's email settings unset: PieFed holds the credentials and never needs a reset mail.
+- **Session lifetimes.** Access tokens last 2 hours and refresh tokens 90 days. `createSession` with the sealed
+  password works, by DID, after any loss.
+- **Refresh replay.** Unlike OAuth, a password session's **used refresh token is accepted again within a grace
+  period**, and the rotated session survives. A lost refresh answer therefore does not disconnect a hosted account.
+  The per-connection lock stays, because OAuth needs it.
+- **App passwords.** `createAppPassword` works from PieFed's session, and the app password signs in by handle (§8).
+  `putRecord` on the profile works.
+- **AppView proxy.** With no header, the PDS forwards `app.bsky.*` to `PDS_BSKY_APP_VIEW_URL` with a service-auth
+  JWT (iss = the member's DID, aud = the AppView DID, `lxm` = the method, 60 s lifetime). An explicit `atproto-proxy`
+  header works too.
+- **Lifecycle.**
+  - `deactivateAccount` (JSON body) leaves `getRecord` answering 200 with an empty `{}`. The ingest code reads a
+    record with no `value` as unavailable.
+  - `activateAccount` must be sent **without** a body, or it is refused with 400.
+  - `updateHandle` keeps the DID; the new handle resolves and the old one returns 404 at once.
+  - `admin.updateAccountPassword` recovers a lost password, and `admin.deleteAccount` removes the repo.
+
+**Jetstream**
+- **Bootstrap needs a relay.** Self-hosted, v2 bootstrap walks the relay's `com.atproto.sync.listHosts`, which a PDS
+  lacks, so it stays in bootstrap (503). In the harness, `JETSTREAM_BACKFILL_REPOS` (a debug setting) set to one
+  DID that never exists ends bootstrap at once. The live tail then follows the PDS's `subscribeRepos` and verifies
+  commits against the harness PLC. This affects only the harness: production uses Bluesky's public instances.
+- **Filtering and resuming.** A `dids` + `collections` filter streams only that account's posts, as
+  `network.bsky.jetstream.subscribeEvents#commit` payloads carrying `did`, `collection`, `rkey`, `operation`,
+  `record`, `cid`, `rev` and `seq`. A reconnect with `cursor=<seq>` replays that event (inclusive).
+- **No live filter change.** A client frame (v1's `options_update`) closes the socket with 1008, "unexpected data
+  message".
+- **Filter size.** 10,001 DIDs are refused before the upgrade by the query-parameter cap ("number of URL query
+  parameters exceeded limit"). 2,000, 5,000 and 9,000 DIDs (76 KB to 342 KB of URL) were accepted through Caddy.
+  Hence the 5,000-per-socket shard in §7.
+
+**OAuth identity scope.** §5's scope is granted in full. Creating `app.bsky.feed.like` and `app.bsky.graph.follow`
+records works. `listNotifications` through the PDS proxy works with `rpc:...?aud=*`. CA's findings still hold: a
+replayed OAuth refresh token kills the session, and `putRecord` without `action=update` is refused.

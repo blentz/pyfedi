@@ -1,0 +1,267 @@
+{
+  "started": "2026-11-23T22:37:04.276285+00:00",
+  "steps": [
+    {
+      "step": "describeServer lists PieFed domains",
+      "ok": true,
+      "domains": [
+        ".pds.test",
+        ".piefed.test",
+        ".tube.test"
+      ],
+      "invite_required": true
+    },
+    {
+      "step": "createAccount without an invite is refused",
+      "ok": true,
+      "status": 400,
+      "body": "{\"error\":\"InvalidInviteCode\",\"message\":\"No invite code provided\"}"
+    },
+    {
+      "step": "admin mints an invite",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "step": "createAccount with invite, PieFed handle and made-up email",
+      "ok": true,
+      "status": 200,
+      "did": "did:plc:pn6ei4rylteuuc6cmujzlt3y",
+      "handle": "alice.piefed.test",
+      "body": null
+    },
+    {
+      "step": "a single-use invite is spent",
+      "ok": true,
+      "status": 400,
+      "body": "{\"error\":\"InvalidInviteCode\",\"message\":\"Provided invite code not available\"}"
+    },
+    {
+      "step": "second domain handle",
+      "ok": true,
+      "status": 200,
+      "body": "{\"handle\":\"carol.tube.test\",\"did\":\"did:plc:hkq3b6atw5edofzfjqfo6n3z\",\"didDoc\":{\"@context\":[\"https://www.w3.org/ns/did/v1\",\"https://w3id.org/security/multikey/v1\",\"https://w3id.org/security/suites/secp"
+    },
+    {
+      "step": "well-known on alice.piefed.test",
+      "ok": true,
+      "status": 200,
+      "body": "did:plc:pn6ei4rylteuuc6cmujzlt3y"
+    },
+    {
+      "step": "well-known on carol.tube.test",
+      "ok": true,
+      "status": 200,
+      "body": "did:plc:hkq3b6atw5edofzfjqfo6n3z"
+    },
+    {
+      "step": "DID document: handle and PDS",
+      "ok": true,
+      "alsoKnownAs": [
+        "at://alice.piefed.test"
+      ],
+      "service": [
+        {
+          "id": "#atproto_pds",
+          "type": "AtprotoPersonalDataServer",
+          "serviceEndpoint": "https://pds.test"
+        }
+      ]
+    },
+    {
+      "step": "access token lifetime",
+      "ok": true,
+      "access_exp_s": 7200,
+      "refresh_exp_s": 7776000
+    },
+    {
+      "step": "createRecord with the account session",
+      "ok": true,
+      "status": 200,
+      "body": {
+        "uri": "at://did:plc:pn6ei4rylteuuc6cmujzlt3y/app.bsky.feed.post/3n2z6xuvvyk2a",
+        "cid": "bafyreiasog5soeqfyk3qfmzu5zyiilyvagr26hmakuzmo6bgran7rhdnrm",
+        "commit": {
+          "cid": "bafyreia6ipb2xsnylvzd2npw5hjzqrwb2pzcqpx6ivfexvvwunln2uxhku",
+          "rev": "3n2z6xuwdo22a"
+        },
+        "validationStatus": "valid"
+      }
+    },
+    {
+      "step": "refreshSession rotates",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "step": "a replayed refresh token (recorded)",
+      "ok": true,
+      "status": 200,
+      "body": "{\"accessJwt\":\"eyJ0eXAiOiJhdCtqd3QiLCJhbGciOiJIUzI1NiJ9.eyJzY29wZSI6ImNvbS5hdHByb3RvLmFjY2VzcyIsImF1ZCI6ImRpZDp3ZWI6cGRzL"
+    },
+    {
+      "step": "the rotated session survives a replay attempt",
+      "ok": true,
+      "status": 200,
+      "body": "{\"did\":\"did:plc:pn6ei4rylteuuc6cmujzlt3y\",\"handle\":\"alice.piefed.test\",\"email\":\"atproto+1@piefed.test\",\"emailConfirmed\":false,\"emailAuthFactor\":false,\"active\":true}"
+    },
+    {
+      "step": "createSession with the sealed password",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "step": "createAppPassword from PieFed session",
+      "ok": true,
+      "status": 200,
+      "body": null
+    },
+    {
+      "step": "app password signs in by handle",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "step": "putRecord profile",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "step": "listNotifications proxied to the AppView",
+      "ok": true,
+      "status": 200,
+      "forwarded": {
+        "path": "/xrpc/app.bsky.notification.listNotifications?limit=10",
+        "claims": {
+          "iat": 1795473425,
+          "iss": "did:plc:pn6ei4rylteuuc6cmujzlt3y",
+          "aud": "did:web:appview.test",
+          "exp": 1795473485,
+          "lxm": "app.bsky.notification.listNotifications",
+          "jti": "ad67babdab59ac507031534ee7d3bf14"
+        },
+        "proxy": null
+      },
+      "body": "{\"notifications\": [], \"seenAt\": null}"
+    },
+    {
+      "step": "listNotifications with an explicit atproto-proxy",
+      "ok": true,
+      "status": 200,
+      "body": "{\"notifications\": [], \"seenAt\": null}"
+    },
+    {
+      "step": "Jetstream leaves bootstrap",
+      "ok": true,
+      "waited_s": 1,
+      "closed": null
+    },
+    {
+      "step": "Jetstream streams the account post, filtered by DID",
+      "ok": true,
+      "frames": 1,
+      "closed": null,
+      "sample": [
+        {
+          "$type": "message",
+          "payload": {
+            "$type": "network.bsky.jetstream.subscribeEvents#commit",
+            "cid": "bafyreienmov6mewgq5bg6xotx5xaqk2tjpzst64xri4ced4fowwlc2xzzq",
+            "collection": "app.bsky.feed.post",
+            "did": "did:plc:pn6ei4rylteuuc6cmujzlt3y",
+            "operation": "create",
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "createdAt": "2026-11-23T22:37:09.531086Z",
+              "text": "seen on Jetstream?"
+            },
+            "rev": "3n2z6xzlh5k2a",
+            "rkey": "3n2z6xzl7dk2a",
+            "seq": 2,
+            "time": "2026-11-23T22:37:09.821834Z",
+            "witnessedAt": "2026-11-23T22:37:09.821834Z"
+          }
+        }
+      ]
+    },
+    {
+      "step": "Jetstream filter excludes other DIDs",
+      "ok": true,
+      "others": 0
+    },
+    {
+      "step": "reconnect with cursor replays (inclusive)",
+      "ok": true,
+      "frames": 1,
+      "closed": null
+    },
+    {
+      "step": "v2 refuses a client frame (no live filter change)",
+      "ok": true,
+      "closed": {
+        "code": 1008,
+        "reason": "unexpected data message"
+      }
+    },
+    {
+      "step": "more than 10,000 DIDs refused before upgrade",
+      "ok": true,
+      "closed": {
+        "error": "InvalidStatus(Response(status_code=400, reason_phrase='Bad Request', headers=Headers([('Alt-Svc', 'h3=\":443\"; ma=2592000'), ('Content-Length', '112'), ('Content-Type', 'application/json'), ('Date', 'Mon, 23 Nov 2026 22:37:32 GMT'), ('Via', '1.1 Caddy')]), body=bytearray(b'{\"error\":\"InvalidRequest\",\"message\":\"subscribe: invalid options: number of URL query parameters exceeded limit\"}'), _exception="
+      }
+    },
+    {
+      "step": "2000 DIDs in one filter",
+      "ok": true,
+      "url_bytes": 75961,
+      "closed": null
+    },
+    {
+      "step": "5000 DIDs in one filter",
+      "ok": true,
+      "url_bytes": 189961,
+      "closed": null
+    },
+    {
+      "step": "9000 DIDs in one filter",
+      "ok": true,
+      "url_bytes": 341961,
+      "closed": null
+    },
+    {
+      "step": "deactivateAccount",
+      "ok": true,
+      "status": 200,
+      "body": "",
+      "get_record_while_deactivated": 200,
+      "get_record_body": "{}"
+    },
+    {
+      "step": "activateAccount; records readable again",
+      "ok": true,
+      "status": 200,
+      "body": "",
+      "get_record": 200
+    },
+    {
+      "step": "updateHandle keeps the DID; old handle stops resolving",
+      "ok": true,
+      "status": 200,
+      "new": 200,
+      "old": 404
+    },
+    {
+      "step": "admin.updateAccountPassword recovers a lost password",
+      "ok": true,
+      "status": 200,
+      "login": 200
+    },
+    {
+      "step": "admin.deleteAccount removes the repo",
+      "ok": true,
+      "status": 200,
+      "describe": 400
+    }
+  ],
+  "finished": "2026-11-23T22:37:39.206320+00:00"
+}

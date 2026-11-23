@@ -6,6 +6,7 @@
 #   interop/run.sh apps [args]          PieFed alone, then the client-app harness (interop/apps/README.md)
 #   interop/run.sh bluesky [args]       PieFed + PLC + PDS, then interop/bluesky's end-to-end tests (connected accounts)
 #   interop/run.sh bluesky-spike        PLC + PDS, then the atproto OAuth spike (connected accounts P0)
+#   interop/run.sh atproto-spike        PLC + PDS (invites required) + Jetstream, then the ATProto spike (spec 2026-11-23 P0)
 #   interop/run.sh down                 remove the stack and its volumes
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -187,6 +188,23 @@ bluesky_spike() {
     $COMPOSE --profile bluesky run --rm --name bluesky-runner bluesky-runner python interop/spike_bluesky_oauth.py "$@"
 }
 
+# The ATProto P0 spike (spec 2026-11-23): the PLC directory, a PDS that requires invites, Jetstream over the PDS, and
+# interop/spike_atproto.py, which also serves the stand-in AppView. Writes interop/spike_atproto/report.json.
+atproto_spike() {
+    interop/gen_env.sh
+    $COMPOSE --profile apps build apps-runner   # httpx and websockets
+    $COMPOSE --profile bluesky up -d --force-recreate --no-deps caddy
+    export PDS_INVITE_REQUIRED=true
+    start_plc
+    # a PDS left running by another profile has the old environment, and Jetstream starts from an empty archive
+    $COMPOSE --profile bluesky up -d --force-recreate --no-deps pds jetstream
+    $COMPOSE --profile bluesky run --rm --name bluesky-runner bluesky-runner python interop/spike_atproto.py "$@" \
+        || status=$?
+    mkdir -p interop/spike_atproto
+    $COMPOSE --profile bluesky logs --tail 60 jetstream > interop/spike_atproto/jetstream.log 2>&1 || true
+    return "${status:-0}"
+}
+
 # The PLC directory and the PDS. The PLC server exits on its first refused database connection, so its Postgres takes
 # TCP connections first (the image's first-boot server listens on its socket alone: TCP means the real one is up).
 start_plc() {
@@ -236,6 +254,7 @@ print(json.dumps({"kty": "EC", "crv": "P-256", "x": part(numbers.public_numbers.
 case "${1:-}" in
     up)   up ;;
     bluesky-spike) shift; bluesky_spike "$@" ;;
+    atproto-spike) shift; atproto_spike "$@" ;;
     bluesky) shift; bluesky "$@" ;;
     apps) shift; apps "$@" ;;
     test) shift; up; $COMPOSE --profile runner run --rm interop-runner \
@@ -247,5 +266,5 @@ case "${1:-}" in
           # dropped), and the next `up` reuses it beside fresh ones: refuse to leave a mixed stack behind
           left=$(podman ps -a --filter name=pyfedi-interop_ --format '{{.Names}}')
           [ -z "$left" ] || { echo "run.sh: down left containers behind:" $left >&2; exit 1; } ;;
-    *)    echo "usage: interop/run.sh up|test|apps|conformance|bluesky|bluesky-spike|down" >&2; exit 2 ;;
+    *)    echo "usage: interop/run.sh up|test|apps|conformance|bluesky|bluesky-spike|atproto-spike|down" >&2; exit 2 ;;
 esac

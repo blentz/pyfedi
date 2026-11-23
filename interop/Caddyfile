@@ -22,6 +22,20 @@ pds.test, *.pds.test {
 	reverse_proxy pds:3000
 }
 
+# ATProto (spec 2026-11-23): handles PieFed's PDS issues under its own domains answer /.well-known/atproto-did from
+# the PDS; Jetstream reads the PDS; appview.test is the spike's stand-in AppView (bluesky-runner)
+*.piefed.test, *.tube.test {
+	reverse_proxy pds:3000
+}
+
+jetstream.test {
+	reverse_proxy jetstream:8080
+}
+
+appview.test {
+	reverse_proxy bluesky-runner:8701
+}
+
 bskyclient.piefed.internal {
 	reverse_proxy bluesky-runner:8700
 }

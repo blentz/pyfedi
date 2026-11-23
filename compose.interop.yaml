@@ -151,7 +151,8 @@ services:
       interop:
         aliases: &harness-names [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test,
                                  s3.test, relay.test, voyager.test, blorp.test, photon.test, phanpy.test,
-                                 elk.test, tube.test, plc.test, pds.test, alice.pds.test, bskyclient.piefed.internal]
+                                 elk.test, tube.test, plc.test, pds.test, alice.pds.test, bskyclient.piefed.internal,
+                                 alice.piefed.test, alice2.piefed.test, carol.tube.test, jetstream.test, appview.test]
       apps-offline:   # the emulator's only network: the harness names, and no way out (see android-emulator)
         # and lemmy.ml, Jerboa's default instance, which it must reach before anything else (Caddyfile)
         aliases: [piefed.test, mastodon.test, peertube.test, castopod.test, pixelfed.test, loops.test, s3.test,
@@ -427,10 +428,15 @@ services:
     image: ghcr.io/bluesky-social/pds:0.4.5051@sha256:8e58b79746da8a0e85698aa7ba9b53e508b94db2021d963653b6d1bfc14889c6
     environment:
       PDS_HOSTNAME: pds.test
-      PDS_SERVICE_HANDLE_DOMAINS: .pds.test
+      # .pds.test: accounts made on the PDS itself (connected accounts); .piefed.test and .tube.test: accounts PieFed
+      # makes for members of its two domains (ATProto, spec 2026-11-23 A3)
+      PDS_SERVICE_HANDLE_DOMAINS: .pds.test,.piefed.test,.tube.test
       PDS_DID_PLC_URL: https://plc.test
       PDS_DEV_MODE: "true"
-      PDS_INVITE_REQUIRED: "false"
+      PDS_INVITE_REQUIRED: "${PDS_INVITE_REQUIRED:-false}"   # the ATProto spike runs with invites required
+      # the spike's stand-in AppView (interop/spike_atproto.py): where the PDS proxies app.bsky.* reads
+      PDS_BSKY_APP_VIEW_URL: https://appview.test
+      PDS_BSKY_APP_VIEW_DID: did:web:appview.test
       PDS_DATA_DIRECTORY: /pds
       PDS_BLOBSTORE_DISK_LOCATION: /pds/blocks
       PDS_CRAWLERS: ""   # never ask bsky.network to crawl a harness account
@@ -447,6 +453,25 @@ services:
     entrypoint: ["/trust_ca.sh", "/pds_harness.sh", "dumb-init", "--"]
     command: ["node", "--enable-source-maps", "index.ts"]
     depends_on: [caddy, plc]
+    profiles: [bluesky]
+
+  # Jetstream v2 over the harness PDS (ATProto spike, spec 2026-11-23 P0): its relay is the PDS itself
+  jetstream:
+    # v0.4.4, the newest release on 2026-11-23 (2026-10-14)
+    image: ghcr.io/bluesky-social/jetstream:v0.4.4@sha256:eeb044f02c32dda3dcf4d8d4ba12981f6c6808fc27135edf9b518adb5cee0b83
+    environment:
+      JETSTREAM_ADDR: ":8080"
+      JETSTREAM_DATA_DIR: /data
+      JETSTREAM_RELAY_URL: "${JETSTREAM_RELAY_URL:-https://pds.test}"
+      JETSTREAM_PLC_URL: https://plc.test
+      # A PDS has no com.atproto.sync.listHosts, which bootstrap walks on a relay: a named repo list replaces that walk
+      # (one DID that never exists, so bootstrap ends at once), and the live tail then follows the PDS's own firehose
+      JETSTREAM_BACKFILL_REPOS: did:plc:aaaaaaaaaaaaaaaaaaaaaaaa
+      SSL_CERT_FILE: /caddy-data/harness-root.crt   # Go's TLS roots: the harness CA alone
+    tmpfs: [/data]
+    volumes: [caddy-data:/caddy-data:ro]
+    networks: [interop]
+    depends_on: [pds]
     profiles: [bluesky]
 
   # runs interop/bluesky's browser tests (Playwright), and plays PieFed's part in the OAuth spike
