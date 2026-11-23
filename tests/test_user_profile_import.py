@@ -1907,3 +1907,53 @@ def test_an_oversized_follows_csv_is_refused_before_it_is_read(app, env):
     assert parse.call_args is None
     assert redis.set.call_args is None
     assert 'too large' in messages
+
+
+@pytest.fixture
+def onion_domain(app, env):
+    """A local-only domain (it does not federate): its accounts are seen only by its own signed-in members."""
+    from app.models import SiteDomain
+    from app.storefront import clear_domain_cache
+
+    onion = SiteDomain(domain='abc.onion', scheme='http', federates=False)
+    db.session.add(onion)
+    db.session.commit()
+    clear_domain_cache()
+    yield onion
+    clear_domain_cache()
+
+
+def test_an_account_on_a_local_only_domain_is_not_followed_from_another(app, env, onion_domain):
+    """follow_user refuses it through found_here: the account is hidden from any other domain, and following it would
+    tell the importer it exists and tell it about the importer."""
+    client, viewer, other = env
+    other.site_domain_id = onion_domain.id
+    db.session.commit()
+
+    run_import_with(app, viewer, {'followed_users': [other.ap_profile_id]}, lambda *a, **k: other)
+
+    assert outward_follows(viewer) == []
+    assert Notification.query.filter_by(user_id=other.id).count() == 0
+
+
+def test_an_account_on_your_own_local_only_domain_is_followed(app, env, onion_domain):
+    """The task has no request, so found_here would judge from the default domain and hide the importer's own
+    domain's accounts from them; the import judges from the importer's home domain."""
+    client, viewer, other = env
+    viewer.site_domain_id = onion_domain.id
+    other.site_domain_id = onion_domain.id
+    db.session.commit()
+
+    run_import_with(app, viewer, {'followed_users': [other.ap_profile_id]}, lambda *a, **k: other)
+
+    assert [f.remote_user_id for f in outward_follows(viewer)] == [other.id]
+
+
+def test_a_local_only_account_may_follow_a_federating_local_one(app, env, onion_domain):
+    client, viewer, other = env
+    viewer.site_domain_id = onion_domain.id
+    db.session.commit()
+
+    run_import_with(app, viewer, {'followed_users': [other.ap_profile_id]}, lambda *a, **k: other)
+
+    assert [f.remote_user_id for f in outward_follows(viewer)] == [other.id]

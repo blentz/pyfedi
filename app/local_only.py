@@ -174,10 +174,21 @@ def _hidden_domains(signed_in: bool) -> tuple[list[int], bool]:
 
 
 def _actor_hidden(actor, signed_in: bool) -> bool:
+    return _actor_hidden_on(actor, storefront.current_storefront(), signed_in)
+
+
+def _actor_hidden_on(actor, here, signed_in: bool) -> bool:
     if actor is None or actor.ap_id is not None:
         return False
-    home, here = actor.home_domain(), storefront.current_storefront()
+    home = actor.home_domain()
     return not home.federates and not (signed_in and not here.federates and home.id == here.id)
+
+
+def actor_hidden_from(viewer, actor) -> bool:
+    """`hidden_here(actor, True)` as `viewer`, a local account, sees it from its own home domain. For a task acting
+    for them: it has no request, so hidden_here would judge from the default domain, and hide a local-only domain's
+    accounts even from that domain's own members."""
+    return _actor_hidden_on(actor, viewer.home_domain(), True)
 
 
 def _feed_hidden(feed, signed_in: bool) -> bool:

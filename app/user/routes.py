@@ -29,7 +29,7 @@ from app.email import send_verification_email
 from app.federation_urls import activity_id, domain_site_name, owner_base
 from app.ldap_utils import sync_user_to_ldap
 from app.feed_domains import feeds_shown_here_clause
-from app.local_only import accounts_shown_here_sql, hidden_here, local_only_visible_rss, refuses_remote_contact, \
+from app.local_only import accounts_shown_here_sql, actor_hidden_from, hidden_here, local_only_visible_rss, refuses_remote_contact, \
     remote_contact_refusal_message, user_local_only, without_local_only, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.log_scrub import log_ldap_sync_failure
@@ -1618,9 +1618,13 @@ def settings_import_store(redis_key: str):
 
 def import_follow(user: User, target) -> bool:
     """`user` follows `target`, an imported followed_users entry as find_actor_or_create resolved it, unless it is
-    not a person, is `user`, or a block stands between them: the rules move_account_followers applies to a moved
-    follow, since an import is the same move made by hand. Returns whether it was followed (or already was)."""
+    not a person, is `user`, is hidden from `user` (a local-only domain's account, seen from another domain), or a
+    block stands between them: the rules move_account_followers applies to a moved follow, since an import is the
+    same move made by hand, and the visibility rule follow_user applies through found_here. Returns whether it was
+    followed (or already was)."""
     if not isinstance(target, User) or target.id == user.id or target.banned or target.deleted:
+        return False
+    if actor_hidden_from(user, target):   # the task has no request, so found_here would judge as the default domain
         return False
     if user.has_blocked_user(target.id) or user.has_blocked_instance(target.instance_id) or \
             target.has_blocked_user(user.id) or refuses_remote_contact(user, target):
