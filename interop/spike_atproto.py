@@ -172,7 +172,7 @@ def main():
         step(f'well-known on {handle}', wk.status_code == 200 and wk.text.strip() == expect, status=wk.status_code,
              body=wk.text[:120])
     doc = http.get(f'{PLC}/{did}').json()
-    step('DID document: handle and PDS', f'at://alice.piefed.test' in doc.get('alsoKnownAs', []) and
+    step('DID document: handle and PDS', 'at://alice.piefed.test' in doc.get('alsoKnownAs', []) and
          any(s.get('serviceEndpoint') == PDS for s in doc.get('service', [])), alsoKnownAs=doc.get('alsoKnownAs'),
          service=doc.get('service'))
 

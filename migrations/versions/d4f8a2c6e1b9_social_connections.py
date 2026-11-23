@@ -1,7 +1,7 @@
 """Connected accounts: a member's accounts on other services, and each post's copies there
 
 Revision ID: d4f8a2c6e1b9
-Revises: c3e9a5d1f7b4
+Revises: 8d2f6a1c4e70
 Create Date: 2026-11-13 21:00:00.000000
 
 Spec docs/superpowers/specs/2026-11-13-connected-accounts-design.md §4. Two new tables; nothing existing changes.
@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = 'd4f8a2c6e1b9'
-down_revision = 'c3e9a5d1f7b4'
+down_revision = '8d2f6a1c4e70'
 branch_labels = None
 depends_on = None
 

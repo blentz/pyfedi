@@ -1,15 +1,12 @@
 """A connected-accounts service for tests: every call is an HTTP request to https://fake.example, which a test's
 `http_mock` (respx) answers, so the real code paths run from the Service interface down to the wire.
 
-`fake_service` registers it and turns it on (a Fernet key, the admin switch); monkeypatch undoes both."""
+The `fake_service` fixture (tests/shared_fixtures/connections.py) registers it and turns it on (a Fernet key, the admin
+switch); monkeypatch undoes both."""
 from datetime import datetime
 
-import pytest
-
-from app.connections import SERVICES, Account, Pending, Sent, Service, setting_name
+from app.connections import Account, Pending, Sent, Service
 from app.connections.http import call
-from app.sealing import generate_key
-from app.utils import set_setting
 
 BASE = 'https://fake.example'
 
@@ -77,12 +74,3 @@ class FakeService(Service):
 
     def revoke(self, tokens):
         call('POST', f'{BASE}/revoke')
-
-
-@pytest.fixture
-def fake_service(app, db_session, monkeypatch):
-    service = FakeService()
-    monkeypatch.setitem(app.config, 'CONNECTIONS_SECRETS_KEY', generate_key())
-    monkeypatch.setitem(SERVICES, service.name, service)
-    set_setting(setting_name(service.name), True)
-    return service

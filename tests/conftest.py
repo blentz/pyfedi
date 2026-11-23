@@ -137,6 +137,7 @@ pytest_plugins = [
     'tests.shared_fixtures.community_add_post',
     'tests.shared_fixtures.community_kind_rules',
     'tests.shared_fixtures.community_show',
+    'tests.shared_fixtures.connections',
     'tests.shared_fixtures.custom_themes_admin',
     'tests.shared_fixtures.discovery',
     'tests.shared_fixtures.front_page_view_filters',
