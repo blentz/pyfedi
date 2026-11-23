@@ -1,4 +1,5 @@
 import calendar
+import csv
 import json as python_json
 import os
 from collections import defaultdict
@@ -21,6 +22,7 @@ from app.activitypub.util import find_actor_or_create, extract_domain_and_actor
 # app.activitypub.util before random_token is defined (import cycle: auth.util)
 import app.auth.util as auth_util
 from app.community.util import retrieve_mods_and_backfill, search_for_community
+from app.instance.util import mastodon_csv_handles
 from app.user.profile_images import replace_avatar, replace_cover
 from app.constants import *
 from app.email import send_verification_email
@@ -587,6 +589,12 @@ def export_user_settings(user):
             user_subscribed_communities.append(c.ap_profile_id)
     user_dict['followed_communities'] = user_subscribed_communities
 
+    # the people this account follows, or has asked to (a refused follow is not one), as their actor URLs
+    followed = db.session.query(User).join(UserFollower, UserFollower.remote_user_id == User.id).filter(
+        UserFollower.local_user_id == user.id, UserFollower.is_inward == False,
+        UserFollower.is_accepted.is_not(False), User.deleted == False).order_by(UserFollower.id)
+    user_dict['followed_users'] = [followed_user.profile_id() for followed_user in followed]
+
     # get bookmarked/saved posts
     bookmarked_posts = []
     post_bookmarks = PostBookmark.query.filter_by(user_id=user.id).all()
@@ -933,8 +941,8 @@ def user_settings_import_export():
     elif form.validate_on_submit():
         import_file = request.files.get('import_file')
         if import_file and import_file.filename != '':
-            file_ext = os.path.splitext(import_file.filename)[1]
-            if file_ext.lower() != '.json':
+            file_ext = os.path.splitext(import_file.filename)[1].lower()
+            if file_ext not in ('.json', '.csv'):
                 abort(400)
 
             redis_key = f"import:{user.id}:{gibberish(15)}"
@@ -942,6 +950,13 @@ def user_settings_import_export():
             if len(imported_data) > SETTINGS_IMPORT_MAX_BYTES:
                 flash(_('That file is too large to import.'), 'error')
                 return redirect(url_for('user.user_settings_import_export'))
+            if file_ext == '.csv':   # a Mastodon follows export: the task reads it as a settings file's followed_users
+                try:
+                    handles = mastodon_csv_handles(imported_data)
+                except csv.Error:
+                    flash(_('Could not read this file; export it again as a UTF-8 CSV'), 'error')
+                    return redirect(url_for('user.user_settings_import_export'))
+                imported_data = python_json.dumps({'followed_users': handles[:IMPORT_MAX_ENTRIES]}).encode()
 
             with onion_store_needed():   # over the onion it waits in the RAM-only onion store (app/onion_store.py)
                 request_redis().set(redis_key, imported_data, ex=3600)
@@ -949,7 +964,8 @@ def user_settings_import_export():
             # import settings in background task
             import_settings(redis_key)
 
-            flash(_('Your subscriptions and blocks are being imported. If you have many it could take a few minutes.'))
+            flash(_('Your subscriptions, follows and blocks are being imported. If you have many it could take a few '
+                    'minutes.'))
 
         db.session.commit()
 
@@ -1600,6 +1616,19 @@ def settings_import_store(redis_key: str):
     return app_pkg.redis_client if app_pkg.redis_client.exists(redis_key) else app_pkg.onion_redis_client
 
 
+def import_follow(user: User, target) -> bool:
+    """`user` follows `target`, an imported followed_users entry as find_actor_or_create resolved it, unless it is
+    not a person, is `user`, or a block stands between them: the rules move_account_followers applies to a moved
+    follow, since an import is the same move made by hand. Returns whether it was followed (or already was)."""
+    if not isinstance(target, User) or target.id == user.id or target.banned or target.deleted:
+        return False
+    if user.has_blocked_user(target.id) or user.has_blocked_instance(target.instance_id) or \
+            target.has_blocked_user(user.id) or refuses_remote_contact(user, target):
+        return False
+    shared_user.follow_user_as(user, target)
+    return True
+
+
 @celery.task
 def import_settings_task(user_id, redis_key):
     from app.api.alpha.utils.misc import get_resolve_object  # cycle: app.api.alpha.utils.misc imports app.api.alpha.utils.community, mid-import when this module loads
@@ -1704,6 +1733,10 @@ def import_settings_task(user_id, redis_key):
                     instance = Instance.query.filter(Instance.domain == instance_domain).first()
                     if instance:
                         session.add(InstanceBlock(user_id=user.id, instance_id=instance.id))
+
+                # After the blocks, so that a block in the same file is honoured
+                for followed_ap_id in import_entries(contents_json, 'followed_users'):
+                    import_follow(user, find_actor_or_create(followed_ap_id, retry=True))
 
                 for ap_id in import_entries(contents_json, 'saved_posts'):
                     try:

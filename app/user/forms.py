@@ -167,7 +167,7 @@ class SettingsForm(FlaskForm):
 
 
 class ImportExportForm(FlaskForm):
-    import_file = FileField(_l('Import community subscriptions and user blocks from Lemmy'))
+    import_file = FileField(_l('A settings file from PieFed or Lemmy (.json), or a follows export from Mastodon (.csv)'))
     export_settings = SubmitField(_l('Export'))
     submit = SubmitField(_l('Import'))
 

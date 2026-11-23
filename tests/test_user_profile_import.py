@@ -934,7 +934,7 @@ def test_a_stored_json_object_is_still_imported(app, env):
     assert [c.args[0] for c in find.call_args_list] == ['https://other.example/u/x']
 
 
-@pytest.mark.parametrize('key', ['followed_communities', 'blocked_communities', 'blocked_users'])
+@pytest.mark.parametrize('key', ['followed_communities', 'blocked_communities', 'blocked_users', 'followed_users'])
 def test_an_entry_that_is_not_a_string_is_skipped(app, env, key):
     """Found by the settings_import fuzz target. Entries went to find_actor_or_create
     unchecked, which calls `.strip()` on them: a number raised AttributeError, an
@@ -1597,3 +1597,313 @@ def test_importing_a_saved_comment_twice_stores_one_bookmark(app, env):
 
     assert PostReplyBookmark.query.filter_by(user_id=viewer.id,
                                              post_reply_id=reply.id).count() == 1
+
+
+# --------------------------------------------------------------------------
+# Followed users: exported, imported from a settings file, and imported from
+# a Mastodon follows CSV
+# --------------------------------------------------------------------------
+
+
+def a_remote_user(name='remote', domain='other.example'):
+    remote = make_user(instance(domain, software='mastodon'), name)
+    db.session.commit()
+    return remote
+
+
+def outward_follows(user):
+    from app.models import UserFollower
+
+    return UserFollower.query.filter_by(local_user_id=user.id, is_inward=False).all()
+
+
+def test_the_export_lists_followed_users(app, env):
+    """Accepted and pending follows are both exported, in the order they were made; a refused one is not a follow,
+    and a deleted account cannot be followed again."""
+    from app.models import UserFollower
+
+    client, viewer, other = env
+    remote = a_remote_user()
+    refused = a_remote_user('refused')
+    gone = a_remote_user('gone')
+    gone.deleted = True
+    db.session.add_all([
+        UserFollower(local_user_id=viewer.id, remote_user_id=other.id, is_accepted=True, is_inward=False),
+        UserFollower(local_user_id=viewer.id, remote_user_id=remote.id, is_accepted=None, is_inward=False),
+        UserFollower(local_user_id=viewer.id, remote_user_id=refused.id, is_accepted=False, is_inward=False),
+        UserFollower(local_user_id=viewer.id, remote_user_id=gone.id, is_accepted=True, is_inward=False),
+        # someone following the viewer is not someone the viewer follows
+        UserFollower(local_user_id=other.id, remote_user_id=viewer.id, is_accepted=True, is_inward=False),
+    ])
+    db.session.commit()
+
+    _response, exported_json = exported(app, client)
+
+    assert exported_json['followed_users'] == [other.profile_id(), remote.profile_id()]
+
+
+def test_the_export_lists_no_followed_users_when_there_are_none(app, env):
+    client, viewer, other = env
+
+    _response, exported_json = exported(app, client)
+
+    assert exported_json['followed_users'] == []
+
+
+def test_importing_a_followed_local_user_follows_them(app, env):
+    client, viewer, other = env
+
+    run_import_with(app, viewer, {'followed_users': [other.ap_profile_id]}, lambda *a, **k: other)
+
+    follows = outward_follows(viewer)
+    assert [(f.remote_user_id, f.is_accepted) for f in follows] == [(other.id, True)]
+    assert Notification.query.filter_by(user_id=other.id, author_id=viewer.id).count() == 1
+
+
+def test_importing_a_followed_remote_user_asks_to_follow(app, env):
+    client, viewer, other = env
+    remote = a_remote_user()
+
+    with patch('app.shared.user.task_selector') as task:
+        run_import_with(app, viewer, {'followed_users': ['remote@other.example']}, lambda *a, **k: remote)
+
+    assert [(f.remote_user_id, f.is_accepted) for f in outward_follows(viewer)] == [(remote.id, None)]
+    assert task.call_args.args == ('follow_user',)
+    assert task.call_args.kwargs == {'to_follow_id': remote.id, 'user_id': viewer.id}
+
+
+def test_each_followed_user_is_looked_up_as_written_with_retry(app, env):
+    """The task is a Celery task, so a lookup may wait and try again (D775); a handle and a URL both go to
+    find_actor_or_create as they are, which resolves either."""
+    client, viewer, other = env
+
+    with patch('app.user.routes.json.loads',
+               return_value={'followed_users': ['remote@other.example', 'https://other.example/users/x']}):
+        with patch('app.redis_client', create=True):
+            with patch('app.user.routes.find_actor_or_create', return_value=None) as find:
+                from app.user.routes import import_settings_task
+                import_settings_task(viewer.id, 'a-redis-key')
+
+    assert [(c.args, c.kwargs) for c in find.call_args_list] == [
+        (('remote@other.example',), {'retry': True}), (('https://other.example/users/x',), {'retry': True})]
+
+
+def test_followed_users_are_capped(app, env):
+    from app.constants import IMPORT_MAX_ENTRIES
+
+    client, viewer, other = env
+    entries = [f'u{n}@other.example' for n in range(IMPORT_MAX_ENTRIES + 5)]
+
+    find = run_import(app, viewer, {'followed_users': entries})
+
+    assert find.call_count == IMPORT_MAX_ENTRIES
+
+
+def test_importing_someone_already_followed_changes_nothing(app, env):
+    from app.models import UserFollower
+
+    client, viewer, other = env
+    db.session.add(UserFollower(local_user_id=viewer.id, remote_user_id=other.id, is_accepted=True,
+                                is_inward=False))
+    db.session.commit()
+
+    run_import_with(app, viewer, {'followed_users': [other.ap_profile_id]}, lambda *a, **k: other)
+
+    assert len(outward_follows(viewer)) == 1
+    assert Notification.query.filter_by(user_id=other.id).count() == 0
+
+
+@pytest.mark.parametrize('resolved', ['nothing', 'a_community', 'yourself'])
+def test_a_followed_entry_that_is_not_another_person_is_skipped(app, env, resolved):
+    client, viewer, other = env
+    community = make_community('general')
+    db.session.commit()
+    target = {'nothing': None, 'a_community': community, 'yourself': viewer}[resolved]
+
+    run_import_with(app, viewer, {'followed_users': ['https://other.example/x']}, lambda *a, **k: target)
+
+    assert outward_follows(viewer) == []
+
+
+@pytest.mark.parametrize('column', ['banned', 'deleted'])
+def test_a_banned_or_deleted_account_is_not_followed(app, env, column):
+    client, viewer, other = env
+    setattr(other, column, True)
+    db.session.commit()
+
+    run_import_with(app, viewer, {'followed_users': [other.ap_profile_id]}, lambda *a, **k: other)
+
+    assert outward_follows(viewer) == []
+
+
+def test_someone_you_block_is_not_followed(app, env):
+    client, viewer, other = env
+    db.session.add(UserBlock(blocker_id=viewer.id, blocked_id=other.id))
+    db.session.commit()
+
+    run_import_with(app, viewer, {'followed_users': [other.ap_profile_id]}, lambda *a, **k: other)
+
+    assert outward_follows(viewer) == []
+
+
+def test_someone_blocked_in_the_same_file_is_not_followed(app, env):
+    """The follows are imported after the blocks, so a file that both blocks and follows someone leaves the block
+    and no follow."""
+    client, viewer, other = env
+
+    run_import_with(app, viewer, {'followed_users': [other.ap_profile_id], 'blocked_users': [other.ap_profile_id]},
+                    lambda *a, **k: other)
+
+    assert outward_follows(viewer) == []
+    assert UserBlock.query.filter_by(blocker_id=viewer.id, blocked_id=other.id).count() == 1
+
+
+def test_someone_who_blocks_you_is_not_followed(app, env):
+    client, viewer, other = env
+    db.session.add(UserBlock(blocker_id=other.id, blocked_id=viewer.id))
+    db.session.commit()
+
+    run_import_with(app, viewer, {'followed_users': [other.ap_profile_id]}, lambda *a, **k: other)
+
+    assert outward_follows(viewer) == []
+
+
+def test_someone_on_a_server_you_block_is_not_followed(app, env):
+    from app.models import InstanceBlock
+
+    client, viewer, other = env
+    remote = a_remote_user()
+    db.session.add(InstanceBlock(user_id=viewer.id, instance_id=remote.instance_id))
+    db.session.commit()
+
+    with patch('app.shared.user.task_selector') as task:
+        run_import_with(app, viewer, {'followed_users': [remote.ap_profile_id]}, lambda *a, **k: remote)
+
+    assert outward_follows(viewer) == []
+    assert task.call_args is None
+
+
+def test_someone_on_a_server_blocked_in_the_same_file_is_not_followed(app, env):
+    client, viewer, other = env
+    remote = a_remote_user()
+
+    with patch('app.shared.user.task_selector') as task:
+        run_import_with(app, viewer, {'followed_users': [remote.ap_profile_id], 'blocked_instances': ['other.example']},
+                        lambda *a, **k: remote)
+
+    assert outward_follows(viewer) == []
+    assert task.call_args is None
+
+
+def test_a_local_only_account_does_not_follow_a_remote_one(app, env):
+    """follow_user_as would raise REMOTE_CONTACT_REFUSAL and fail the whole task; the import skips the entry
+    instead, and still follows a local account named after it."""
+    client, viewer, other = env
+    remote = a_remote_user()
+    targets = {remote.ap_profile_id: remote, other.ap_profile_id: other}
+
+    with patch('app.local_only.user_local_only', return_value=True):
+        with patch('app.shared.user.task_selector') as task:
+            run_import_with(app, viewer, {'followed_users': [remote.ap_profile_id, other.ap_profile_id]},
+                            lambda actor, **k: targets[actor])
+
+    assert [f.remote_user_id for f in outward_follows(viewer)] == [other.id]
+    assert task.call_args is None
+
+
+def test_exported_followed_users_import_again(app, env):
+    """The key the export writes is the key the import reads."""
+    from app.models import UserFollower
+
+    client, viewer, other = env
+    third = make_user(instance(), 'third', local=True)
+    db.session.commit()
+    db.session.add(UserFollower(local_user_id=viewer.id, remote_user_id=other.id, is_accepted=True,
+                                is_inward=False))
+    db.session.commit()
+    _response, exported_json = exported(app, client)
+
+    run_import_with(app, third, {'followed_users': exported_json['followed_users']},
+                    lambda actor, **k: other if actor == other.profile_id() else None)
+
+    assert [f.remote_user_id for f in outward_follows(third)] == [other.id]
+
+
+MASTODON_FOLLOWS_CSV = (b'Account address,Show boosts,Notify on new posts,Languages\r\n'
+                        b'alice@other.example,true,false,\r\n'
+                        b'bob@third.example,false,false,en\r\n')
+
+
+def uploaded(app, client, contents, filename):
+    with patch('app.user.routes.import_settings') as imported:
+        with patch('app.redis_client', create=True) as redis:
+            with patch('app.user.routes.flash') as flashed:
+                response = client.post('/user/settings/import_export',
+                                       data=import_payload(app, client, contents, filename=filename),
+                                       content_type='multipart/form-data')
+    return response, redis, imported, ' '.join(str(c.args[0]) for c in flashed.call_args_list)
+
+
+@pytest.mark.parametrize('filename', ['following_accounts.csv', 'FOLLOWING.CSV'])
+def test_a_mastodon_follows_csv_is_imported_as_followed_users(app, env, filename):
+    """Mastodon's "Follows" export: a header row, then a handle in the first column of each row. The task reads it
+    as a settings file that has only followed_users."""
+    client, viewer, other = env
+
+    response, redis, imported, messages = uploaded(app, client, MASTODON_FOLLOWS_CSV, filename)
+
+    assert response.status_code == 302
+    assert json.loads(redis.set.call_args.args[1]) == {
+        'followed_users': ['alice@other.example', 'bob@third.example']}
+    assert imported.call_args is not None
+    assert 'follows' in messages
+
+
+def test_an_old_mastodon_follows_csv_without_a_header_is_imported(app, env):
+    client, viewer, other = env
+
+    _response, redis, _imported, _messages = uploaded(app, client, b'alice@other.example\n@bob@third.example\n',
+                                                      'follows.csv')
+
+    assert json.loads(redis.set.call_args.args[1]) == {
+        'followed_users': ['alice@other.example', '@bob@third.example']}
+
+
+def test_a_follows_csv_is_capped(app, env):
+    from app.constants import IMPORT_MAX_ENTRIES
+
+    client, viewer, other = env
+    contents = ''.join(f'u{n}@other.example\n' for n in range(IMPORT_MAX_ENTRIES + 5)).encode()
+
+    _response, redis, _imported, _messages = uploaded(app, client, contents, 'follows.csv')
+
+    handles = json.loads(redis.set.call_args.args[1])['followed_users']
+    assert handles == [f'u{n}@other.example' for n in range(IMPORT_MAX_ENTRIES)]
+
+
+def test_a_follows_csv_that_will_not_parse_imports_nothing(app, env):
+    import csv
+
+    client, viewer, other = env
+
+    with patch('app.user.routes.mastodon_csv_handles', side_effect=csv.Error('bad')):
+        response, redis, imported, messages = uploaded(app, client, b'whatever', 'follows.csv')
+
+    assert response.status_code == 302
+    assert redis.set.call_args is None
+    assert imported.call_args is None
+    assert 'Could not read this file' in messages
+
+
+def test_an_oversized_follows_csv_is_refused_before_it_is_read(app, env):
+    from app.user.routes import SETTINGS_IMPORT_MAX_BYTES
+
+    client, viewer, other = env
+
+    with patch('app.user.routes.mastodon_csv_handles') as parse:
+        _response, redis, imported, messages = uploaded(app, client, b'x' * (SETTINGS_IMPORT_MAX_BYTES + 10),
+                                                        'follows.csv')
+
+    assert parse.call_args is None
+    assert redis.set.call_args is None
+    assert 'too large' in messages

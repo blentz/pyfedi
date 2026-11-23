@@ -735,6 +735,11 @@ limits on input that could cost seconds of CPU or crash a request:
 - **Settings import.** A user note in a PieFed settings export imports again
   (`49812275`). A file that is not a JSON object imports nothing, and an
   entry of the wrong shape is skipped (`25d15084`, `e372df4b`).
+- **Followed people are exported and imported.** The settings export lists
+  the accounts a user follows under `followed_users`, and the import follows
+  them again. The import page also takes Mastodon's "Follows" CSV. The first
+  500 are followed, under the same rules as an account move: no one blocked
+  either way, on a blocked server, or remote for a local-only account.
 - **Flair colours must be `#hex`.** A peer's flair colour that is not one is
   stored as no colour (`061500ba`). The API (`18ef7e3b`) and the local flair
   form (`8b6e7857`) refuse it.

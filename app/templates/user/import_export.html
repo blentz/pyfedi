@@ -22,11 +22,12 @@
         <form method='post' enctype="multipart/form-data" role="form">
             {{ form.csrf_token() }}
             <h5>{{ _('Import') }}</h5>
+            <p>{{ _('Import community subscriptions, the people you follow, blocks and saved items from another account. From Mastodon, upload the "Follows" CSV from its Import and export page.') }}</p>
             {{ render_field(form.import_file) }}
             {{ render_field(form.submit) }}
             <hr>
             <h5>{{ _('Export') }}</h5>
-            <p>{{ _('Export community subscriptions and user settings') }}</p>
+            <p>{{ _('Export community subscriptions, the people you follow and user settings') }}</p>
             {{ render_field(form.export_settings) }}
             <hr>
         </form>

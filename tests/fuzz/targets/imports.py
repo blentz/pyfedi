@@ -42,7 +42,7 @@ MAX_INPUT = 64 * 1024
 
 # Every key import_settings_task reads, and whether its entries are actor/domain strings or note objects.
 SETTINGS_KEYS = ('followed_communities', 'blocked_communities', 'blocked_users', 'user_notes', 'blocked_instances',
-                 'saved_posts', 'saved_comments')
+                 'followed_users', 'saved_posts', 'saved_comments')
 
 
 def well_formed_entry(key: str, entry) -> bool:
