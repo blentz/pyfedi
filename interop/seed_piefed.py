@@ -64,8 +64,9 @@ if Feed.query.filter_by(machine_name='conf-feed', ap_id=None).first() is None:
                         subscriptions_count=1, **feed_identity(default_domain(), 'conf-feed')))
     db.session.commit()
 if SiteDomain.query.filter_by(domain='tube.test').first() is None:
-    db.session.add(SiteDomain(domain='tube.test', scheme='https', federates=True, registration='anyone',
-                              login_required=False, is_default=False))
+    # who may join and whether browsing needs a login are DomainConfig's since multitenant domain config phase 3b
+    db.session.add(SiteDomain(domain='tube.test', scheme='https', federates=True, registration_mode='Open',
+                              private_instance=False, is_default=False))
     db.session.commit()
     clear_domain_cache()
 tube = domain_for_host('tube.test')
