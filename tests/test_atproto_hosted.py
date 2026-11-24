@@ -165,10 +165,11 @@ def test_a_name_as_a_handle_label(name, label):
     assert hosted.label_of(name) == label
 
 
-def test_the_next_label_to_offer():
+def test_the_next_label_to_offer(hosted_world):
     assert hosted.alternative('alice') == 'alice-2'
     assert hosted.alternative('abcdefghijklmnopqr', 10) == 'abcdefghijklmno-10'
-    alice, bob2 = SimpleNamespace(user_name='Alice'), SimpleNamespace(user_name='bob_2')
+    alice = SimpleNamespace(user_name='Alice', id=0, site_domain_id=hosted_world.author.site_domain_id)
+    bob2 = SimpleNamespace(user_name='bob_2', id=0, site_domain_id=hosted_world.author.site_domain_id)
     assert hosted.next_label(alice, 'alice') == 'alice-2' and hosted.next_label(alice, 'alice-2') == 'alice-3'
     assert hosted.next_label(bob2, 'bob-2') == 'bob-2-2'   # a name that ends in a number keeps it
     assert hosted.next_label(alice, 'someone') == 'alice-2'
@@ -177,7 +178,7 @@ def test_the_next_label_to_offer():
 
 
 def test_a_member_may_have_only_their_own_name(hosted_world):
-    alice = SimpleNamespace(user_name='Alice_Smith')
+    alice = SimpleNamespace(user_name='Alice_Smith', id=0, site_domain_id=hosted_world.author.site_domain_id)
     assert hosted.own_label(alice) == hosted.own_label(alice, '  ') == 'alice-smith'
     assert hosted.own_label(alice, 'Alice-Smith-7') == 'alice-smith-7'
     for taken in ('admin', 'bob', 'alice-smith-1', 'alice-smith-100', 'alice-smith-x', 'xalice-smith-2'):
@@ -671,3 +672,26 @@ def test_what_counts_as_a_handle_refusal(hosted_world):
     assert not hosted._handle_refused(answer(400, {'error': 'InvalidInviteCode'}))
     assert not hosted._handle_refused(answer(400, 'not json'))
     assert not hosted._handle_refused(answer(500, {'error': 'HandleNotAvailable'}))
+
+
+def test_another_members_own_name_is_not_an_alternative(hosted_world):
+    bob, bob_2 = a_member('bob'), a_member('bob_2')
+    a_member('bob_3')
+    with pytest.raises(hosted.HandleRefused) as refused:
+        hosted.own_label(bob, 'bob-2')
+    assert refused.value.suggestion == 'bob-4'   # bob-2 and bob-3 are bob_2's and bob_3's own
+    assert hosted.own_label(bob_2) == 'bob-2' and hosted.next_label(bob, 'bob') == 'bob-4'
+    assert hosted.own_label(bob, 'bob-4') == 'bob-4'
+
+
+def test_a_name_another_member_shares_is_first_come(hosted_world):
+    first, second = a_member('ann_lee'), a_member('ann-lee')
+    assert hosted.own_label(first) == hosted.own_label(second) == 'ann-lee'   # the PDS gives it to one of them
+    assert hosted.belongs_to_another(first, 'ann-lee')
+
+
+def test_a_grant_checks_the_stored_label_again(hosted_world):
+    row = a_hosted(hosted_world, a_member('waiter'), state=hosted.WAITING)
+    row.sealed_tokens = seal_tokens({'label': 'admin'})
+    db.session.commit()
+    assert hosted.grant(row) and row.remote_name == f'waiter.{hosted_world.home}'

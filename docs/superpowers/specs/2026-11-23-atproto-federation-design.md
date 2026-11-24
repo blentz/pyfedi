@@ -43,7 +43,8 @@ Owner rulings, 2026-11-23:
   connections only receive copies, as in CA today.
 - **A9 (O5) Seamless handles.** The handle is derived without asking. `_` becomes `-`. A member may have only their
   own name or one of its numbered alternatives (`alice`, `alice-2` … `alice-99`), never another member's or the
-  site's. On a collision or an invalid
+  site's. An alternative that is another member's own name (`bob-2` is `bob_2`'s) is skipped; two names that clean
+  up alike (`ann_lee`, `ann-lee`) share the base, first come. On a collision or an invalid
   label, PieFed offers one pre-filled alternative (`alice-2`) that the member can accept with one click. The goal
   is that creating an account is a single click.
 - **A10 (O6) The relay cap.** A waiting list and queuing, throttling, and selection by follower count (§9).

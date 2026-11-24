@@ -239,23 +239,35 @@ def number_of(base: str, label: str) -> int | None:
     return next((number for number in range(2, MAX_NUMBER + 1) if alternative(base, number) == label), None)
 
 
+def belongs_to_another(user, label: str) -> bool:
+    """Another member of the same home domain has `label` as their own name (bob_2's is `bob-2`): nobody else may
+    take it as a numbered alternative. Read on Create and rename only, so a plain scan of the domain's names."""
+    domain = User.site_domain_id.is_(None) if user.site_domain_id is None else User.site_domain_id == user.site_domain_id
+    names = db.session.query(User.user_name).filter(User.ap_id.is_(None), User.id != user.id, domain)
+    return any(label_of(name) == label for (name,) in names)
+
+
 def own_label(user, wanted: str | None = None) -> str:
-    """The label a member may have: their own name as a label, or one of its numbered alternatives (A9). Nobody may
-    take another member's name, or a name of the site's: HandleRefused offers their own."""
+    """The label a member may have: their own name as a label, or one of its numbered alternatives (A9) that is not
+    another member's own name. Nobody may take another member's name, or a name of the site's: HandleRefused offers
+    one of their own."""
     base = label_of(user.user_name)
     wanted = (wanted or '').strip().lower() or base
     if number_of(base, wanted) is None:
         raise HandleRefused(_('A Bluesky handle here is your own name.'), base)
+    if wanted != base and belongs_to_another(user, wanted):
+        raise HandleRefused(_("@%(handle)s is another member's name.", handle=handle_of(user, wanted)),
+                            next_label(user, wanted))
     return wanted
 
 
 def next_label(user, label: str) -> str:
-    """The member's next own label after `label`."""
+    """The member's next own label after `label`, past any that is another member's own name."""
     base = label_of(user.user_name)
-    number = (number_of(base, label) or 1) + 1
-    if number > MAX_NUMBER:
-        raise HandleRefused(_('No handle of your name is free.'), base)
-    return alternative(base, number)
+    for number in range((number_of(base, label) or 1) + 1, MAX_NUMBER + 1):
+        if not belongs_to_another(user, alternative(base, number)):
+            return alternative(base, number)
+    raise HandleRefused(_('No handle of your name is free.'), base)
 
 
 def handle_of(user, label: str) -> str:
@@ -399,7 +411,10 @@ def grant(connection: SocialConnection) -> bool:
             tokens = sign_in(connection.remote_id, open_tokens(connection)['password'])
             HostedSession(tokens).xrpc('POST', 'com.atproto.server.activateAccount')
         else:
-            label = open_tokens(connection).get('label') or own_label(connection.user)
+            try:   # checked again: the label a row was stored with may no longer be this member's to have
+                label = own_label(connection.user, open_tokens(connection).get('label'))
+            except HandleRefused as refused:
+                label = refused.suggestion
             for _attempt in range(5):
                 try:
                     tokens = create_account(connection.user, label)
