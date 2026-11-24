@@ -2425,6 +2425,7 @@ class User(UserMixin, db.Model):
     post_count = db.Column(db.Integer, default=0)
     post_reply_count = db.Column(db.Integer, default=0)
     site_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id'))  # the hosted domain it belongs to; NULL for remote rows
+    requires_login = db.Column(db.Boolean, nullable=False, default=False, server_default='false')  # an ATProto account that asks to be shown to signed-in readers only (!no-unauthenticated)
     stripe_customer_id = db.Column(db.String(50))
     stripe_subscription_id = db.Column(db.String(50))
     donor_until = db.Column(db.DateTime)   # app/payments/core.py keeps this; DONOR_WHILE_SUBSCRIBED while subscribed

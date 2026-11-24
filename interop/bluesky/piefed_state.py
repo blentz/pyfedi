@@ -5,7 +5,7 @@
 # accounts PieFed made from the PDS.
 from app import cache, db
 from app.connections import bluesky_hosted, setting_name
-from app.models import Site, SocialConnection, SocialCrosspost
+from app.models import AtprotoCursor, Site, SocialConnection, SocialCrosspost, User, UserFollower
 from app.utils import get_site_as_dict, set_setting
 
 on = STATE == 'on'   # noqa: F821  (run.sh prepends it)
@@ -15,6 +15,9 @@ SocialCrosspost.query.delete()
 for hosted_row in bluesky_hosted.hosted_rows().all():   # the PDS keeps accounts between runs: those PieFed made go
     bluesky_hosted.delete_account(hosted_row)
 SocialConnection.query.delete()
+atproto_users = db.session.query(User.id).filter(User.ap_domain == 'bsky.app')   # what a stopped run left followed
+UserFollower.query.filter(UserFollower.remote_user_id.in_(atproto_users)).delete(synchronize_session=False)
+AtprotoCursor.query.delete()   # the run's Jetstream is a new one, whose numbers start again
 db.session.commit()
 cache.delete_memoized(get_site_as_dict)   # as the admin pages do: requests read the site through a 60 s cache
 set_setting(setting_name('bluesky'), on)

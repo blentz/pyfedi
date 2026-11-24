@@ -6,6 +6,7 @@ from flask_login import current_user
 from sqlalchemy import text
 
 from app import db, cache, plugins
+from app.atproto import actors as atproto_actors
 from app.constants import *
 from app.local_only import REMOTE_CONTACT_REFUSAL, found_here, hidden_here, refuses_remote_contact
 from app.onion import has_real_ip
@@ -264,7 +265,8 @@ def follow_user_as(user: User, to_follow: User):
 
     # R265: pending is None, as the column says -- a remote follow until its Accept arrives, or a manual approval
     is_accepted = None
-    if to_follow.is_local() and to_follow.ap_manually_approves_followers is not True:
+    atproto = atproto_actors.is_atproto(to_follow)   # A6: a Bluesky follow is accepted here at once, and sends nothing
+    if atproto or (to_follow.is_local() and to_follow.ap_manually_approves_followers is not True):
         is_accepted = True
         user.num_following += 1
         to_follow.num_followers += 1
@@ -298,6 +300,8 @@ def follow_user_as(user: User, to_follow: User):
         to_follow.unread_notifications += 1
         db.session.commit()
 
+    elif atproto:
+        atproto_actors.followed(user.id, follow_id)
     else:
         task_selector('follow_user', to_follow_id=follow_id, user_id=user.id)
 
@@ -325,7 +329,9 @@ def unfollow_user_as(user: User, to_unfollow: User):
         to_unfollow.num_followers -= 1
     db.session.commit()
 
-    if not to_unfollow.is_local():
+    if atproto_actors.is_atproto(to_unfollow):
+        pass   # A6: nothing was sent, so nothing is undone
+    elif not to_unfollow.is_local():
         task_selector('unfollow_user', to_follow_id=follow_id, user_id=user.id)
     else:
         db.session.execute(text(

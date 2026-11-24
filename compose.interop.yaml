@@ -206,6 +206,19 @@ services:
     volumes: *piefed-volumes
     depends_on: [piefed-web]
 
+  # the Jetstream consumer (ATProto P3), as a deployment runs it: follows jetstream.test for what members follow
+  piefed-jetstream:
+    <<: *trust
+    environment:
+      DATABASE_URL: postgresql+psycopg2://piefed:piefed@piefed-db/piefed   # not in .env.interop: Mastodon reads DATABASE_URL too
+      ATPROTO_JETSTREAM_URL: wss://jetstream.test/xrpc/network.bsky.jetstream.subscribeEvents
+      ATPROTO_JETSTREAM_RECHECK: "2"   # a follow made by a test is in the filter within seconds
+    image: localhost/piefed-interop:latest
+    entrypoint: ["/trust_ca.sh", "/usr/bin/tini", "--", "/app/entrypoint_jetstream.sh"]   # tini: PID 1 passes SIGTERM on
+    volumes: *piefed-volumes
+    depends_on: [piefed-web]
+    profiles: [bluesky]
+
   mastodon-db:
     image: docker.io/library/postgres:17.11@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
     environment: {POSTGRES_USER: mastodon, POSTGRES_PASSWORD: mastodon, POSTGRES_DB: mastodon}

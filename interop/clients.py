@@ -22,6 +22,18 @@ def wait_for(fn, timeout=30.0, interval=0.5):
         time.sleep(interval)
 
 
+def goto(page, url: str, tries: int = 3):
+    """page.goto, again after a moment when the harness's network changed under the browser (a container coming up
+    or going: Chromium's net::ERR_NETWORK_CHANGED). Any other failure is raised at once."""
+    for attempt in range(tries):
+        try:
+            return page.goto(url)
+        except Exception as failure:
+            if 'ERR_NETWORK_CHANGED' not in str(failure) or attempt == tries - 1:
+                raise
+            time.sleep(2)
+
+
 def tokens() -> dict:
     with open(os.path.join(os.path.dirname(__file__), '.tokens.json')) as f:
         return json.load(f)

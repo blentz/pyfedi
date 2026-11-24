@@ -1,15 +1,14 @@
 """Identity: a handle to its DID, a DID to its document, a document to its PDS and handle (spec §4)."""
-import re
 from urllib.parse import urlencode
 
 from flask import current_app
 from flask_babel import _
 
+from app.atproto.names import HANDLE  # noqa: F401 (re-exported)
 from app.connections import Permanent, ServiceError
 from app.connections.http import call
 
 DEFAULT_SERVER = 'https://bsky.social'
-HANDLE = re.compile(r'([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?')   # used with fullmatch
 DOCUMENT_BYTES = 64_000     # an identity document from a server someone named: small, or refused
 
 

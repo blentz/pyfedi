@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import object_session as sa_object_session
 
 from app import db, cache, celery, plugins
+from app.atproto import actors as atproto_actors
 from app.custom_themes import federated_theme, received_theme
 from app.activitypub.signature import signed_get_capped, signed_get_request, send_post_request, default_context, RsaKeys
 from app.branding import own_value
@@ -1485,6 +1486,9 @@ def refresh_user_profile_task(user_id, activity_json=None):
     try:
         with patch_db_session(session):
             user: User = session.get(User, user_id)
+            if user is not None and atproto_actors.is_atproto(user):   # read from its PDS, never over ActivityPub
+                atproto_actors.refresh_task(user_id)
+                return
             if user and user.instance_id and user.instance.online():
                 if not activity_json:
                     try:

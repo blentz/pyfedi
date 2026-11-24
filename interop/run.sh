@@ -244,6 +244,10 @@ bluesky() {
     start_plc
     wait_http piefed-web https://plc.test/_health
     wait_http piefed-web https://pds.test/xrpc/_health
+    # Jetstream over the PDS, and PieFed's consumer of it (ATProto P3): a fresh one each run. Started before the tests,
+    # since a container coming up changes the network under the browser (net::ERR_NETWORK_CHANGED)
+    $COMPOSE --profile bluesky up -d --force-recreate --no-deps jetstream piefed-jetstream
+    sleep 5
     bluesky_state on
     trap 'bluesky_state off' EXIT
     $COMPOSE --profile bluesky run --rm --name bluesky-runner bluesky-runner \

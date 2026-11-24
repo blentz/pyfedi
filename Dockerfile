@@ -89,7 +89,7 @@ WORKDIR /app
 # As the owner of /app: root writing into files python owns would need CAP_DAC_OVERRIDE (see builder above).
 USER python
 RUN (pybabel compile -d app/translations || true) && \
-    chmod u+x ./entrypoint.sh ./entrypoint_celery.sh ./entrypoint_async.sh
+    chmod u+x ./entrypoint.sh ./entrypoint_celery.sh ./entrypoint_async.sh ./entrypoint_jetstream.sh
 
 EXPOSE 5000
 ENV CRON="false"

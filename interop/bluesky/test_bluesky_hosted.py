@@ -9,7 +9,7 @@ import httpx
 import pytest
 from playwright.sync_api import sync_playwright
 
-from interop.clients import CA, PieFed, wait_for
+from interop.clients import CA, PieFed, goto, wait_for
 
 PDS = 'https://pds.test'
 PLC = 'https://plc.test'
@@ -32,7 +32,7 @@ def browser():
 def signed_in(browser, host, user, password):
     page = browser.new_context(ignore_https_errors=True).new_page()
     page.on('dialog', lambda dialog: dialog.accept())   # Delete asks first (confirm_first)
-    page.goto(f'https://{host}/auth/login')
+    goto(page, f'https://{host}/auth/login')
     page.fill('input[name=user_name]', user)
     page.fill('input[name=password]', password)
     page.click('input[type=submit], button[type=submit]')

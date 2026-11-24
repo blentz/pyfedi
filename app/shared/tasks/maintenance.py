@@ -8,7 +8,7 @@ import httpx
 import boto3
 import orjson
 from flask import current_app
-from sqlalchemy import text, select, func
+from sqlalchemy import text, select, func, or_
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import celery, cache
@@ -620,7 +620,8 @@ def monitor_healthy_instances():
         instances = session.query(Instance).filter(
             Instance.gone_forever == False,
             Instance.dormant == False,
-            Instance.id.not_in(hosted_instance_ids())
+            Instance.id.not_in(hosted_instance_ids()),
+            or_(Instance.software.is_(None), Instance.software != 'atproto')   # no nodeinfo: ATProto, spec 2026-11-23
         ).all()
 
         for instance in instances:

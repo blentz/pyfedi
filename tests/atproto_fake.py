@@ -9,13 +9,25 @@ import httpx
 import jwt
 
 PDS = 'https://pds.example'
+PLC = 'https://plc.example'
 ADMIN_PASSWORD = 'pds-admin'
 _numbers = itertools.count(1)
+BASE32 = 'abcdefghijklmnopqrstuvwxyz234567'
+PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=')
+
+
+def new_did() -> str:
+    """A did:plc of the real shape: 24 characters of base32."""
+    number, chars = next(_numbers) + 10_000, []
+    for _place in range(24):
+        number, digit = divmod(number, 32)
+        chars.append(BASE32[digit])
+    return 'did:plc:' + ''.join(reversed(chars))
 
 
 class FakePDS:
     def __init__(self, router, domains: list[str], invite: bool = False):
-        self.domains, self.invite = domains, invite
+        self.domains, self.invite, self.router = domains, invite, router
         self.accounts: dict[str, dict] = {}     # did -> handle, password, active
         self.sessions: dict[str, str] = {}      # access or refresh token -> did
         self.records: dict[str, dict] = {}      # at:// uri -> record
@@ -25,12 +37,27 @@ class FakePDS:
         self.requests: list[httpx.Request] = []
         self.fail: dict[str, httpx.Response] = {}   # nsid -> the answer it gives instead, once
         router.route(host='pds.example').mock(side_effect=self._handle)
+        router.route(host='plc.example').mock(side_effect=self._plc)
 
     # ------------------------------------------------------------------
     def account(self, handle: str, password: str = 'pw', active: bool = True) -> str:
-        did = f'did:plc:fake{next(_numbers)}'
+        did = new_did()
         self.accounts[did] = {'handle': handle, 'password': password, 'active': active}
         return did
+
+    def put(self, did: str, collection: str, rkey: str, record: dict) -> str:
+        """A record in an account's repo, as if its owner wrote it elsewhere: its at:// URI."""
+        uri = f'at://{did}/{collection}/{rkey}'
+        self.records[uri] = record
+        return uri
+
+    def _plc(self, request: httpx.Request) -> httpx.Response:
+        did = request.url.path.lstrip('/')
+        if did not in self.accounts:
+            return httpx.Response(404, json={'message': 'DID not registered'})
+        return httpx.Response(200, json={'id': did, 'alsoKnownAs': [f"at://{self.accounts[did]['handle']}"],
+                                         'service': [{'id': '#atproto_pds', 'type': 'AtprotoPersonalDataServer',
+                                                      'serviceEndpoint': PDS}]})
 
     def session(self, did: str, lifetime: int = 7200) -> dict:
         number = next(_numbers)
@@ -186,6 +213,23 @@ class FakePDS:
             return refused
         self.records.pop(uri, None)
         return httpx.Response(200)
+
+    def _com_atproto_repo_listRecords(self, request, body):
+        params = request.url.params
+        prefix = f"at://{params['repo']}/{params['collection']}/"
+        found = [{'uri': uri, 'cid': 'bafyl', 'value': value} for uri, value in sorted(self.records.items(), reverse=True)
+                 if uri.startswith(prefix)][:int(params.get('limit', 50))]
+        return httpx.Response(200, json={'records': found})
+
+    def _com_atproto_sync_getBlob(self, request, body):
+        return httpx.Response(200, content=PNG, headers={'Content-Type': 'image/png'})
+
+    def _com_atproto_identity_resolveHandle(self, request, body):
+        handle = request.url.params.get('handle')
+        did = next((did for did, account in self.accounts.items() if account['handle'] == handle), None)
+        if did is None:
+            return self._error(400, 'InvalidRequest', 'Unable to resolve handle')
+        return httpx.Response(200, json={'did': did})
 
     def _com_atproto_repo_getRecord(self, request, body):
         params = request.url.params

@@ -344,7 +344,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 48 | `d4f8a2c6e1b9` social_connections | Adds the `social_connection` and `social_crosspost` tables: members' connected accounts (tokens sealed) and each post's copies on them. (`83aa1637`) | No |
 | 49 | `e6a2c9d4f8b1` connection_apps | Creates `connection_app` (a domain's own Meta, Instagram, Google and Bluesky app credentials, secrets sealed) and adds `app_domain_id` and `app_client_id` to `social_connection`: the app each connection was made with. (`a960a103`) | No |
 | 50 | `f3b7d1a9c5e2` crosspost_progress | Adds `progress` (JSON) to `social_crosspost`, what a copy's sending did so far, and widens its `state` to 20 characters for `unconfirmed`. The downgrade turns unconfirmed copies into failed ones. | No |
-| 51 | `a95a82e17b01` atproto_groundwork | Adds `is_identity` (one per member, a partial unique index), `import_own`, `slot_state` and `slot_pinned` to `social_connection` and marks every Bluesky connection and copy `oauth`; adds `post.requires_login` (NOT NULL, default false); creates `atproto_record` (ATProto records that are not post copies) and `atproto_cursor` (the Jetstream position). The downgrade deletes hosted Bluesky connections. | No |
+| 51 | `a95a82e17b01` atproto_groundwork | Adds `is_identity` (one per member, a partial unique index), `import_own`, `slot_state` and `slot_pinned` to `social_connection` and marks every Bluesky connection and copy `oauth`; adds `post.requires_login` and `user.requires_login` (NOT NULL, default false); creates `atproto_record` (ATProto records that are not post copies) and `atproto_cursor` (the Jetstream position). The downgrade deletes hosted Bluesky connections. | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -382,6 +382,7 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `ATPROTO_PDS_URL`, `ATPROTO_PDS_ADMIN_PASSWORD` | empty | The Bluesky PDS run beside PieFed, on which members create accounts, and its admin password. Each domain offering handles needs wildcard DNS and TLS with `/.well-known/atproto-did` on `*.<domain>` sent to the PDS, and the PDS lists it in `PDS_SERVICE_HANDLE_DOMAINS`. Leave the PDS's email settings unset. |
 | `ATPROTO_MAX_ACCOUNTS`, `ATPROTO_HOSTED_LIMIT` | `100`, `100` | Accounts active at once, and accounts the PDS holds at all (turned off ones count): Bluesky's relay takes 100 from a new PDS until asked for more. Past either, members wait. |
 | `ATPROTO_SLOT_POLICY` | `sticky` | `sticky`: a place is kept until 90 days pass with no copy, then the account is turned off. `ranked`: the top accounts by followers keep places, recomputed daily. |
+| `ATPROTO_JETSTREAM_URL`, `ATPROTO_JETSTREAM_RECHECK` | Bluesky's us-east Jetstream v2, `60` | The Jetstream `flask atproto-jetstream` follows, and how often (seconds) it looks again at who is followed. |
 | `ATPROTO_BUDGET_SECOND`, `ATPROTO_BUDGET_HOUR`, `ATPROTO_BUDGET_DAY` | `40`, `2000`, `18000` | Writes the PDS makes, under the relay's 50 a second, 2,600 an hour and 21,000 a day. |
 | `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` | empty | A Meta app with Facebook Login for Business and the Page permissions (`pages_show_list`, `pages_manage_posts`, `pages_read_engagement`), which need Meta's App Review and Business Verification before members outside the app's own roles can connect. Its redirect is `https://<SERVER_NAME>/user/settings/connections/facebook/callback`. (`23529744`) |
 | `FACEBOOK_GRAPH_VERSION` | `v27.0` | The Graph API version PieFed calls; raise it when Meta retires this one. (`23529744`) |
@@ -2007,6 +2008,13 @@ commit each:
   Connected accounts. Every write from the PDS takes its turn in a budget kept under the
   relay's event limits, deletes first and backfill last. Spec
   `docs/superpowers/specs/2026-11-23-atproto-federation-design.md` (rulings A1 to A10).
+- **Bluesky into PieFed.** A member follows a Bluesky account by its handle or DID (`/u/alice.bsky.social`); the follow
+  is accepted at once and sends nothing, and the account's latest 20 posts are read from its server. From then on its
+  posts arrive in the microblogs, its replies under the posts they answer (missing parents are fetched toward the root),
+  its reposts as boosts, and its deletes delete, through Jetstream: `flask atproto-jetstream`
+  (`entrypoint_jetstream.sh`), a long-lived service of its own, hands each event to Celery. Self-labels mark posts
+  NSFW or NSFL, and an account or post that asks to be hidden from logged-out readers is. Bluesky accounts are remote
+  users on the `bsky.app` instance, so blocking that instance blocks the network.
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:

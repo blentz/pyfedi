@@ -30,6 +30,7 @@ Pillow
 pillow-heif
 feedgen==1.0.0
 celery==5.6.3
+websockets==17.4   # the Jetstream consumer (app/atproto/jetstream.py)
 redis~=6.4.0
 Werkzeug==3.1.9
 pytesseract==0.3.13

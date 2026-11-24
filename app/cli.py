@@ -87,6 +87,7 @@ from app.local_names import local_named
 from app.local_only import restamp_notifications, without_local_only
 from app.storefront import clear_domain_cache, default_domain, domain_base_url, home_storefront, hosted_instance_ids, \
     instance_id_of, normalise_host
+from app.atproto.jetstream import register_commands as register_atproto_commands
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
 from app.cms_cli import register_cms_commands
@@ -113,6 +114,7 @@ def register(app):
     register_cms_commands(app)   # fork: flask cms export / import
     register_theme_commands(app)   # fork: flask themes import
     register_discovery_commands(app)   # fork (interop D24): flask refresh_discovery
+    register_atproto_commands(app)   # fork (ATProto spec 2026-11-23): flask atproto-jetstream
 
     @app.cli.group()
     def translate():

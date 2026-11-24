@@ -17,7 +17,7 @@ from app.constants import COMMUNITY_KIND_MICROBLOGS
 from app.models import SocialConnection, UserFollower
 from app.sealing import generate_key
 from app.utils import set_setting
-from tests.atproto_fake import ADMIN_PASSWORD, PDS, FakePDS
+from tests.atproto_fake import ADMIN_PASSWORD, PDS, PLC, FakePDS
 from tests.factories import make_community, make_post, make_user
 from tests.test_community_add_post import instance
 
@@ -91,3 +91,17 @@ def follow(user, count: int):
         db.session.add(UserFollower(local_user_id=user.id, remote_user_id=follower.id, is_accepted=True,
                                     is_inward=True))
     db.session.commit()
+
+
+@pytest.fixture
+def inbound(hosted_world, monkeypatch):
+    """hosted_world with Bluesky's directory and resolver on the fake PDS, and bob, an account there someone could
+    follow (a handle answering no well-known: it resolves through the resolver)."""
+    monkeypatch.setitem(hosted_world.app.config, 'BLUESKY_PLC_URL', PLC)
+    monkeypatch.setitem(hosted_world.app.config, 'BLUESKY_RESOLVER', PDS)
+    hosted_world.pds.router.route(path='/.well-known/atproto-did').respond(404)
+    hosted_world.bob = hosted_world.pds.account('bob.bsky.example')
+    hosted_world.pds.put(hosted_world.bob, 'app.bsky.actor.profile', 'self', {
+        '$type': 'app.bsky.actor.profile', 'displayName': 'Bob', 'description': 'I *post* here',
+        'avatar': {'$type': 'blob', 'ref': {'$link': 'bafkavatar'}, 'mimeType': 'image/png', 'size': 9}})
+    return hosted_world

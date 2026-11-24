@@ -102,8 +102,8 @@ Owner rulings, 2026-11-23:
 - **Refactor, not fork.** `resolve_handle`, `did_document`, `pds_of`, `facets`, `compose`, `labels`,
   `build_record` and `upload_video` move from `app/connections/bluesky.py` into `app/atproto/`. CA's Bluesky becomes
   one user of them (its tests import them from there).
-- **Dispatch seam.** ATProto actors are remote `User`s on one pseudo instance (`software = 'atproto'`, domain
-  `atproto`). Outbound paths that already branch on `instance.software` (follows, votes, replies, boosts, blocks)
+- **Dispatch seam.** ATProto actors are remote `User`s on one instance (`software = 'atproto'`, domain
+  `bsky.app`). Outbound paths that already branch on `instance.software` (follows, votes, replies, boosts, blocks)
   gain an `atproto` arm that writes through the acting member's identity. Blocking the `atproto` instance blocks the
   whole network, using the existing tools.
 - **The consumer** is `flask atproto jetstream`, one process per deployment, run as its own service. It hands
@@ -133,9 +133,12 @@ Owner rulings, 2026-11-23:
   collection, rkey, direction (`out|in`), connection_id (out), post_id, post_reply_id, user_id (the followed or
   blocked user), vote_kind, created_at. A write whose row exists is not sent again (CA C13 Q1). An inbound record
   whose uri is a row of ours (or a crosspost's `remote_id`) is our own echo, and is skipped (A7 loop guard).
-- Remote ATProto actors are `User`s with `ap_profile_id = at://<did>`, `ap_id = <handle>`, the `atproto` instance,
-  and `ap_inbox_url` NULL. Inbound posts and replies use their at-uri as `ap_id`.
-- `atproto_cursor` is one row holding the Jetstream `seq`, written at most every few seconds.
+- Remote ATProto actors are `User`s with `ap_profile_id = ap_public_url = https://bsky.app/profile/<did>`, `ap_id =
+  user_name = <handle>`, the `bsky.app` instance, and `ap_inbox_url` NULL. Inbound posts and replies use their bsky.app
+  address (`https://bsky.app/profile/<did>/post/<rkey>`) as `ap_id`, since PieFed keeps only http(s) ids (D1406);
+  `atproto_record` keeps the at:// URI. `user.requires_login` carries an account's `!no-unauthenticated`.
+- `atproto_cursor` holds the Jetstream `seq`, written at most every few seconds: one row per Jetstream URL (its id
+  is the URL's CRC-32), since each Jetstream numbers its own events.
 
 ## 6. Outbound
 
@@ -178,10 +181,12 @@ to a PDS, and `app.bsky.actor.profile/self` is read from that PDS. That gives a 
 DID to the consumer filter and backfills that actor's last 20 posts with `listRecords`. Read-only follows (A6) are
 recorded locally only.
 
-**The consumer** subscribes to the collections `app.bsky.feed.post`, `feed.repost`, `feed.like`, `actor.profile`
+**The consumer** (`flask atproto-jetstream`, `entrypoint_jetstream.sh`) subscribes to the collections `app.bsky.feed.post`, `feed.repost`, `feed.like`, `actor.profile`
 and `graph.follow`, plus `identity` and `account` events. Its DIDs are every ATProto actor with a local follower,
 plus every identity's DID (for A7 imports and for follows of our members). When that set changes, it reconnects
-with the new filter, at most once a minute. Each socket carries at most 5,000 DIDs, and more DIDs mean more sockets.
+with the new filter, at most once a minute (`ATPROTO_JETSTREAM_RECHECK`), and reads the latest posts of any actor that
+joined it (what it wrote between the follow and its socket opening, when there is no cursor to replay it). Each event
+goes to a Celery task (`app.atproto.ingest.event_task`), which both worker entry points import. Each socket carries at most 5,000 DIDs, and more DIDs mean more sockets.
 The filter travels in the URL: Jetstream's cap is 10,000 query parameters, DIDs and collections together, and the
 harness took 9,000 DIDs (a 342 KB URL). 5,000 leaves headroom for proxies in front of a public endpoint (§16).
 
@@ -189,7 +194,7 @@ harness took 9,000 DIDs (a 342 KB URL). 5,000 leaves headroom for proxies in fro
 |---|---|
 | post, no reply | A post in the local microblogs community, by the remote `User` (the ActivityPub `Note` path, `find_microblogging_community`). Blobs are fetched from the author's PDS and stored like remote media. Facets become links and mentions. |
 | post with `reply` | A `PostReply` under its parent. An unknown parent is fetched (`getRecord`) toward the root, at most 20 hops. |
-| post embedding a record | A quote post (spec 2026-10-12 c2) |
+| post embedding a record | A link to the quoted post after the text (P3); a quote post (spec 2026-10-12 c2) in P4 |
 | repost | A `PostBoost` (spec 2026-08-23) |
 | like of one of our records | An upvote. Other likes are dropped. |
 | follow of one of our identities | A follower row. Bluesky follows need no approval, but the member sees the follower. |
@@ -292,8 +297,10 @@ viewers. Remote content blocklists and blocked phrases apply as usual.
 - **P2 hosted accounts.** Create, sessions, profile, handles (A9), slots, waiting list, selection, budget,
   deactivate/reactivate/delete, rename, app passwords, admin and domain switches. Copies through the hosted variant,
   and backfill.
-- **P3 inbound.** Handle lookup, remote `User`s, the consumer service, posts, reposts and replies into feeds,
-  read-only follows, labels, `requires_login`.
+- **P3 inbound (done 2026-11-24).** Handle lookup (`/u/<handle>`, `/u/<did>`), remote `User`s, the consumer service,
+  posts, reposts, replies and deletes into feeds, profile and handle updates, read-only follows with a backfill of
+  20, labels, `requires_login`. Likes, follows of our identities, quotes as quote posts and notifications are P4;
+  `account` events and A7 imports P5.
 - **P4 identity interactions** for both variants: replies, likes, reposts, quotes, follows and blocks out;
   notifications in; the inline opt-in sheet; the OAuth identity re-consent.
 - **P5 lifecycle and moderation.** `identity` and `account` events, takedowns, instance block, A7 imports, moves.
@@ -309,7 +316,8 @@ viewers. Remote content blocklists and blocked phrases apply as usual.
 
 A deployment that enables hosted accounts runs the PDS image beside PieFed. Each domain offering handles needs a
 wildcard DNS record, plus wildcard or on-demand TLS, with `/.well-known/atproto-did` on `*.<domain>` routed to the
-PDS. It also runs `flask atproto jetstream` as a long-lived service. `env.sample` documents the settings in §10.
+PDS. It also runs `flask atproto-jetstream` (`entrypoint_jetstream.sh`) as a long-lived service, under an init that
+passes SIGTERM on (`tini`). `env.sample` documents the settings in §10.
 
 ## 15. Sources (read 2026-11-23)
 

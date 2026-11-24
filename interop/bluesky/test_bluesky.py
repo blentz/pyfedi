@@ -8,7 +8,7 @@ import httpx
 import pytest
 from playwright.sync_api import sync_playwright
 
-from interop.clients import CA, PieFed, wait_for
+from interop.clients import CA, PieFed, goto, wait_for
 
 PDS = 'https://pds.test'
 HANDLE = 'alice.pds.test'
@@ -48,7 +48,7 @@ def browser_page():
 
 
 def sign_in_to_piefed(page):
-    page.goto(f'{PIEFED}/auth/login')
+    goto(page, f'{PIEFED}/auth/login')
     page.fill('input[name=user_name]', 'alice')
     page.fill('input[name=password]', 'interop-alice-pw')
     page.click('input[type=submit], button[type=submit]')

@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import desc, or_, text, func, select, union_all, literal_column
 
 from app import db, cache, celery, limiter
+from app.atproto import actors as atproto_actors
 from app.activitypub import bp
 from app.onion import apply_audit, audit_field, is_onion_request
 from app.project_links import project_links
@@ -664,11 +665,14 @@ def resolve_remote_handle(actor: str):
     search_for_user() raises for a banned instance rather than returning None
     (app/user/utils.py), so the caller falls through to its existing 404.
     """
-    if '@' not in actor:
-        return None
-    if not current_user.is_authenticated:
-        return None
     if is_activitypub_request():
+        return None
+    if '@' not in actor:   # an ATProto handle or DID: one stored for anyone, one looked up for a signed-in reader
+        try:
+            return atproto_actors.find(actor, fetch_new=current_user.is_authenticated)
+        except Exception:
+            return None
+    if not current_user.is_authenticated:
         return None
     try:
         return search_for_user(actor)

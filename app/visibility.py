@@ -15,7 +15,7 @@ from sqlalchemy.orm import aliased
 
 from app import db
 from app.constants import POST_STATUS_PUBLISHED, VISIBILITY_FOLLOWERS, VISIBILITY_PUBLIC, VISIBILITY_UNLISTED
-from app.local_only import hidden_here, hidden_here_clause, hides_nothing
+from app.local_only import hidden_here, hidden_here_clause, hides_nothing, requires_login
 from app.models import Community, Instance, ModLog, Post, PostReply, User, UserFollower
 from app.permissions import domain_clause
 from app.storefront import hosted_instance_ids
@@ -68,7 +68,7 @@ def can_view(obj, viewer_id: Optional[int]) -> bool:
     It knows nothing of storefronts, so it is not follow-up F6's rule: a notification it lets a task fan out may name
     a row that a storefront hides (`hidden_here`), and the page showing the notification asks that
     (app.hidden_routes.notification_hidden)."""
-    if obj.local_only and not viewer_id:
+    if (obj.local_only or requires_login(obj)) and not viewer_id:   # ATProto !no-unauthenticated (spec 2026-11-23)
         return False
     visibility = obj.visibility if obj.visibility is not None else VISIBILITY_PUBLIC
     if visibility in OPEN_VISIBILITIES:

@@ -7,6 +7,7 @@ from flask_babel import _
 from markupsafe import Markup, escape
 from sqlalchemy import and_, false, func, or_, select
 
+from app.atproto.names import DOMAIN as ATPROTO_DOMAIN, looks_atproto
 from app.models import Community, Post, PostReply, User
 from app import db
 from app.constants import AUTOMATED_REPORTER
@@ -51,8 +52,14 @@ def named_by_actor(model, actor: str):
     """The clause for the row an `<actor>` path segment names: the local one `local_clause` finds, else, for a handle
     on a domain this site does not host, the remote row whose `ap_id` it is. Anything else names nothing."""
     split = split_local_name(actor)
+    atproto = looks_atproto(actor) if model is User else None   # an ATProto handle or DID (spec 2026-11-23 §4)
     if split is not None:
-        return local_named(model, *split)
+        local = local_named(model, *split)
+        if atproto is None:
+            return local
+        remote = User.ap_profile_id == f'https://{ATPROTO_DOMAIN}/profile/{atproto}' if atproto.startswith('did:') \
+            else and_(User.ap_id == atproto, User.ap_domain == ATPROTO_DOMAIN)
+        return or_(local, remote)
     return model.ap_id == actor if '@' in actor else false()
 
 

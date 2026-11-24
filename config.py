@@ -176,6 +176,10 @@ class Config(object):
     ATPROTO_BUDGET_SECOND = int(os.environ.get('ATPROTO_BUDGET_SECOND') or 40)
     ATPROTO_BUDGET_HOUR = int(os.environ.get('ATPROTO_BUDGET_HOUR') or 2000)
     ATPROTO_BUDGET_DAY = int(os.environ.get('ATPROTO_BUDGET_DAY') or 18000)
+    # the Jetstream (v2) `flask atproto-jetstream` follows for the ATProto accounts members follow
+    ATPROTO_JETSTREAM_URL = os.environ.get('ATPROTO_JETSTREAM_URL') or \
+        'wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents'
+    ATPROTO_JETSTREAM_RECHECK = int(os.environ.get('ATPROTO_JETSTREAM_RECHECK') or 60)   # seconds between looks at follows
     FACEBOOK_APP_ID = os.environ.get('FACEBOOK_APP_ID') or ''
     FACEBOOK_APP_SECRET = os.environ.get('FACEBOOK_APP_SECRET') or ''
     FACEBOOK_GRAPH_VERSION = os.environ.get('FACEBOOK_GRAPH_VERSION') or 'v27.0'
