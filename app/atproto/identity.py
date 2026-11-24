@@ -143,15 +143,15 @@ def wanted(user_id: int, kind: str, target_id: int):
             return None
         model = PostVote if kind == 'like_post' else PostBoost
         mine = model.query.filter_by(user_id=user_id, post_id=post.id)
-        if kind == 'like_post':
-            mine = mine.filter(PostVote.effect > 0)
+        if kind == 'like_post':   # a public upvote: a private one is never marked (`voted`)
+            mine = mine.filter(PostVote.effect > 0, PostVote.federated_like.is_(True))
         return post if mine.first() is not None else None
     if kind == 'like_reply':
         reply = db.session.get(PostReply, target_id)
         if reply is None or reply.deleted or not actors.is_atproto(reply.author):
             return None
         mine = PostReplyVote.query.filter(PostReplyVote.user_id == user_id, PostReplyVote.post_reply_id == reply.id,
-                                          PostReplyVote.effect > 0).first()
+                                          PostReplyVote.effect > 0, PostReplyVote.federated_like.is_(True)).first()
         return reply if mine is not None else None
     if kind == 'reply':
         reply = db.session.get(PostReply, target_id)
@@ -332,8 +332,17 @@ def involved(user_id: int) -> bool:
 
 
 def voted(user_id: int, item) -> None:
-    """The member voted on a post or reply (or took the vote back)."""
-    if actors.is_atproto(item.author) and involved(user_id):
+    """The member voted publicly on a post or reply (or took the vote back): only then is this called. A public
+    upvote is marked as one that may be told (`federated_like`), whether or not the member has an identity yet, so
+    a catch-up later sends it and never a private one."""
+    if not actors.is_atproto(item.author):
+        return
+    model, column = (PostReplyVote, PostReplyVote.post_reply_id) if isinstance(item, PostReply) else \
+        (PostVote, PostVote.post_id)
+    model.query.filter(model.user_id == user_id, column == item.id, model.effect > 0).update(
+        {'federated_like': True}, synchronize_session=False)
+    db.session.commit()
+    if involved(user_id):
         later(user_id, 'like_reply' if isinstance(item, PostReply) else 'like_post', item.id)
 
 
@@ -371,9 +380,11 @@ def caught_up(user_id: int) -> int:
         User, User.id == UserBlock.blocked_id).filter(UserBlock.blocker_id == user_id, domain)]
     work += [('like_post', post_id) for (post_id,) in db.session.query(PostVote.post_id).join(
         User, User.id == PostVote.author_id).filter(PostVote.user_id == user_id, PostVote.effect > 0,
-                                                    PostVote.created_at >= since, domain)]
+                                                    PostVote.federated_like.is_(True), PostVote.created_at >= since,
+                                                    domain)]
     work += [('like_reply', reply_id) for (reply_id,) in db.session.query(PostReplyVote.post_reply_id).join(
         User, User.id == PostReplyVote.author_id).filter(PostReplyVote.user_id == user_id, PostReplyVote.effect > 0,
+                                                         PostReplyVote.federated_like.is_(True),
                                                          PostReplyVote.created_at >= since, domain)]
     work += [('repost', post_id) for (post_id,) in db.session.query(PostBoost.post_id).join(
         Post, Post.id == PostBoost.post_id).join(User, User.id == Post.user_id).filter(

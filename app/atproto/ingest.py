@@ -32,10 +32,11 @@ from app.atproto import actors
 from app.atproto.resolve import did_document, pds_of
 from app.connections import ServiceError
 from app.connections.http import call
-from app.constants import NOTIF_FOLLOW
+from app.constants import NOTIF_FOLLOW, NOTIF_FOLLOW_REQUEST
+from app.local_only import refuses_remote_contact
 from app.models import AtprotoRecord, Notification, Post, PostReply, SocialConnection, SocialCrosspost, User, \
     UserFollower
-from app.utils import can_upvote, get_task_session, patch_db_session
+from app.utils import can_upvote, get_task_session, instance_banned, patch_db_session
 
 POST, REPOST = 'app.bsky.feed.post', 'app.bsky.feed.repost'
 LIKE, FOLLOW = 'app.bsky.feed.like', 'app.bsky.graph.follow'
@@ -359,8 +360,8 @@ def like(did: str, rkey: str, record: dict, cid=None):
 
 
 def follow(did: str, rkey: str, record: dict, cid=None) -> User | None:
-    """A follow of a member's Bluesky identity: the actor follows the member here (Bluesky follows need no
-    approval), and the member is told. The member followed, or None."""
+    """A follow of a member's Bluesky identity: the actor follows the member here, or asks to when the member
+    approves followers (Bluesky itself asks no one), and the member is told. The member followed, or None."""
     uri = f'at://{did}/{FOLLOW}/{rkey}'
     subject = (record or {}).get('subject') if isinstance(record, dict) else None
     if not isinstance(subject, str) or ours(uri) or ours_did(did) or AtprotoRecord.query.filter_by(uri=uri).first():
@@ -370,14 +371,18 @@ def follow(did: str, rkey: str, record: dict, cid=None) -> User | None:
     if member is None or member.deleted or member.banned:
         return None
     user = actors.actor_for(did)
-    if blocked(user) or member.has_blocked_user(user.id) or member.has_blocked_instance(user.instance_id):
+    if blocked(user) or member.has_blocked_user(user.id) or member.has_blocked_instance(user.instance_id) or \
+            instance_banned(user.instance.domain) or refuses_remote_contact(member, user):
         return None
     if UserFollower.query.filter_by(local_user_id=member.id, remote_user_id=user.id, is_inward=True).first() is None:
-        db.session.add(UserFollower(local_user_id=member.id, remote_user_id=user.id, is_accepted=True, is_inward=True))
-        db.session.add(Notification(title=_('You have a new follower'), url=f'/user/{user.id}', user_id=member.id,
-                                    author_id=user.id, notif_type=NOTIF_FOLLOW, subtype='new_follower',
-                                    targets={'gen': '0', 'author_id': user.id,
-                                             'author_user_name': user.stored_link()}))
+        approves = member.ap_manually_approves_followers is not False   # as an ActivityPub Follow is (None: asks)
+        db.session.add(UserFollower(local_user_id=member.id, remote_user_id=user.id, is_inward=True,
+                                    is_accepted=None if approves else True))
+        db.session.add(Notification(
+            title=_('Someone is requesting to follow you') if approves else _('You have a new follower'),
+            url='/user/follow_requests' if approves else f'/user/{user.id}', user_id=member.id, author_id=user.id,
+            notif_type=NOTIF_FOLLOW_REQUEST if approves else NOTIF_FOLLOW, subtype='new_follower',
+            targets={'gen': '0', 'author_id': user.id, 'author_user_name': user.stored_link()}))
         member.unread_notifications += 1
         db.session.commit()
     _keep(uri, cid, did, FOLLOW, user_id=member.id)

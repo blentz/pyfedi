@@ -7,6 +7,10 @@ which proxies `app.bsky.notification.listNotifications` to its AppView. Each not
 caused it, which goes through the same code as a Jetstream event (app.atproto.ingest): a record PieFed already has
 is made once, whichever way it came.
 
+A notification is only a pointer. Its answer comes from the member's own PDS, which for an OAuth account is any
+server the member chose, and could claim a record by anyone: so the record is read from its author's own PDS
+(found through the author's DID document), never taken from the notification.
+
 The newest `indexedAt` read is kept per connection in Redis, and a poll reads back to it, at most MAX_PAGES. A
 connection's first poll reads one page.
 """
@@ -16,9 +20,11 @@ import app as app_pkg
 from app import celery, db
 from app.atproto import ingest
 from app.atproto.identity import session_of
+from app.atproto.resolve import did_document, pds_of
 from app.connections import SERVICES, ServiceError
 from app.connections import bluesky_hosted as hosted
 from app.connections.bluesky import NOTIFY_SCOPE
+from app.connections.http import check, fetch
 from app.connections.tokens import REAUTH, usable_tokens
 from app.models import SocialConnection
 from app.utils import get_task_session, patch_db_session
@@ -37,16 +43,33 @@ def may_read(tokens: dict) -> bool:
     return tokens.get('kind') == hosted.HOSTED or NOTIFY_SCOPE in str(tokens.get('scope') or '').split()
 
 
+def authored(did: str, collection: str, rkey: str) -> tuple[dict, str | None] | None:
+    """The record as its author's own PDS has it, and its cid: None when it has none (deleted, or never made)."""
+    response = fetch('GET', f'{pds_of(did_document(did))}/xrpc/com.atproto.repo.getRecord',
+                     params={'repo': did, 'collection': collection, 'rkey': rkey})
+    if response.status_code == 400:   # RecordNotFound
+        return None
+    answer = check(response).json()
+    value = answer.get('value') if isinstance(answer, dict) else None
+    if not isinstance(value, dict) or answer.get('uri') != f'at://{did}/{collection}/{rkey}':
+        return None
+    cid = answer.get('cid')
+    return value, cid if isinstance(cid, str) else None
+
+
 def take(item) -> bool:
-    """One notification's record into PieFed. Whether it named one PieFed takes."""
+    """One notification's record into PieFed, read from its author's PDS. Whether it named one PieFed takes."""
     if not isinstance(item, dict) or not isinstance(item.get('uri'), str) or not item['uri'].startswith('at://'):
         return False
     parts = item['uri'].removeprefix('at://').split('/')
-    if len(parts) != 3 or parts[1] not in TAKES or not isinstance(item.get('record'), dict):
+    if len(parts) != 3 or parts[1] not in TAKES or not parts[0].startswith('did:'):
         return False
     did, collection, rkey = parts
     try:
-        TAKES[collection](did, rkey, item['record'], item.get('cid'))
+        found = authored(did, collection, rkey)
+        if found is None:   # its author has no such record: a notification that was wrong, or a deletion since
+            return False
+        TAKES[collection](did, rkey, *found)
     except ServiceError as failure:   # one record that cannot be read does not hold the others up
         current_app.logger.info(f'atproto: notification {item["uri"]} not taken: {failure.message}')
     return True

@@ -19,7 +19,7 @@ from app.connections import bluesky_hosted as hosted
 from app.connections.bluesky import OAuthSession
 from app.connections.tokens import seal_tokens
 from app.constants import SRC_API
-from app.models import AtprotoRecord, Language, PostReply, PostVote, SocialConnection, SocialCrosspost, UserBlock, \
+from app.models import AtprotoRecord, Language, Notification, PostReply, PostVote, SocialConnection, SocialCrosspost, UserBlock, \
     UserFollower
 from app.shared.post import boost_post, unboost_post, vote_for_post
 from app.shared.reply import delete_reply, make_reply, mod_remove_reply, mod_restore_reply, restore_reply, \
@@ -310,7 +310,9 @@ def test_a_member_with_no_identity_sends_nothing_and_catches_up_later(world):
     vote_for_reply(theirs.id, 'upvote', True, None, SRC_API, auth=world.auth)
     old = bob_post(world, '3kold')
     db.session.add(PostVote(user_id=world.author.id, author_id=old.user_id, post_id=old.id, effect=1,
-                            created_at=utcnow() - timedelta(days=30)))
+                            federated_like=True, created_at=utcnow() - timedelta(days=30)))   # too long ago
+    private = bob_post(world, '3kpriv')
+    vote_for_post(private.id, 'upvote', False, None, SRC_API, auth=world.auth)   # voted privately: never sent
     db.session.commit()
     assert world.pds.records.keys() == {uri for uri in world.pds.records if f'/{world.bob}/' in uri}
     connection = a_hosted(world, world.author, is_identity=True)
@@ -348,7 +350,8 @@ def test_what_was_undone_while_it_could_not_write_is_caught_up(world):
 
 def test_a_write_whose_answer_was_lost_is_found_not_made_twice(world):
     post = bob_post(world)
-    db.session.add(PostVote(user_id=world.author.id, author_id=post.user_id, post_id=post.id, effect=1))
+    db.session.add(PostVote(user_id=world.author.id, author_id=post.user_id, post_id=post.id, effect=1,
+                            federated_like=True))
     db.session.commit()
     world.pds.fail['com.atproto.repo.createRecord'] = httpx.Response(502)
     with pytest.raises(identity.Transient):
@@ -379,7 +382,8 @@ def test_an_account_that_cannot_write_keeps_its_record_until_it_can(world):
 
 def test_a_member_whose_identity_went_away_keeps_nothing_pending(world):
     post = bob_post(world)
-    db.session.add(PostVote(user_id=world.author.id, author_id=post.user_id, post_id=post.id, effect=1))
+    db.session.add(PostVote(user_id=world.author.id, author_id=post.user_id, post_id=post.id, effect=1,
+                            federated_like=True))
     db.session.commit()
     world.identity.state = 'reauth'
     db.session.commit()
@@ -388,7 +392,8 @@ def test_a_member_whose_identity_went_away_keeps_nothing_pending(world):
 
 def test_the_task_waits_for_a_busy_lock_the_budget_and_a_failure(world, monkeypatch):
     post = bob_post(world)
-    db.session.add(PostVote(user_id=world.author.id, author_id=post.user_id, post_id=post.id, effect=1))
+    db.session.add(PostVote(user_id=world.author.id, author_id=post.user_id, post_id=post.id, effect=1,
+                            federated_like=True))
     db.session.commit()
     args = (world.author.id, 'like_post', post.id)
     lock = identity.app_pkg.redis_client.lock(f'{identity.LOCK}{world.author.id}:like_post:{post.id}', timeout=5)
@@ -623,6 +628,8 @@ def test_a_like_whose_target_went_is_forgotten(world):
 
 
 def test_a_follow_of_an_identity_makes_a_follower(world):
+    world.author.ap_manually_approves_followers = False
+    db.session.commit()
     member = ingest.follow(world.bob, '3kf', {'subject': world.me}, 'c')
     bob = actors.actor_for(world.bob, fetch_new=False)
     assert member.id == world.author.id
@@ -632,6 +639,26 @@ def test_a_follow_of_an_identity_makes_a_follower(world):
     assert ingest.follow(world.bob, '3kg', {'subject': world.me}).id == world.author.id   # again: no second row
     assert UserFollower.query.filter_by(is_inward=True).count() == 1
     assert ingest.delete(world.bob, FOLLOW, '3kf') and UserFollower.query.filter_by(is_inward=True).count() == 0
+
+
+def test_a_member_who_approves_followers_is_asked(world, monkeypatch):
+    from app.shared.user import answer_follow_request
+    world.author.ap_manually_approves_followers = True
+    db.session.commit()
+    assert ingest.follow(world.bob, '3kf', {'subject': world.me}).id == world.author.id
+    bob = actors.actor_for(world.bob, fetch_new=False)
+    row = UserFollower.query.filter_by(local_user_id=world.author.id, remote_user_id=bob.id, is_inward=True).one()
+    notification = Notification.query.filter_by(user_id=world.author.id).one()
+    assert row.is_accepted is None and notification.url == '/user/follow_requests'
+    monkeypatch.setattr('app.shared.user.ap_signature.send_post_request',
+                        lambda *args, **kwargs: pytest.fail('answered over ActivityPub'))
+    assert answer_follow_request(world.author, bob.id, True) and row.is_accepted is True   # Bluesky asks no answer
+
+
+@pytest.mark.parametrize('refusal', ['instance_banned', 'refuses_remote_contact'])
+def test_a_follow_from_a_banned_network_or_to_a_member_who_stays_here(world, monkeypatch, refusal):
+    monkeypatch.setattr(ingest, refusal, lambda *args: True)
+    assert ingest.follow(world.bob, '3kf', {'subject': world.me}) is None
 
 
 def test_follows_that_are_dropped(world):

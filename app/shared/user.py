@@ -433,7 +433,7 @@ def answer_follow_request(user: User, requester_id: int, accept: bool) -> bool:
     # D1072: a rejection is False, as the column says ("None = request sent. True = accepted. False = Rejected")
     follow_request.is_accepted = accept
     db.session.commit()
-    if not requester.is_local():
+    if not requester.is_local() and not atproto_actors.is_atproto(requester):   # Bluesky asks no answer
         answer = {"@context": ap_signature.default_context(),
                   "actor": user.public_url(),
                   "to": [requester.public_url()],

@@ -40,7 +40,10 @@ def world(inbound, monkeypatch):
 
 
 def item(world, collection, rkey, record, at, reason='like', did=None):
+    """A notification, and its record in its author's repo (where PieFed reads it from)."""
     did = did or world.bob
+    if isinstance(record, dict) and did in world.pds.accounts:
+        world.pds.put(did, collection, rkey, record)
     return {'uri': f'at://{did}/{collection}/{rkey}', 'cid': f'c{rkey}', 'reason': reason, 'record': record,
             'indexedAt': at, 'author': {'did': did}}
 
@@ -66,6 +69,25 @@ def test_what_answers_a_member_comes_back(world):
     assert notify.poll(world.identity.id) == 1
 
 
+def test_a_notification_is_only_a_pointer(world):
+    """A member's own server answers listNotifications, and could claim a like or a follow by anyone: what PieFed
+    takes is what the author's own PDS holds."""
+    carol = world.pds.account('carol.bsky.example')
+    forged = item(world, LIKE, '3kf', {'subject': {'uri': world.copy}}, '2026-11-24T10:00:00.000Z', did=carol)
+    del world.pds.records[forged['uri']]   # carol never liked it
+    assert notify.take(forged) is False
+    claimed = item(world, FOLLOW, '3kg', {'subject': world.me}, '2026-11-24T10:00:01.000Z', did=carol)
+    world.pds.records[claimed['uri']] = {'subject': 'did:plc:someoneelse'}   # what carol's repo really says
+    claimed['record'] = {'subject': world.me}
+    assert notify.take(claimed) is True and UserFollower.query.filter_by(is_inward=True).count() == 0
+    assert PostVote.query.filter_by(post_id=world.own.id).count() == 0
+    world.pds.fail['com.atproto.repo.getRecord'] = httpx.Response(200, json={'uri': 'at://elsewhere/x/y',
+                                                                            'value': {}})
+    liked = item(world, LIKE, '3kh', {'subject': {'uri': world.copy}}, '2026-11-24T10:00:02.000Z', did=carol)
+    assert notify.take(liked) is False   # an answer about another record
+    assert notify.take({'uri': f'at://not-a-did/{LIKE}/3k', 'record': {}}) is False
+
+
 def test_a_poll_reads_back_to_the_last_one_page_by_page(world, monkeypatch):
     monkeypatch.setattr(notify, 'PAGE', 2)
     stamps = [f'2026-11-24T10:0{minute}:00.000Z' for minute in range(9, 0, -1)]
@@ -85,9 +107,9 @@ def test_a_poll_reads_back_to_the_last_one_page_by_page(world, monkeypatch):
 
 
 def test_a_record_that_cannot_be_read_holds_nothing_up(world, monkeypatch):
-    monkeypatch.setitem(notify.TAKES, LIKE, lambda *args: (_ for _ in ()).throw(notify.ServiceError('gone')))
     world.pds.notifications[world.me] = [item(world, LIKE, '3kl', {'subject': {'uri': world.copy}},
                                               '2026-11-24T10:00:00.000Z')]
+    monkeypatch.setitem(notify.TAKES, LIKE, lambda *args: (_ for _ in ()).throw(notify.ServiceError('gone')))
     assert notify.poll(world.identity.id) == 1
 
 
