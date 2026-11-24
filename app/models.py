@@ -3359,6 +3359,7 @@ class Post(db.Model):
     hidden_by = db.relationship('User', secondary=hidden_posts, back_populates='hidden_post', lazy='dynamic')
 
     local_only = db.Column(db.Boolean, nullable=False, default=False, server_default='false')  # not federated: stays on its own domain
+    requires_login = db.Column(db.Boolean, nullable=False, default=False, server_default='false')  # its author asks that only signed-in readers see it (ATProto !no-unauthenticated)
 
     __table_args__ = (
         db.Index('ix_post_relay_id', 'relay_id', postgresql_where=db.text('relay_id IS NOT NULL')),
@@ -7604,10 +7605,18 @@ class SocialConnection(db.Model):
     # that app's client id, so a different app later means the member connects again
     app_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', ondelete='SET NULL'))
     app_client_id = db.Column(db.String(255))
+    # Bluesky (ATProto spec 2026-11-23 §5): variant is hosted | oauth; the member's one identity on the network (the
+    # account their likes, replies and follows go out as); whether posts written outside PieFed come in as theirs;
+    # and a hosted account's place: active | waiting | deactivated | moved (NULL for every other connection)
+    is_identity = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    import_own = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    slot_state = db.Column(db.String(12))
 
     user = db.relationship('User', backref=db.backref('social_connections', passive_deletes=True))
 
-    __table_args__ = (db.UniqueConstraint('user_id', 'service', 'remote_id', name='uq_social_connection_account'),)
+    __table_args__ = (db.UniqueConstraint('user_id', 'service', 'remote_id', name='uq_social_connection_account'),
+                      db.Index('uq_social_connection_identity', 'user_id', unique=True,
+                               postgresql_where=db.text('is_identity')),)
 
 
 class SocialCrosspost(db.Model):
@@ -7634,6 +7643,34 @@ class SocialCrosspost(db.Model):
     connection = db.relationship('SocialConnection', backref=db.backref('crossposts', passive_deletes=True))
 
     __table_args__ = (db.UniqueConstraint('post_id', 'connection_id', name='uq_social_crosspost_post_connection'),)
+
+
+class AtprotoRecord(db.Model):
+    """An ATProto record that is not a post's copy (ATProto spec §5), either way: a reply, like, repost, follow or
+    block a member's identity made (out), or a post or reply that came in. A write whose row exists is not sent
+    again, and a record that comes in under a URI of ours is our own echo."""
+    __tablename__ = 'atproto_record'
+    id = db.Column(db.Integer, primary_key=True)
+    uri = db.Column(db.String(512), nullable=False, unique=True)    # at://<did>/<collection>/<rkey>
+    cid = db.Column(db.String(128))
+    did = db.Column(db.String(255), nullable=False, index=True)
+    collection = db.Column(db.String(64), nullable=False)
+    rkey = db.Column(db.String(64), nullable=False)
+    direction = db.Column(db.String(3), nullable=False)             # out | in
+    connection_id = db.Column(db.Integer, db.ForeignKey('social_connection.id', ondelete='CASCADE'), index=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id', ondelete='CASCADE'), index=True)
+    post_reply_id = db.Column(db.Integer, db.ForeignKey('post_reply.id', ondelete='CASCADE'), index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), index=True)   # followed, blocked
+    vote_kind = db.Column(db.String(10))
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
+class AtprotoCursor(db.Model):
+    """Where the Jetstream consumer is in the stream (ATProto spec §5, §7): one row, its `seq`."""
+    __tablename__ = 'atproto_cursor'
+    id = db.Column(db.Integer, primary_key=True)
+    seq = db.Column(db.BigInteger, nullable=False, default=0)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class ConnectionApp(db.Model):

@@ -12,6 +12,7 @@ from datetime import datetime
 from flask import current_app
 
 from app.sealing import keyring
+from app.utils import is_local_microblogs
 
 KEY = 'CONNECTIONS_SECRETS_KEY'
 
@@ -112,6 +113,8 @@ class Service:
     hint_label = ''           # when set, the Connect button has a text box for it (Bluesky's handle or server)
     takes_nsfw = False        # NSFW/NSFL posts go here (spec §5 default: Bluesky only, with self-labels)
     can_edit = False          # copies are edited when the post is (C4)
+    default_on = True         # a new connection is ticked on the post form until the member says otherwise (C3)
+    ticks_microblog = False   # ticked on every local microblog post whatever default_on says (ATProto spec A5)
 
     def configured(self) -> bool:
         """The admin's app credentials for this service are set."""
@@ -124,6 +127,14 @@ class Service:
     def fits_type(self, post_type: int) -> bool:
         """A post of this type might fit: whether the post form offers this service at all."""
         return True
+
+    def ticked(self, connection, community) -> bool:
+        """Whether the post form ticks `connection` for a new post in `community` (and an API post that does not
+        choose goes there)."""
+        if self.ticks_microblog and community is not None:
+            if is_local_microblogs(community):
+                return True
+        return connection.default_on
 
     def can_delete(self, variant: str | None) -> bool:
         return True

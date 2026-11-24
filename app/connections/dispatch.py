@@ -82,8 +82,10 @@ def record_choices(post: Post, chosen: list[int] | None) -> None:
     author's defaults. Only the author's own connections to services that are on count. The caller commits."""
     connections = SocialConnection.query.filter_by(user_id=post.user_id).all()
     for connection in connections:
-        wanted = connection.default_on if chosen is None else connection.id in chosen
-        if wanted and enabled(SERVICES.get(connection.service), post.author.site_domain_id):
+        service = SERVICES.get(connection.service)
+        if not enabled(service, post.author.site_domain_id):
+            continue
+        if service.ticked(connection, post.community) if chosen is None else connection.id in chosen:
             db.session.add(SocialCrosspost(post_id=post.id, connection_id=connection.id,
                                            service=connection.service, state='waiting'))
 

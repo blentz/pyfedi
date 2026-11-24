@@ -1611,8 +1611,8 @@ def add_post(actor, type=None):
 
     crosspost_connections = offered_connections(current_user, post_type)
     if request.method == 'GET':
-        form.crosspost_to.data = [connection.id for connection, _service in crosspost_connections
-                                  if connection.default_on]
+        form.crosspost_to.data = [connection.id for connection, service in crosspost_connections
+                                  if service.ticked(connection, community)]
 
     return render_template('community/add_post.html', title=_('Add post to community'), form=form,
                            crosspost_connections=crosspost_connections,

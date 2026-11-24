@@ -22,10 +22,15 @@ PICTURE_BYTES = 25_000_000   # a picture of the post's, fetched from its own add
 JPEG_QUALITIES = (85, 75, 65, 50, 35)
 
 
+def body_text(post) -> str:
+    """The post's Markdown body as text, with Markdown links written out so their addresses show (and become links
+    where a service makes them)."""
+    return MARKDOWN_LINK.sub(lambda m: f'{m.group(1)} {m.group(2)}'.strip(), post.body or '').strip()
+
+
 def plain_text(post) -> str:
-    """The post as text: its title (when the body does not already start with it) and its Markdown body, with
-    Markdown links written out so their addresses show (and become links where a service makes them)."""
-    body = MARKDOWN_LINK.sub(lambda m: f'{m.group(1)} {m.group(2)}'.strip(), post.body or '').strip()
+    """The post as text: its title (when the body does not already start with it) and its body (body_text)."""
+    body = body_text(post)
     title = (post.title or '').strip()
     if title and not body.startswith(title[:40]):
         return f'{title}\n\n{body}'.strip()

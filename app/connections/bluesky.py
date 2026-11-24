@@ -6,19 +6,15 @@ connection. The flow the P0 spike ran end to end (interop/spike_bluesky_oauth.py
 its authorization server, PAR, the member signs in there, the code for tokens; then createRecord / deleteRecord on
 the PDS with the access token.
 
-What a post becomes (§6): its text, cut to 300 characters with the link back when longer, with link and hashtag
-facets in UTF-8 byte offsets; up to four pictures with their alt text, or a link post's card; `sexual` or
-`graphic-media` self-labels for NSFW or NSFL. A post behind a content warning sends the warning and the link only.
-An uploaded video goes as text and the link until Bluesky's video service is wired (§2).
+This is the OAuth variant of a Bluesky connection (ATProto spec 2026-11-23 §4): OAuthSession is its app.atproto
+Session, and what a post becomes is app.atproto.records', by its community (§6, A5): a microblog post goes whole and
+is ticked on the post form; a post elsewhere goes as a card linking back, ticked only when the member asks.
 """
 import hashlib
 import json
-import os
-import re
 import secrets
 import time
 from base64 import urlsafe_b64encode
-from datetime import datetime, timezone
 from functools import lru_cache
 from urllib.parse import urlencode, urlsplit
 
@@ -29,28 +25,15 @@ from flask_babel import _, lazy_gettext as _l
 from jwt.algorithms import ECAlgorithm
 
 from app import storefront
+from app.atproto import Session, records
+from app.atproto.resolve import DEFAULT_SERVER, DOCUMENT_BYTES, HANDLE, did_document, handle_of, json_of, \
+    pds_of, resolve_handle
 from app.connections import Account, AuthFailed, Permanent, Progress, Sent, Service, ServiceError, register
-from app.connections.eligibility import image_files, uploaded_video
-from app.connections import content
 from app.connections.apps import context_domain, current
-from app.connections.content import StoredVideo, cut, image_bytes, plain_text  # noqa: F401 (image_bytes: re-exported)
-from app.connections.http import call, check, fetch
-from app.constants import POST_TYPE_LINK
-from app.models import media_of
+from app.connections.http import check, fetch
 
 SCOPE = 'atproto repo:app.bsky.feed.post?action=create&action=delete blob:*/*'
-MAX_GRAPHEMES = 300          # app.bsky.feed.post text: counted here in code points, never fewer than graphemes
-# (its 3000-byte limit needs no check: 300 code points are at most 1200 bytes)
-MAX_IMAGES = 4
-MAX_IMAGE_BYTES = 950_000    # under the lexicon's 1,000,000
-MAX_IMAGE_SIDE = 2000
-MAX_VIDEO_BYTES = 300_000_000   # app.bsky.embed.video's blob: video/mp4 only, up to this (spec 19.5)
 VIDEO_CHUNK = 1 << 20
-DEFAULT_SERVER = 'https://bsky.social'
-HANDLE = re.compile(r'([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?')   # used with fullmatch
-LINK = re.compile(r'https?://[^\s<>"\]\)]+')
-TAG = re.compile(r'(?:^|(?<=\s))#([^\s#\.,!?;:()\[\]"\']{1,64})')
-DOCUMENT_BYTES = 64_000     # an identity or OAuth document from a server the member named: small, or refused
 UPLOAD_SECONDS = 120        # a PDS call may carry a picture up
 _nonces: dict[str, str] = {}   # the last DPoP nonce each server gave: a stale one costs one retry
 
@@ -167,61 +150,13 @@ def _origin(url: str) -> str:
 # identity: handle -> DID -> PDS -> authorization server
 # --------------------------------------------------------------------------
 
-def _json(url: str) -> dict:
-    try:
-        return call('GET', url, max_bytes=DOCUMENT_BYTES, headers={'Accept': 'application/json'}).json()
-    except ValueError:
-        raise Permanent(_('%(url)s did not answer with JSON.', url=url)) from None
-
-
-def resolve_handle(handle: str) -> str | None:
-    """The DID a handle names: its domain's well-known answer, else the resolver (which also reads DNS)."""
-    try:
-        answer = call('GET', f'https://{handle}/.well-known/atproto-did', max_bytes=DOCUMENT_BYTES).text.strip()
-        if answer.startswith('did:'):
-            return answer
-    except ServiceError:
-        pass
-    resolver = current_app.config.get('BLUESKY_RESOLVER') or DEFAULT_SERVER
-    try:
-        did = _json(f'{resolver}/xrpc/com.atproto.identity.resolveHandle?{urlencode({"handle": handle})}').get('did')
-    except ServiceError:
-        return None
-    return did if isinstance(did, str) and did.startswith('did:') else None
-
-
-def did_document(did: str) -> dict:
-    if did.startswith('did:plc:'):
-        plc = current_app.config.get('BLUESKY_PLC_URL') or 'https://plc.directory'
-        return _json(f'{plc}/{did}')
-    if did.startswith('did:web:'):
-        return _json(f'https://{did.removeprefix("did:web:")}/.well-known/did.json')
-    raise Permanent(_('Unsupported account identifier %(did)s.', did=did))
-
-
-def pds_of(document: dict) -> str:
-    for service in document.get('service') or []:
-        if isinstance(service, dict) and str(service.get('id', '')).endswith('#atproto_pds'):
-            endpoint = service.get('serviceEndpoint')
-            if isinstance(endpoint, str) and endpoint.startswith('https://'):
-                return endpoint.rstrip('/')
-    raise Permanent(_('That account names no Bluesky server.'))
-
-
-def handle_of(document: dict) -> str | None:
-    for alias in document.get('alsoKnownAs') or []:
-        if isinstance(alias, str) and alias.startswith('at://'):
-            return alias.removeprefix('at://')
-    return None
-
-
 def authorization_server(server: str) -> tuple[str, dict]:
     """The issuer and metadata of the authorization server for a PDS, or for an entryway named directly."""
     try:
-        issuer = _json(f'{server}/.well-known/oauth-protected-resource')['authorization_servers'][0]
+        issuer = json_of(f'{server}/.well-known/oauth-protected-resource')['authorization_servers'][0]
     except (ServiceError, KeyError, IndexError, TypeError):
         issuer = server
-    metadata = _json(f'{issuer}/.well-known/oauth-authorization-server')
+    metadata = json_of(f'{issuer}/.well-known/oauth-authorization-server')
     if metadata.get('issuer') != issuer or not metadata.get('pushed_authorization_request_endpoint'):
         raise Permanent(_('%(server)s is not a Bluesky sign-in server.', server=issuer))
     return issuer, metadata
@@ -278,138 +213,16 @@ def xrpc(tokens: dict, method: str, nsid: str, **kwargs):
     return check(response)
 
 
-# --------------------------------------------------------------------------
-# what a post becomes
-# --------------------------------------------------------------------------
+class OAuthSession(Session):
+    """An OAuth connection's tokens as an app.atproto Session: each call DPoP-bound (xrpc)."""
 
-def compose(post, with_link: bool) -> str:
-    """The post's Bluesky text: within 300 characters, with the link back when asked or when cut."""
-    link = post.ap_id
-    if post.content_warning:
-        return cut(f'CW: {post.content_warning}', MAX_GRAPHEMES - len(link) - 1) + '\n' + link
-    text = plain_text(post)
-    fits = len(text) <= MAX_GRAPHEMES
-    if fits and not with_link:
-        return text
-    if fits and len(text) + len(link) + 2 <= MAX_GRAPHEMES:
-        return f'{text}\n\n{link}'.strip()
-    return f'{cut(text, MAX_GRAPHEMES - len(link) - 1)}\n{link}'
+    def __init__(self, tokens: dict):
+        self.tokens = tokens
+        self.did = tokens['did']
+        self.pds = tokens['pds']
 
-
-def facets(text: str) -> list[dict]:
-    """Link and hashtag facets, in the UTF-8 byte offsets the lexicon counts in."""
-    found = []
-    for match in LINK.finditer(text):
-        uri = match.group(0).rstrip('.,;:!?')
-        start = len(text[:match.start()].encode())
-        found.append({'index': {'byteStart': start, 'byteEnd': start + len(uri.encode())},
-                      'features': [{'$type': 'app.bsky.richtext.facet#link', 'uri': uri}]})
-    for match in TAG.finditer(text):
-        start = len(text[:match.start(1) - 1].encode())
-        found.append({'index': {'byteStart': start, 'byteEnd': len(text[:match.end(1)].encode())},
-                      'features': [{'$type': 'app.bsky.richtext.facet#tag', 'tag': match.group(1)}]})
-    return found
-
-
-def as_jpeg(data: bytes) -> tuple[bytes, int, int] | None:
-    """The picture as a JPEG within Bluesky's size limit, and its width and height."""
-    return content.as_jpeg(data, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE)
-
-
-def labels(post) -> dict | None:
-    values = ([{'val': 'sexual'}] if post.nsfw else []) + ([{'val': 'graphic-media'}] if post.nsfl else [])
-    return {'$type': 'com.atproto.label.defs#selfLabels', 'values': values} if values else None
-
-
-TID_CHARS = '234567abcdefghijklmnopqrstuvwxyz'   # atproto's sortable base32
-
-
-def new_tid() -> str:
-    """A record key in atproto's TID form: microseconds since 1970 and a random clock id, 13 characters."""
-    value = (time.time_ns() // 1000) << 10 | secrets.randbelow(1024)
-    return ''.join(TID_CHARS[(value >> (5 * (12 - place))) & 31] for place in range(13))
-
-
-def existing_record(tokens: dict, rkey: str) -> str | None:
-    """The member's post under `rkey` if their PDS has it (an earlier attempt made it): its at:// URI, else None.
-    Records are public, so this read needs no token."""
-    response = fetch('GET', f"{tokens['pds']}/xrpc/com.atproto.repo.getRecord",
-                     params={'repo': tokens['did'], 'collection': 'app.bsky.feed.post', 'rkey': rkey})
-    if response.status_code == 400 and _error_of(response) == 'RecordNotFound':
-        return None
-    check(response)
-    return response.json().get('uri') or f"at://{tokens['did']}/app.bsky.feed.post/{rkey}"
-
-
-def _error_of(response) -> str | None:
-    try:
-        body = response.json()
-    except ValueError:
-        return None
-    return body.get('error') if isinstance(body, dict) else None
-
-
-def upload_video(post, tokens: dict) -> dict | None:
-    """The post's uploaded video as a blob on the member's PDS (spec 19.5): as Bluesky's guide has it, uploaded as a
-    picture is, and processed by Bluesky once the post is there. None when it cannot go: not an MP4, larger than the
-    lexicon takes, or refused by the PDS (whose own limit may be lower): the post then goes as text and link."""
-    media = media_of(post) or {}
-    if post.content_warning or media.get('mime') != 'video/mp4':
-        return None
-    try:
-        with StoredVideo(post, MAX_VIDEO_BYTES) as video:
-            size = os.fstat(video.fileno()).st_size
-            if size > MAX_VIDEO_BYTES:
-                return None
-            return xrpc(tokens, 'POST', 'com.atproto.repo.uploadBlob', stream=video, seconds=600 + size // 500_000,
-                        headers={'Content-Type': 'video/mp4', 'Content-Length': str(size)}).json()['blob']
-    except Permanent:
-        return None
-
-
-def video_embed(post, blob: dict) -> dict:
-    embed = {'$type': 'app.bsky.embed.video', 'video': blob}
-    media = media_of(post) or {}
-    width, height = media.get('width'), media.get('height')
-    if type(width) is int and type(height) is int and width > 0 and height > 0:
-        embed['aspectRatio'] = {'width': width, 'height': height}
-    return embed
-
-
-def build_record(post, tokens: dict, video: dict | None = None) -> dict:
-    """The app.bsky.feed.post record for `post`, with `video` (an uploaded blob) when it has one. Uploads its
-    pictures to the PDS on the way."""
-    files = [] if post.content_warning or uploaded_video(post) else image_files(post)
-    with_link = bool(post.content_warning) or (uploaded_video(post) and video is None) or len(files) > MAX_IMAGES
-    images = []
-    for file in files[:MAX_IMAGES]:
-        data = image_bytes(file)
-        jpeg = as_jpeg(data) if data else None
-        if jpeg is None:
-            with_link = True
-            continue
-        content, width, height = jpeg
-        blob = xrpc(tokens, 'POST', 'com.atproto.repo.uploadBlob', content=content,
-                    headers={'Content-Type': 'image/jpeg'}).json()['blob']
-        images.append({'alt': (file.alt_text or '')[:2000], 'image': blob,
-                       'aspectRatio': {'width': width, 'height': height}})
-    text = compose(post, with_link)
-    record = {'$type': 'app.bsky.feed.post', 'text': text,
-              'createdAt': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}
-    if found := facets(text):
-        record['facets'] = found
-    if post.language is not None and post.language.code and post.language.code != 'und':
-        record['langs'] = [post.language.code]
-    if video is not None:
-        record['embed'] = video_embed(post, video)
-    elif images:
-        record['embed'] = {'$type': 'app.bsky.embed.images', 'images': images}
-    elif post.type == POST_TYPE_LINK and post.url and not post.content_warning:
-        record['embed'] = {'$type': 'app.bsky.embed.external', 'external': {
-            'uri': post.url, 'title': (post.title or '')[:300], 'description': cut(plain_text(post), 300)}}
-    if found := labels(post):
-        record['labels'] = found
-    return record
+    def xrpc(self, method: str, nsid: str, **kwargs):
+        return xrpc(self.tokens, method, nsid, **kwargs)
 
 
 # --------------------------------------------------------------------------
@@ -422,6 +235,8 @@ class BlueskyService(Service):
     takes_nsfw = True     # with self-labels (spec §5)
     can_edit = False      # posts cannot be edited (spec §2)
     hint_label = _l('Your handle or server, for example alice.bsky.social')
+    default_on = False    # a post outside the microblogs is ticked only when the member asks (ATProto spec A5)
+    ticks_microblog = True   # a microblog post is always ticked (A5)
 
     def configured(self) -> bool:
         return client_key() is not None
@@ -480,7 +295,7 @@ class BlueskyService(Service):
                   'expires_at': time.time() + int(answer.get('expires_in') or 300), 'dpop_jwk': pending['dpop_jwk'],
                   'pds': pds, 'issuer': pending['issuer'], 'token_endpoint': pending['token_endpoint'],
                   'revocation_endpoint': pending.get('revocation_endpoint'), 'did': sub}
-        return [Account(remote_id=sub, remote_name=handle_of(document) or sub, tokens=tokens)]
+        return [Account(remote_id=sub, remote_name=handle_of(document) or sub, tokens=tokens, variant='oauth')]
 
     def refresh(self, tokens):
         if not tokens.get('refresh_token'):
@@ -494,26 +309,11 @@ class BlueskyService(Service):
                 'expires_at': time.time() + int(answer.get('expires_in') or 300)}
 
     def send(self, post, tokens, connection, progress=None):
-        """Under a record key chosen before the first attempt and kept (spec 19.2): an attempt after one that got no
-        answer first asks the PDS whether that one made the record, so a copy is never made twice."""
-        progress = progress or Progress()
-        rkey = progress.data.get('rkey')
-        uri = existing_record(tokens, rkey) if rkey else None
-        if uri is None:
-            if rkey is None:
-                rkey = progress.data['rkey'] = new_tid()
-                progress.save()
-            if 'video' not in progress.data and uploaded_video(post):   # uploaded once, whatever comes after
-                progress.data['video'] = upload_video(post, tokens)
-                progress.save()
-            record = build_record(post, tokens, progress.data.get('video'))
-            uri = xrpc(tokens, 'POST', 'com.atproto.repo.createRecord', json={
-                'repo': tokens['did'], 'collection': 'app.bsky.feed.post', 'rkey': rkey, 'record': record}).json()['uri']
-        return Sent(remote_id=uri, remote_url=f"https://bsky.app/profile/{tokens['did']}/post/{uri.rsplit('/', 1)[-1]}")
+        uri = records.send_copy(post, OAuthSession(tokens), progress or Progress())
+        return Sent(remote_id=uri, remote_url=records.web_url(uri))
 
     def delete(self, tokens, remote_id):
-        xrpc(tokens, 'POST', 'com.atproto.repo.deleteRecord', json={
-            'repo': tokens['did'], 'collection': 'app.bsky.feed.post', 'rkey': remote_id.rsplit('/', 1)[-1]})
+        records.delete_record(OAuthSession(tokens), remote_id)
 
     def revoke(self, tokens):
         if tokens.get('revocation_endpoint') and tokens.get('refresh_token'):

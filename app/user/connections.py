@@ -145,7 +145,8 @@ def _store(service, account: Account) -> SocialConnection:
     connection = SocialConnection.query.filter_by(user_id=current_user.id, service=service.name,
                                                   remote_id=account.remote_id).first()
     if connection is None:
-        connection = SocialConnection(user_id=current_user.id, service=service.name, remote_id=account.remote_id)
+        connection = SocialConnection(user_id=current_user.id, service=service.name, remote_id=account.remote_id,
+                                      default_on=service.default_on)
         db.session.add(connection)
     connection.variant = account.variant
     connection.remote_name = account.remote_name[:255]

@@ -45,7 +45,12 @@
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="default_on" value="{{ '0' if connection.default_on else '1' }}">
                             <button type="submit" class="btn btn-sm btn-outline-secondary">
-                                {{ _('Stop ticking it on new posts') if connection.default_on else _('Tick it on new posts') }}</button>
+                                {% if service and service.ticks_microblog -%}
+                                {{ _('Stop ticking it on posts outside my microblog') if connection.default_on else _('Tick it on posts outside my microblog too') }}
+                                {%- else -%}
+                                {{ _('Stop ticking it on new posts') if connection.default_on else _('Tick it on new posts') }}
+                                {%- endif %}</button>
+                            {% if service and service.ticks_microblog %}<div class="small text-muted w-100">{{ _('Microblog posts are always ticked; a post in another community goes as a link card.') }}</div>{% endif %}
                         </form>
                         {% if on_main_domain and on and connection.state == 'reauth' -%}
                             <form method="post" action="{{ url_for('user.user_connection_connect', service_name=connection.service) }}">

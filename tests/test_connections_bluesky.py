@@ -19,11 +19,14 @@ from PIL import Image
 from app import cli
 from app.connections import AuthFailed, MaybeSent, Permanent, Progress, Transient, setting_name
 from app.connections import bluesky, content
-from app.connections.bluesky import (BlueskyService, as_jpeg, authorization_server, build_record, client_assertion,
-                                     client_metadata, compose, did_document, dpop_proof, facets, handle_of,
-                                     existing_record, image_bytes, jwks, labels, new_key_jwk, new_tid, pds_of, plain_text,
-                                     resolve_handle, upload_video, video_embed)
-from app.constants import POST_TYPE_ARTICLE, POST_TYPE_LINK
+from app.atproto import records
+from app.atproto.records import (as_jpeg, build_record, compose, existing_record, facets, labels, new_tid,
+                                 upload_video, video_embed)
+from app.atproto.resolve import did_document, handle_of, pds_of, resolve_handle
+from app.connections.bluesky import (BlueskyService, OAuthSession, authorization_server, client_assertion,
+                                     client_metadata, dpop_proof, jwks, new_key_jwk)
+from app.connections.content import image_bytes, plain_text
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_TYPE_ARTICLE, POST_TYPE_LINK
 from app.sealing import generate_key
 from app.utils import set_setting
 
@@ -57,10 +60,18 @@ def tokens(**changes) -> dict:
             'revocation_endpoint': f'{PDS}/oauth/revoke', 'did': DID, **changes}
 
 
+def session(**changes) -> OAuthSession:
+    return OAuthSession(tokens(**changes))
+
+
+MICROBLOGS = SimpleNamespace(kind=COMMUNITY_KIND_MICROBLOGS, is_local=lambda: True)
+
+
 def a_post(**changes):
+    """A post in the local microblogs (a full post, A5) unless `community` says otherwise."""
     post = SimpleNamespace(title='', body='', ap_id='https://piefed.example/post/7', content_warning=None,
                            nsfw=False, nsfl=False, gallery_count=0, gallery=[], image_id=None, image=None,
-                           extensions=None, language=None, type=POST_TYPE_ARTICLE, url=None)
+                           extensions=None, language=None, type=POST_TYPE_ARTICLE, url=None, community=MICROBLOGS)
     for name, value in changes.items():
         setattr(post, name, value)
     return post
@@ -281,7 +292,7 @@ def test_the_callback_makes_the_connection(app, bsky, http_mock):
         [account] = bsky.service.finish(None, {'iss': PDS, 'code': 'c-1'}, 'ignored', pending)
     sent = form_of(token.calls.last.request)
     assert sent['code'] == 'c-1' and sent['code_verifier'] == 'v' and sent['grant_type'] == 'authorization_code'
-    assert (account.remote_id, account.remote_name) == (DID, 'alice.example')
+    assert (account.remote_id, account.remote_name, account.variant) == (DID, 'alice.example', 'oauth')
     assert account.tokens['pds'] == PDS and account.tokens['dpop_jwk'] == pending['dpop_jwk']
     assert account.tokens['expires_at'] > time.time() + 3500
 
@@ -422,8 +433,8 @@ def test_pictures_become_jpegs_within_the_limit(app, monkeypatch):
     noise = io.BytesIO()
     Image.effect_noise((3000, 2000), 120).convert('RGB').save(noise, 'PNG')
     content, width, height = as_jpeg(noise.getvalue())
-    assert len(content) <= bluesky.MAX_IMAGE_BYTES and max(width, height) <= bluesky.MAX_IMAGE_SIDE
-    monkeypatch.setattr(bluesky, 'MAX_IMAGE_BYTES', 10)
+    assert len(content) <= records.MAX_IMAGE_BYTES and max(width, height) <= records.MAX_IMAGE_SIDE
+    monkeypatch.setattr(records, 'MAX_IMAGE_BYTES', 10)
     assert as_jpeg(_png()) is None
 
 
@@ -454,7 +465,7 @@ def test_a_gallery_sends_four_pictures_and_its_link(app, bsky, http_mock, tmp_pa
     post = a_post(title='Trip', body='photos', gallery_count=6, gallery=files,
                   language=SimpleNamespace(code='en'), nsfw=True)
     with app.test_request_context():
-        record = build_record(post, tokens())
+        record = build_record(post, session())
     assert upload.call_count == 3 and upload.calls.last.request.headers['Content-Type'] == 'image/jpeg'
     images = record['embed']['images']
     assert [image['alt'] for image in images] == ['picture 0', 'picture 2', 'picture 3']
@@ -468,7 +479,7 @@ def test_a_link_post_carries_its_card(app, bsky):
     post = a_post(title='A find', body='worth reading', type=POST_TYPE_LINK, url='https://news.example/a',
                   language=SimpleNamespace(code='und'))
     with app.test_request_context():
-        record = build_record(post, tokens())
+        record = build_record(post, session())
     assert record['embed'] == {'$type': 'app.bsky.embed.external', 'external': {
         'uri': 'https://news.example/a', 'title': 'A find', 'description': 'A find\n\nworth reading'}}
     assert 'langs' not in record and 'labels' not in record and 'facets' not in record
@@ -477,7 +488,7 @@ def test_a_link_post_carries_its_card(app, bsky):
 def test_an_uploaded_video_goes_as_text_and_link(app, bsky):
     post = a_post(body='my clip', extensions={'media': {'mime': 'video/mp4'}}, image_id=None)
     with app.test_request_context():
-        record = build_record(post, tokens())
+        record = build_record(post, session())
     assert 'embed' not in record and record['text'] == 'my clip\n\nhttps://piefed.example/post/7'
 
 
@@ -503,7 +514,7 @@ def test_a_video_goes_up_whole_and_again_after_a_nonce(app, bsky, http_mock, mon
     upload.side_effect = [httpx.Response(401, headers={'WWW-Authenticate': 'DPoP error="use_dpop_nonce"',
                                                        'DPoP-Nonce': 'n-1'}),
                           httpx.Response(200, json={'blob': BLOB})]
-    assert upload_video(a_video_post(monkeypatch, tmp_path), tokens()) == BLOB
+    assert upload_video(a_video_post(monkeypatch, tmp_path), session()) == BLOB
     for call in upload.calls:   # the second try sends the whole file again, from its start
         assert call.request.read() == VIDEO and call.request.headers['Content-Type'] == 'video/mp4'
     assert upload.calls.last.request.headers['Content-Length'] == str(len(VIDEO))
@@ -511,19 +522,19 @@ def test_a_video_goes_up_whole_and_again_after_a_nonce(app, bsky, http_mock, mon
 
 def test_a_video_that_cannot_go_leaves_text_and_link(app, bsky, http_mock, monkeypatch, tmp_path):
     post = a_video_post(monkeypatch, tmp_path)
-    assert upload_video(a_post(extensions={'media': {'mime': 'video/webm'}}), tokens()) is None
-    assert upload_video(a_post(content_warning='CW', extensions={'media': {'mime': 'video/mp4'}}), tokens()) is None
-    monkeypatch.setattr(bluesky, 'MAX_VIDEO_BYTES', 10)
-    assert upload_video(post, tokens()) is None   # larger than the lexicon takes
-    monkeypatch.setattr(bluesky, 'MAX_VIDEO_BYTES', 300_000_000)
+    assert upload_video(a_post(extensions={'media': {'mime': 'video/webm'}}), session()) is None
+    assert upload_video(a_post(content_warning='CW', extensions={'media': {'mime': 'video/mp4'}}), session()) is None
+    monkeypatch.setattr(records, 'MAX_VIDEO_BYTES', 10)
+    assert upload_video(post, session()) is None   # larger than the lexicon takes
+    monkeypatch.setattr(records, 'MAX_VIDEO_BYTES', 300_000_000)
     http_mock.post(UPLOAD_BLOB).respond(400, json={'error': 'BlobTooLarge', 'message': 'too big'})
-    assert upload_video(post, tokens()) is None   # the PDS's own limit is lower
+    assert upload_video(post, session()) is None   # the PDS's own limit is lower
 
 
 def test_a_video_upload_that_may_work_later_is_tried_again(app, bsky, http_mock, monkeypatch, tmp_path):
     http_mock.post(UPLOAD_BLOB).respond(503)
     with pytest.raises(Transient):
-        upload_video(a_video_post(monkeypatch, tmp_path), tokens())
+        upload_video(a_video_post(monkeypatch, tmp_path), session())
 
 
 @pytest.mark.parametrize('media, ratio', [({'width': 1280, 'height': 720}, {'width': 1280, 'height': 720}),
@@ -590,7 +601,7 @@ def test_sending_and_deleting(app, bsky, http_mock):
 
 def test_a_record_key_is_a_tid_and_they_sort_by_time():
     first, second = new_tid(), new_tid()
-    assert len(first) == 13 and set(first) <= set(bluesky.TID_CHARS) and first[0] in '234567abcdefghij'
+    assert len(first) == 13 and set(first) <= set(records.TID_CHARS) and first[0] in '234567abcdefghij'
     assert first[:9] <= second[:9]   # the leading characters are time, microseconds apart
 
 
@@ -633,10 +644,10 @@ def test_a_record_an_earlier_attempt_made_is_the_copy(app, bsky, http_mock):   #
 def test_what_the_record_lookup_makes_of_answers(app, bsky, http_mock, answer, outcome):
     http_mock.get(GET_RECORD).mock(return_value=answer)
     if isinstance(outcome, str):
-        assert existing_record(tokens(), '3kk') == outcome
+        assert existing_record(session(), '3kk') == outcome
     else:
         with pytest.raises(outcome):
-            existing_record(tokens(), '3kk')
+            existing_record(session(), '3kk')
 
 
 def test_the_key_command_prints_a_usable_key(app):

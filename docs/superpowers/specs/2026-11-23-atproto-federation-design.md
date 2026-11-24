@@ -98,7 +98,7 @@ Owner rulings, 2026-11-23:
   copies, identity, notifications) does not know which variant it is using.
 - **Refactor, not fork.** `resolve_handle`, `did_document`, `pds_of`, `facets`, `compose`, `labels`,
   `build_record` and `upload_video` move from `app/connections/bluesky.py` into `app/atproto/`. CA's Bluesky becomes
-  one user of them, and its tests move with them.
+  one user of them (its tests import them from there).
 - **Dispatch seam.** ATProto actors are remote `User`s on one pseudo instance (`software = 'atproto'`, domain
   `atproto`). Outbound paths that already branch on `instance.software` (follows, votes, replies, boosts, blocks)
   gain an `atproto` arm that writes through the acting member's identity. Blocking the `atproto` instance blocks the
