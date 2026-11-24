@@ -34,6 +34,7 @@ class FakePDS:
         self.taken: set[str] = set()            # handles another account has
         self.invites: set[str] = set()
         self.notifications: dict[str, list] = {}   # did -> its notifications, newest first
+        self.servers: dict[str, str] = {}          # did -> the server its document names, when not this one (a move)
         self.calls: list[str] = []
         self.requests: list[httpx.Request] = []
         self.fail: dict[str, httpx.Response] = {}   # nsid -> the answer it gives instead, once
@@ -58,7 +59,7 @@ class FakePDS:
             return httpx.Response(404, json={'message': 'DID not registered'})
         return httpx.Response(200, json={'id': did, 'alsoKnownAs': [f"at://{self.accounts[did]['handle']}"],
                                          'service': [{'id': '#atproto_pds', 'type': 'AtprotoPersonalDataServer',
-                                                      'serviceEndpoint': PDS}]})
+                                                      'serviceEndpoint': self.servers.get(did, PDS)}]})
 
     def session(self, did: str, lifetime: int = 7200) -> dict:
         number = next(_numbers)

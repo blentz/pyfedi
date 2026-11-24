@@ -196,7 +196,8 @@ recorded locally only.
 
 **The consumer** (`flask atproto-jetstream`, `entrypoint_jetstream.sh`) subscribes to the collections `app.bsky.feed.post`, `feed.repost`, `feed.like`, `actor.profile`
 and `graph.follow`, plus `identity` and `account` events. Its DIDs are every ATProto actor with a local follower,
-plus every identity's DID (for A7 imports and for follows of our members). When that set changes, it reconnects
+plus every identity's DID and every account that brings its posts in (for A7 imports and for follows of our
+members). When that set changes, it reconnects
 with the new filter, at most once a minute (`ATPROTO_JETSTREAM_RECHECK`), and reads the latest posts of any actor that
 joined it (what it wrote between the follow and its socket opening, when there is no cursor to replay it). Each event
 goes to a Celery task (`app.atproto.ingest.event_task`), which both worker entry points import. Each socket carries at most 5,000 DIDs, and more DIDs mean more sockets.
@@ -213,9 +214,9 @@ harness took 9,000 DIDs (a 342 KB URL). 5,000 leaves headroom for proxies in fro
 | follow of one of our identities | A follower row. Bluesky follows need no approval, but the member sees the follower. |
 | profile | Profile refresh |
 | delete | Delete here |
-| `identity` | Handle updated |
-| `account` inactive or taken down | Their content hidden. Deleted when the account is deleted. |
-| a post by one of our identities that we did not write (A7, `import_own`) | The member's own microblog post, marked "from Bluesky". It is not copied back to Bluesky. Mastodon and others get it through the usual ActivityPub federation. |
+| `identity` | Handle updated (P5: also a member's own account's handle; a hosted account whose DID document names another server is `moved`, §8) |
+| `account` inactive or taken down | Their content hidden: posts and replies soft-deleted, marked `deleted_by = -2`, with every count they were in moved, and shown again when the account is active. Deleted (`purge_remote_user_then_delete`) when the account is deleted. A member's own account: hosted `suspended`, OAuth to be reconnected, the member told, back as it was when active again; a deleted one's connection goes (P5). |
+| a post by one of a member's accounts that PieFed did not write (A7, `import_own`) | The member's own microblog post, made as the member makes one (`make_post`), so ActivityPub federates it; it goes to none of their connected accounts. A copy row (`progress.imported`) marks it "from Bluesky", keeps it from being copied back, and ties the two: deleted there, deleted here (nothing sent back), and deleted here, deleted there. A record PieFed made is known by its copy row (`remote_id`, or `progress.rkey` while it is being made) or its `atproto_record` row. Replies written there are not brought in (P5). |
 
 **Notifications.** Replies, mentions, quotes, likes, reposts and follows by people nobody here follows reach us
 through a poll of each Bluesky connection's `app.bsky.notification.listNotifications` every 2 minutes (queued by
@@ -334,7 +335,10 @@ actor is named by its DID, and a handle another actor held moves to the one it n
 - **P4 identity interactions (done 2026-11-24)** for both variants: replies, likes, reposts, quotes, follows and
   blocks out; likes, follows, replies, reposts and quotes of our records in; notifications in; the inline offer; the
   OAuth identity re-consent; the Bluesky badge.
-- **P5 lifecycle and moderation.** `identity` and `account` events, takedowns, instance block, A7 imports, moves.
+- **P5 lifecycle and moderation (done 2026-11-24).** `identity` and `account` events, takedowns, instance block, A7
+  imports, moves. Blocking the `bsky.app` instance empties the consumer's filter of followed actors (members' own
+  accounts stay) and stops identity records (none made or deleted meanwhile). The Bluesky card gains "Bring in posts
+  I write on Bluesky" and, for a moved account, "Connect it again" (OAuth, the identity kept).
 - **P6 live check.**
 
 ## 13. Non-goals

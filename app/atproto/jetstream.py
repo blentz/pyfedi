@@ -17,10 +17,11 @@ from urllib.parse import urlencode
 
 import websockets
 from flask import current_app
+from sqlalchemy import or_
 
 from app import db
 from app.atproto import actors, ingest
-from app.models import AtprotoCursor, SocialConnection, User, UserFollower
+from app.models import AtprotoCursor, Instance, SocialConnection, User, UserFollower
 
 COLLECTIONS = (ingest.POST, ingest.REPOST, 'app.bsky.feed.like', 'app.bsky.actor.profile', 'app.bsky.graph.follow')
 SHARD = 5000
@@ -32,14 +33,18 @@ MAX_FRAME = 4 * 1024 * 1024
 
 
 def wanted_dids() -> list[str]:
-    """Every ATProto actor with a follower here, and every Bluesky identity's DID, in order."""
+    """Every ATProto actor with a follower here (none while the network is blocked: its instance defederated), and
+    every member's Bluesky account that is their identity or brings their posts in (A7), in order."""
     followed = db.session.query(User.ap_profile_id).join(UserFollower, UserFollower.remote_user_id == User.id).filter(
         UserFollower.is_inward.is_(False), UserFollower.is_accepted.is_(True), User.ap_domain == actors.DOMAIN,
         User.deleted.is_(False)).distinct()
     prefix = f'{actors.WEB}/profile/'
-    dids = {profile.removeprefix(prefix) for (profile,) in followed if (profile or '').startswith(f'{prefix}did:')}
+    blocked = Instance.query.filter_by(domain=actors.DOMAIN, defederated=True).first() is not None
+    dids = set() if blocked else {profile.removeprefix(prefix) for (profile,) in followed
+                                  if (profile or '').startswith(f'{prefix}did:')}
     identities = db.session.query(SocialConnection.remote_id).filter(
-        SocialConnection.service == 'bluesky', SocialConnection.is_identity.is_(True),
+        SocialConnection.service == 'bluesky', or_(SocialConnection.is_identity.is_(True),
+                                                   SocialConnection.import_own.is_(True)),
         SocialConnection.remote_id.like('did:%'))
     dids.update(remote_id for (remote_id,) in identities)
     return sorted(dids)

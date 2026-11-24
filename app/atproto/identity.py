@@ -270,6 +270,8 @@ def unmake(row: AtprotoRecord) -> None:
 def sync(user_id: int, kind: str, target_id: int) -> str | None:
     """Make the identity's record match what PieFed holds: 'made', 'deleted', or None (nothing to do). Raises
     Busy while another worker does the same, and ServiceError (QuotaWait, Transient...) as the calls do."""
+    if actors.instance().defederated:   # the network is blocked here: nothing is made or deleted on it meanwhile
+        return None
     lock = app_pkg.redis_client.lock(f'{LOCK}{user_id}:{kind}:{target_id}', timeout=LOCK_SECONDS,
                                      blocking_timeout=0)
     if not lock.acquire(blocking=False):

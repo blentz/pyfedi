@@ -40,6 +40,7 @@ from app.utils import get_setting, get_task_session, patch_db_session
 
 HOSTED = 'hosted'
 ACTIVE, WAITING, DEACTIVATED, MOVED = 'active', 'waiting', 'deactivated', 'moved'
+SUSPENDED = 'suspended'       # Bluesky's moderation suspended or took the account down: it takes nothing until restored
 DELETING = 'deleting'         # the PDS has not yet confirmed the account's deletion: tried again daily
 HOSTING = 'bluesky_hosting'     # the switch's name: "Members can create accounts here", for the instance and per domain
 LABEL_MIN, LABEL_MAX = 3, 18    # the PDS's limits on the first label of a handle under its own domains

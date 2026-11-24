@@ -11,6 +11,7 @@ Following one (A6) is recorded here at once, accepted, and sends nothing: the co
 reads the DIDs anyone here follows, and the actor's latest posts are read from its PDS (`followed`).
 """
 import re
+from collections import Counter
 from urllib.parse import urlencode
 
 from flask import current_app
@@ -239,3 +240,46 @@ def backfill_task(actor_id: int, limit: int = FOLLOW_BACKFILL) -> None:
     finally:
         session.close()
 
+
+
+# --------------------------------------------------------------------------
+# an account that goes inactive, or comes back (§7, P5)
+# --------------------------------------------------------------------------
+
+INACTIVE = -2   # deleted_by of the posts and replies hidden while their Bluesky account is inactive
+
+
+
+def _flip(user: User, hide: bool) -> None:
+    """Hide the account's live posts and replies (or show again those it hid), and move every count they were in:
+    the communities', the author's, a reply's post's and the replies' above it (`path` ends with the reply itself).
+    Each count is its own statement: a row changed twice in one statement keeps only one of the changes."""
+    which = 'deleted = false' if hide else f'deleted = true AND deleted_by = {INACTIVE}'
+    values = {'hide': hide, 'by': INACTIVE if hide else None, 'user': user.id}
+    posts = db.session.execute(text(f'UPDATE post SET deleted = :hide, deleted_by = :by WHERE user_id = :user AND '
+                                    f'{which} RETURNING community_id'), values).scalars().all()
+    replies = db.session.execute(text(f'UPDATE post_reply SET deleted = :hide, deleted_by = :by WHERE user_id = :user '
+                                      f'AND {which} RETURNING post_id, community_id, path'), values).all()
+    sign = -1 if hide else 1
+    for table, column, ids in (('community', 'post_count', posts),
+                               ('post', 'reply_count', [reply.post_id for reply in replies]),
+                               ('community', 'post_reply_count', [reply.community_id for reply in replies]),
+                               ('post_reply', 'child_count', [above for reply in replies
+                                                              for above in (reply.path or [])[:-1] if above])):
+        for target, count in Counter(ids).items():
+            db.session.execute(text(f'UPDATE {table} SET {column} = GREATEST(COALESCE({column}, 0) + :change, 0) '
+                                    f'WHERE id = :id'), {'change': sign * count, 'id': target})
+    user.post_count = max((user.post_count or 0) + sign * len(posts), 0)
+    user.post_reply_count = max((user.post_reply_count or 0) + sign * len(replies), 0)
+    db.session.commit()
+
+
+def hide_content(user: User) -> None:
+    """The account went inactive (deactivated, suspended or taken down): its posts and replies are hidden, marked
+    INACTIVE so that they, and only they, come back with it."""
+    _flip(user, True)
+
+
+def restore_content(user: User) -> None:
+    """The account is active again: what its going inactive hid is shown again."""
+    _flip(user, False)

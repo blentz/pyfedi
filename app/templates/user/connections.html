@@ -39,6 +39,10 @@
                         <span class="badge text-bg-warning">{{ _('Being deleted') }}</span>
                     {% elif is_hosted and connection.slot_state == hosted.DEACTIVATED -%}
                         <span class="badge text-bg-secondary">{{ _('Turned off') }}</span>
+                    {% elif is_hosted and connection.slot_state == hosted.SUSPENDED -%}
+                        <span class="badge text-bg-danger">{{ _('Suspended by Bluesky') }}</span>
+                    {% elif is_hosted and connection.slot_state == hosted.MOVED -%}
+                        <span class="badge text-bg-warning">{{ _('Moved to another server') }}</span>
                     {% elif connection.state == 'reauth' -%}
                         <span class="badge text-bg-danger">{{ _('Needs reconnecting') }}</span>
                     {% elif not on -%}
@@ -65,6 +69,23 @@
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <input type="hidden" name="variant" value="{{ connection.variant or '' }}">
                                 <button type="submit" class="btn btn-sm btn-primary">{{ _('Reconnect') }}</button>
+                            </form>
+                        {% endif -%}
+                        {% if on_main_domain and on and is_hosted and connection.slot_state == hosted.MOVED -%}
+                            <form method="post" action="{{ url_for('user.user_connection_connect', service_name='bluesky') }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="identity" value="1">
+                                <input type="hidden" name="hint" value="{{ connection.remote_id }}">
+                                <button type="submit" class="btn btn-sm btn-primary">{{ _('Connect it again') }}</button>
+                                <div class="small text-muted w-100">{{ _('Sign in on its new server: it stays your account for follows and replies here.') }}</div>
+                            </form>
+                        {% endif -%}
+                        {% if connection.service == 'bluesky' and connection.remote_id.startswith('did:') -%}
+                            <form method="post" action="{{ url_for('user.user_connection_import_own', connection_id=connection.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="import_own" value="{{ '0' if connection.import_own else '1' }}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Stop bringing in posts I write on Bluesky') if connection.import_own else _('Bring in posts I write on Bluesky') }}</button>
+                                <div class="small text-muted w-100">{{ _('Posts you write in Bluesky apps become your microblog posts here.') }}</div>
                             </form>
                         {% endif -%}
                         {% if on_main_domain and on and not identity and connection.service == 'bluesky' and connection.variant == 'oauth' and connection.state != 'reauth' -%}

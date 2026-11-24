@@ -164,6 +164,7 @@ def _store(service, account: Account) -> SocialConnection:
                                       default_on=service.default_on)
         db.session.add(connection)
     connection.variant = account.variant
+    connection.slot_state = None   # signed in (never a hosted account): one that moved away from the PDS here, back (§8)
     connection.remote_name = account.remote_name[:255]
     connection.sealed_tokens = seal_tokens(account.tokens)
     with for_domain(current_user.site_domain_id):   # which app issued these tokens (C10, C11)
@@ -246,6 +247,18 @@ def user_connection_choose(service_name):
 def user_connection_default(connection_id):
     connection = _own_connection_or_404(connection_id)
     connection.default_on = request.form.get('default_on') == '1'
+    db.session.commit()
+    return redirect(url_for('user.user_connections'))
+
+
+@bp.route('/user/settings/connections/<int:connection_id>/import-own', methods=['POST'])
+@login_required
+def user_connection_import_own(connection_id):
+    """Whether posts the member writes on this Bluesky account outside PieFed become theirs here (ATProto A7)."""
+    connection = _own_connection_or_404(connection_id)
+    if connection.service != 'bluesky':
+        abort(404)
+    connection.import_own = request.form.get('import_own') == '1'
     db.session.commit()
     return redirect(url_for('user.user_connections'))
 

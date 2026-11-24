@@ -28,7 +28,7 @@ from flask_babel import _
 from app import celery, db
 from app.activitypub.util import create_post, create_post_reply, delete_post_or_comment, \
     find_microblogging_community, record_boost, remove_boost, undo_vote
-from app.atproto import actors
+from app.atproto import actors, imports, lifecycle
 from app.atproto.resolve import did_document, pds_of
 from app.connections import ServiceError
 from app.connections.http import call
@@ -262,8 +262,10 @@ def blocked(user: User | None) -> bool:
 def post(did: str, rkey: str, record: dict, cid=None, hops: int = MAX_HOPS):
     """A post record into PieFed: the Post or PostReply made (or there already), or None when it is not taken."""
     uri = f'at://{did}/{POST}/{rkey}'
-    if not isinstance(record, dict) or ours(uri) or ours_did(did):
+    if not isinstance(record, dict) or ours(uri):
         return None
+    if ours_did(did):   # a member's own account: what it wrote elsewhere may be theirs to bring in (A7)
+        return imports.imported(did, rkey, record)
     existing = stored(uri)
     if existing is not None:
         return existing
@@ -392,6 +394,8 @@ def follow(did: str, rkey: str, record: dict, cid=None) -> User | None:
 def delete(did: str, collection: str, rkey: str) -> bool:
     """The author deleted a record: what PieFed made of it goes. Whether anything did."""
     uri = f'at://{did}/{collection}/{rkey}'
+    if collection == POST and imports.deleted(did, rkey):   # a post the member wrote there and brought in
+        return True
     row = AtprotoRecord.query.filter_by(uri=uri, direction='in').first()
     user = actors.actor_for(did, fetch_new=False)
     if row is None or user is None:
@@ -437,14 +441,17 @@ def backfill(user: User, limit: int) -> int:
 # --------------------------------------------------------------------------
 
 def handle(event: dict) -> None:
-    """One Jetstream event: a commit to a collection PieFed takes, or an identity event (a new handle)."""
+    """One Jetstream event: a commit to a collection PieFed takes, or an identity or account event (lifecycle)."""
     did = event.get('did')
     if not isinstance(did, str):
         return
-    if event.get('kind') == 'identity' or event.get('$type', '').endswith('#identity'):
-        user = actors.actor_for(did, fetch_new=False)
-        if user is not None:
-            actors.refresh(user)
+    kind = str(event.get('$type') or '')
+    if event.get('kind') == 'identity' or kind.endswith('#identity'):
+        lifecycle.identity(did)
+        return
+    if event.get('kind') == 'account' or kind.endswith('#account'):
+        state = event.get('account') if isinstance(event.get('account'), dict) else event
+        lifecycle.account(did, state.get('active'), state.get('status'))
         return
     commit = event.get('commit') if isinstance(event.get('commit'), dict) else event
     collection, operation, rkey = commit.get('collection'), commit.get('operation'), commit.get('rkey')

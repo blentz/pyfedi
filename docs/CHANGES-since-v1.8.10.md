@@ -2024,6 +2024,12 @@ commit each:
   shown as quotes. Bluesky notifications are read every two minutes (by `flask send-queue`) for what Jetstream does
   not carry. On a Bluesky post, a member with no Bluesky account is offered one; what they did meanwhile goes out once
   it is ready. Bluesky authors show as `@handle` with a Bluesky badge.
+- **Bluesky accounts coming and going.** A Bluesky account that is deactivated, suspended or taken down has its
+  posts and replies hidden until it is back; a deleted one's are purged. A member's own Bluesky account that Bluesky
+  suspends, deletes, renames or that moves to another server is shown as such on the connected accounts page, the
+  member is told, and a moved one can be connected again. Posts a member writes in Bluesky apps become their
+  microblog posts here ("Bring in posts I write on Bluesky", on for accounts made here), never copied back; deleting
+  one on either side deletes the other. Blocking the `bsky.app` instance stops the network coming in.
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:

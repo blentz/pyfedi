@@ -21,6 +21,10 @@ def found(piefed, url):   # PieFed's copy of a Bluesky post, by its bsky.app add
         return None
 
 
+def piefed_me(piefed):
+    return piefed.http.get('/user', params={'username': 'alice'}).raise_for_status().json()['person_view']['person']['id']
+
+
 def mine(client, did, collection, test):
     return next((record for record in records_of(client, did, collection) if test(record['value'])), None)
 
@@ -77,6 +81,30 @@ def test_alice_and_bob_answer_each_other(browser, http, bob):   # noqa: F811
     wait_for(lambda: any(f'Answered {stamp}' in reply['comment']['body'] for reply in piefed.replies(own['id'])),
              timeout=90)
     wait_for(lambda: piefed.get_post(own['id'])['counts']['upvotes'] >= 2, timeout=90)   # hers, and bob's
+
+    # step 7 (A7): a post alice writes in a Bluesky app, signed in with an app password, becomes hers here, once,
+    # and is not copied back to her repo
+    alice.goto(f'{PIEFED}/user/settings/connections')
+    alice.get_by_role('button', name='Get an app password').click()
+    alice.wait_for_load_state('networkidle')
+    app_password = alice.inner_text('#app_password').strip()
+    app = http.post(f'{PDS}/xrpc/com.atproto.server.createSession',
+                    json={'identifier': 'alice.piefed.test', 'password': app_password}).raise_for_status().json()
+    text = f'Written in a Bluesky app {stamp}'
+    http.post(f'{PDS}/xrpc/com.atproto.repo.createRecord', headers={'Authorization': f"Bearer {app['accessJwt']}"},
+              json={'repo': did, 'collection': 'app.bsky.feed.post', 'record': {
+                  '$type': 'app.bsky.feed.post', 'text': text,
+                  'createdAt': time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}}).raise_for_status()
+
+    def brought_in():
+        posts = piefed.http.get('/post/list', params={'person_id': piefed_me(piefed), 'sort': 'New'}).json()
+        return [view for view in posts.get('posts', []) if view['post'].get('body', '').startswith(text)]
+    imported = wait_for(brought_in, timeout=90)
+    time.sleep(5)   # time enough for a copy, were one to be made
+    assert len(brought_in()) == 1 and len(imported) == 1
+    assert len([record for record in records_of(http, did, 'app.bsky.feed.post')
+                if record['value']['text'].startswith(text)]) == 1   # not copied back
+    piefed.delete(imported[0]['post']['id'])
 
     # cleanup: the follow, the account (and with it her records), bob's post
     alice.goto(f'{PIEFED}/u/{HANDLE}')
