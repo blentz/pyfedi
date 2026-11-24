@@ -255,7 +255,11 @@ def own_label(user, wanted: str | None = None) -> str:
     base = label_of(user.user_name)
     wanted = (wanted or '').strip().lower() or base
     if number_of(base, wanted) is None:
-        raise HandleRefused(_('A Bluesky handle here is your own name.'), base)
+        raise HandleRefused(_('A Bluesky handle here is your own name.'),
+                            next_label(user, base) if base in reserved_labels() else base)
+    if wanted in reserved_labels():   # a host the domain already serves something else on (www, mail, pay...)
+        raise HandleRefused(_('@%(handle)s is a name this site keeps for itself.', handle=handle_of(user, wanted)),
+                            next_label(user, wanted))
     if wanted != base and belongs_to_another(user, wanted):
         raise HandleRefused(_("@%(handle)s is another member's name.", handle=handle_of(user, wanted)),
                             next_label(user, wanted))
@@ -263,12 +267,19 @@ def own_label(user, wanted: str | None = None) -> str:
 
 
 def next_label(user, label: str) -> str:
-    """The member's next own label after `label`, past any that is another member's own name."""
+    """The member's next own label after `label`, past any that is another member's own name or the site's."""
     base = label_of(user.user_name)
     for number in range((number_of(base, label) or 1) + 1, MAX_NUMBER + 1):
-        if not belongs_to_another(user, alternative(base, number)):
-            return alternative(base, number)
+        candidate = alternative(base, number)
+        if candidate not in reserved_labels() and not belongs_to_another(user, candidate):
+            return candidate
     raise HandleRefused(_('No handle of your name is free.'), base)
+
+
+def reserved_labels() -> set[str]:
+    """First labels no member may have (ATPROTO_RESERVED_LABELS): hosts the site's domains already use."""
+    return {label.strip().lower() for label in (current_app.config.get('ATPROTO_RESERVED_LABELS') or '').split(',')
+            if label.strip()}
 
 
 def handle_of(user, label: str) -> str:

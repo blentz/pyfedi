@@ -6,6 +6,11 @@
 {
 	# Let's Encrypt sends expiry and problem notices here. Set ACME_EMAIL in the caddy container's environment.
 	email {$ACME_EMAIL}
+	# A deployment's own global options, if it has any: Caddyfile snippets in /etc/caddy/global/ (mount the directory
+	# into the Caddy container). Bluesky handles under the site's domains need on-demand TLS, which asks the PDS
+	# whether a name is one of its handles, e.g. `on_demand_tls { ask http://pds:3000/tls-check }`. With no file
+	# there Caddy only logs that the pattern matched nothing.
+	import /etc/caddy/global/*.caddy
 }
 
 # Shared by the clearnet and onion sites, so their handlers cannot drift apart.

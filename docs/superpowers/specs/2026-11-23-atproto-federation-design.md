@@ -352,7 +352,11 @@ actor is named by its DID, and a handle another actor held moves to the one it n
 A deployment that enables hosted accounts runs the PDS image beside PieFed. Each domain offering handles needs a
 wildcard DNS record, plus wildcard or on-demand TLS, with `/.well-known/atproto-did` on `*.<domain>` routed to the
 PDS. It also runs `flask atproto-jetstream` (`entrypoint_jetstream.sh`) as a long-lived service, under an init that
-passes SIGTERM on (`tini`). `env.sample` documents the settings in §10.
+passes SIGTERM on (`tini`). `env.sample` documents the settings in §10. With Caddy, on-demand TLS for `*.<domain>` asks the PDS
+(`on_demand_tls { ask http://<pds>:3000/tls-check }`): the tracked Caddyfile imports global options from
+`/etc/caddy/global/*.caddy`. `ATPROTO_PDS_URL` is the PDS's public address, the one its DID documents name (an
+account whose document names another is taken to have moved). `ATPROTO_RESERVED_LABELS` keeps handles off hosts
+the domains already use.
 
 ## 15. Sources (read 2026-11-23)
 

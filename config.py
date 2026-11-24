@@ -173,6 +173,9 @@ class Config(object):
     ATPROTO_MAX_ACCOUNTS = int(os.environ.get('ATPROTO_MAX_ACCOUNTS') or 100)
     ATPROTO_HOSTED_LIMIT = int(os.environ.get('ATPROTO_HOSTED_LIMIT') or 100)
     ATPROTO_SLOT_POLICY = os.environ.get('ATPROTO_SLOT_POLICY') or 'sticky'
+    # first labels no member's handle may have: hosts the site's domains already serve something else on
+    ATPROTO_RESERVED_LABELS = os.environ.get('ATPROTO_RESERVED_LABELS') or \
+        'www,mail,smtp,imap,pop,ftp,pds,api,admin,pay,mta-sts,autoconfig,autodiscover'
     ATPROTO_BUDGET_SECOND = int(os.environ.get('ATPROTO_BUDGET_SECOND') or 40)
     ATPROTO_BUDGET_HOUR = int(os.environ.get('ATPROTO_BUDGET_HOUR') or 2000)
     ATPROTO_BUDGET_DAY = int(os.environ.get('ATPROTO_BUDGET_DAY') or 18000)

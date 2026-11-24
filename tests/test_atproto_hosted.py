@@ -187,6 +187,20 @@ def test_a_member_may_have_only_their_own_name(hosted_world):
         assert refused.value.suggestion == 'alice-smith'
 
 
+def test_a_name_the_site_keeps_is_nobodys(hosted_world, monkeypatch):
+    """pay.<domain> answers for the site's own payments: a member called pay is offered pay-2."""
+    monkeypatch.setitem(hosted_world.app.config, 'ATPROTO_RESERVED_LABELS', ' Pay, www,,pay-2 ')
+    assert hosted.reserved_labels() == {'pay', 'www', 'pay-2'}
+    pay = SimpleNamespace(user_name='pay', id=0, site_domain_id=hosted_world.author.site_domain_id)
+    for asked in (None, 'pay', 'nothing-of-mine'):
+        with pytest.raises(hosted.HandleRefused) as refused:
+            hosted.own_label(pay, asked)
+        assert refused.value.suggestion == 'pay-3'   # pay-2 is the site's too
+    assert hosted.own_label(pay, 'pay-3') == 'pay-3'
+    monkeypatch.setitem(hosted_world.app.config, 'ATPROTO_RESERVED_LABELS', '')
+    assert hosted.reserved_labels() == set() and hosted.own_label(pay) == 'pay'
+
+
 def test_hosting_is_on_only_when_everything_says_so(hosted_world, monkeypatch):
     domain_id = hosted_world.author.site_domain_id
     assert hosted.hosting_on(domain_id)
