@@ -33,6 +33,10 @@ def test_the_page_offers_one_click_creation(hosted_world):
     assert f'Create @author.{hosted_world.home}' in body and 'Connect Bluesky' not in body   # no OAuth key here
     assert 'name="label" value="author"' in body
     assert f'Create @author-2.{hosted_world.home}' in hosted_world.client.get(f'{PAGE}?label=author-2').data.decode()
+    assert f'Create @author.{hosted_world.home}' in hosted_world.client.get(f'{PAGE}?label=founder').data.decode()
+    assert post(hosted_world, '/user/settings/connections/bluesky/create', label='founder').location.endswith(
+        f'{PAGE}?label=author')   # someone else's name: offered their own
+    assert SocialConnection.query.count() == 0
 
 
 def test_the_page_offers_connecting_an_own_account_with_the_key(hosted_world, monkeypatch):
@@ -112,13 +116,15 @@ def test_turning_off_or_on_when_the_pds_is_down(hosted_world):
 
 def test_changing_the_handle_from_the_page(hosted_world):
     connection = a_hosted(hosted_world, hosted_world.author)
-    post(hosted_world, f'/user/settings/connections/{connection.id}/handle', label='renamed')
-    assert f'Your Bluesky handle is now @renamed.{hosted_world.home}.' in page(hosted_world)
-    hosted_world.pds.taken.add(f'taken.{hosted_world.home}')
-    post(hosted_world, f'/user/settings/connections/{connection.id}/handle', label='taken')
-    assert f'Try @taken-2.{hosted_world.home} instead?' in page(hosted_world)
+    post(hosted_world, f'/user/settings/connections/{connection.id}/handle', label='author-2')
+    assert f'Your Bluesky handle is now @author-2.{hosted_world.home}.' in page(hosted_world)
+    hosted_world.pds.taken.add(f'author-5.{hosted_world.home}')
+    post(hosted_world, f'/user/settings/connections/{connection.id}/handle', label='author-5')
+    assert f'Try @author-6.{hosted_world.home} instead?' in page(hosted_world)
+    post(hosted_world, f'/user/settings/connections/{connection.id}/handle', label='founder')
+    assert f'Try @author.{hosted_world.home} instead?' in page(hosted_world)
     hosted_world.pds.fail['com.atproto.identity.updateHandle'] = httpx.Response(502)
-    post(hosted_world, f'/user/settings/connections/{connection.id}/handle', label='later')
+    post(hosted_world, f'/user/settings/connections/{connection.id}/handle', label='author')
     assert 'Bluesky could not be reached' in page(hosted_world)
 
 

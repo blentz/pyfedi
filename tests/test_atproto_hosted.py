@@ -4,6 +4,7 @@ tests/atproto_fake.py plays the PDS. Each test gets its own Redis keys for the b
 the creation spacing, since the test Redis is shared between workers.
 """
 import itertools
+import json
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -167,8 +168,22 @@ def test_a_name_as_a_handle_label(name, label):
 def test_the_next_label_to_offer():
     assert hosted.alternative('alice') == 'alice-2'
     assert hosted.alternative('abcdefghijklmnopqr', 10) == 'abcdefghijklmno-10'
-    assert hosted.next_alternative('alice') == 'alice-2'
-    assert hosted.next_alternative('alice-2') == 'alice-3'
+    alice, bob2 = SimpleNamespace(user_name='Alice'), SimpleNamespace(user_name='bob_2')
+    assert hosted.next_label(alice, 'alice') == 'alice-2' and hosted.next_label(alice, 'alice-2') == 'alice-3'
+    assert hosted.next_label(bob2, 'bob-2') == 'bob-2-2'   # a name that ends in a number keeps it
+    assert hosted.next_label(alice, 'someone') == 'alice-2'
+    with pytest.raises(hosted.HandleRefused):
+        hosted.next_label(alice, f'alice-{hosted.MAX_NUMBER}')
+
+
+def test_a_member_may_have_only_their_own_name(hosted_world):
+    alice = SimpleNamespace(user_name='Alice_Smith')
+    assert hosted.own_label(alice) == hosted.own_label(alice, '  ') == 'alice-smith'
+    assert hosted.own_label(alice, 'Alice-Smith-7') == 'alice-smith-7'
+    for taken in ('admin', 'bob', 'alice-smith-1', 'alice-smith-100', 'alice-smith-x', 'xalice-smith-2'):
+        with pytest.raises(hosted.HandleRefused) as refused:
+            hosted.own_label(alice, taken)
+        assert refused.value.suggestion == 'alice-smith'
 
 
 def test_hosting_is_on_only_when_everything_says_so(hosted_world, monkeypatch):
@@ -231,9 +246,24 @@ def test_creating_makes_the_account_its_identity_and_sends_profile_and_posts(hos
 
 def test_an_invite_is_minted_when_the_pds_wants_one(hosted_world):
     hosted_world.pds.invite = True
-    connection = hosted.request_account(hosted_world.author, 'Chosen_Name')
-    assert connection.remote_name == f'chosen-name.{hosted_world.home}' and not hosted_world.pds.invites
+    connection = hosted.request_account(hosted_world.author, 'author-3')
+    assert connection.remote_name == f'author-3.{hosted_world.home}' and not hosted_world.pds.invites
     assert 'com.atproto.server.createInviteCode' in hosted_world.pds.calls
+
+
+def test_another_name_is_refused_before_the_pds_is_asked(hosted_world):
+    with pytest.raises(hosted.HandleRefused) as refused:
+        hosted.request_account(hosted_world.author, 'admin')
+    assert refused.value.suggestion == 'author' and not hosted_world.pds.calls
+
+
+def test_the_email_reaches_nobody(hosted_world):
+    connection = hosted.request_account(hosted_world.author)
+    assert connection.slot_state == hosted.ACTIVE
+    request = next(call for call in hosted_world.pds.requests if call.url.path.endswith('createAccount'))
+    email = json.loads(request.content)['email']
+    local, domain = email.split('@')
+    assert domain == 'accounts.invalid' and len(local) == 24 and int(local, 16) >= 0   # random, under no real domain
 
 
 def test_a_handle_that_is_taken_offers_the_next(hosted_world):
@@ -323,24 +353,49 @@ def test_deleting_removes_the_account(hosted_world, monkeypatch):
     assert len(hosted_world.pds.calls) == calls and SocialConnection.query.count() == 0
 
 
-def test_a_delete_the_pds_refuses_still_forgets(hosted_world):
-    connection = a_hosted(hosted_world, hosted_world.author)
+def test_a_delete_the_pds_refuses_is_kept_and_tried_daily(hosted_world):
+    connection = a_hosted(hosted_world, hosted_world.author, is_identity=True, slot_pinned=True)
+    did = connection.remote_id
     hosted_world.pds.fail['com.atproto.admin.deleteAccount'] = httpx.Response(500)
-    hosted.delete_account(connection)
-    assert SocialConnection.query.count() == 0
+    assert hosted.delete_account(connection) is False
+    assert (connection.slot_state, connection.slot_pinned, connection.is_identity) == (hosted.DELETING, False, False)
+    assert open_tokens(connection)['password']   # still the way into the account
+    assert not bluesky.SERVICE.sendable(connection) and hosted.active_count() == 0
+    assert 'Being deleted' in hosted_world.client.get('/user/settings/connections').data.decode()
+    hosted_world.pds.fail['com.atproto.admin.deleteAccount'] = httpx.Response(500)
+    with pytest.raises(Transient):   # Create while it is going: the delete is tried once more, then it waits
+        hosted.request_account(hosted_world.author)
+    assert hosted.daily()['deleted'] == 1
+    assert did not in hosted_world.pds.accounts and SocialConnection.query.count() == 0
+
+
+def test_create_after_a_delete_that_finally_works(hosted_world):
+    old = a_hosted(hosted_world, hosted_world.author, state=hosted.DELETING)
+    old_did = old.remote_id
+    connection = hosted.request_account(hosted_world.author)
+    assert connection.slot_state == hosted.ACTIVE and old_did not in hosted_world.pds.accounts
+
+
+def test_a_delete_without_the_pds_waits_for_it(hosted_world, monkeypatch):
+    connection = a_hosted(hosted_world, hosted_world.author)
+    monkeypatch.setitem(hosted_world.app.config, 'ATPROTO_PDS_URL', '')
+    assert hosted.delete_account(connection) is False and connection.slot_state == hosted.DELETING
 
 
 def test_renaming(hosted_world):
     connection = a_hosted(hosted_world, hosted_world.author)
-    assert hosted.rename(connection, 'New_One') == f'new-one.{hosted_world.home}' == connection.remote_name
+    assert hosted.rename(connection, 'Author-2') == f'author-2.{hosted_world.home}' == connection.remote_name
     assert hosted_world.pds.accounts[connection.remote_id]['handle'] == connection.remote_name
-    hosted_world.pds.taken.add(f'taken.{hosted_world.home}')
+    hosted_world.pds.taken.add(f'author-3.{hosted_world.home}')
     with pytest.raises(hosted.HandleRefused) as refused:
-        hosted.rename(connection, 'taken')
-    assert refused.value.suggestion == 'taken-2'
+        hosted.rename(connection, 'author-3')
+    assert refused.value.suggestion == 'author-4'
+    with pytest.raises(hosted.HandleRefused) as refused:
+        hosted.rename(connection, 'admin')   # nobody else's name
+    assert refused.value.suggestion == 'author'
     hosted_world.pds.fail['com.atproto.identity.updateHandle'] = httpx.Response(500)
     with pytest.raises(Transient):
-        hosted.rename(connection, 'other')
+        hosted.rename(connection, 'author')
 
 
 def test_an_app_password(hosted_world):
@@ -498,7 +553,7 @@ def test_the_service_kinds_of_a_hosted_account(hosted_world):
 
 def test_daily_does_nothing_without_the_pds(hosted_world, monkeypatch):
     monkeypatch.setitem(hosted_world.app.config, 'ATPROTO_PDS_URL', '')
-    assert hosted.daily() == {'freed': 0, 'granted': 0}
+    assert hosted.daily() == {'deleted': 0, 'freed': 0, 'granted': 0}
 
 
 def test_sticky_frees_a_quiet_slot_and_fills_from_the_list(hosted_world, monkeypatch):
@@ -514,7 +569,7 @@ def test_sticky_frees_a_quiet_slot_and_fills_from_the_list(hosted_world, monkeyp
     db.session.commit()
     monkeypatch.setitem(hosted_world.app.config, 'ATPROTO_MAX_ACCOUNTS', 3)
     monkeypatch.setitem(hosted_world.app.config, 'ATPROTO_HOSTED_LIMIT', 5)
-    assert hosted.daily() == {'freed': 1, 'granted': 1}
+    assert hosted.daily() == {'deleted': 0, 'freed': 1, 'granted': 1}
     assert quiet_row.slot_state == hosted.DEACTIVATED and not hosted_world.pds.accounts[quiet_row.remote_id]['active']
     assert Notification.query.filter_by(user_id=quiet.id, subtype='bluesky_slot_freed').count() == 1
     assert waiting_row.slot_state == hosted.ACTIVE and waiting_row.remote_id.startswith('did:')
@@ -528,7 +583,7 @@ def test_ranked_keeps_the_top_by_followers(hosted_world, monkeypatch):
     a_hosted(hosted_world, pinned, slot_pinned=True)
     high_row = a_hosted(hosted_world, high, state=hosted.WAITING)
     monkeypatch.setitem(hosted_world.app.config, 'ATPROTO_SLOT_POLICY', 'ranked')
-    assert hosted.daily() == {'freed': 1, 'granted': 1}
+    assert hosted.daily() == {'deleted': 0, 'freed': 1, 'granted': 1}
     assert (low_row.slot_state, high_row.slot_state) == (hosted.WAITING, hosted.ACTIVE)
 
 
@@ -539,7 +594,7 @@ def test_a_full_server_admits_only_who_has_an_account(hosted_world, monkeypatch)
     fresh = a_hosted(hosted_world, a_member('fresh'), state=hosted.WAITING)
     follow(fresh.user, 1)
     back = a_hosted(hosted_world, a_member('back'), state=hosted.WAITING, with_account=True)
-    assert hosted.daily() == {'freed': 0, 'granted': 1}
+    assert hosted.daily() == {'deleted': 0, 'freed': 0, 'granted': 1}
     assert (fresh.slot_state, back.slot_state) == (hosted.WAITING, hosted.ACTIVE)
 
 
@@ -551,7 +606,7 @@ def test_a_slot_that_cannot_be_freed_or_given_is_tried_tomorrow(hosted_world, mo
     rising = a_hosted(hosted_world, a_member('rising'), state=hosted.WAITING)
     follow(rising.user, 2)
     hosted_world.pds.fail['com.atproto.server.deactivateAccount'] = httpx.Response(503)
-    assert hosted.daily() == {'freed': 0, 'granted': 0}
+    assert hosted.daily() == {'deleted': 0, 'freed': 0, 'granted': 0}
     assert stuck.slot_state == hosted.ACTIVE and rising.slot_state == hosted.WAITING
 
 

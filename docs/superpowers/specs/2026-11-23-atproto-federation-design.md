@@ -41,7 +41,9 @@ Owner rulings, 2026-11-23:
   notifications and imports go through. A created account is always the identity. A connected account becomes the
   identity when the member has no other identity and accepts the wider OAuth scopes (§5). Any further Bluesky
   connections only receive copies, as in CA today.
-- **A9 (O5) Seamless handles.** The handle is derived without asking. `_` becomes `-`. On a collision or an invalid
+- **A9 (O5) Seamless handles.** The handle is derived without asking. `_` becomes `-`. A member may have only their
+  own name or one of its numbered alternatives (`alice`, `alice-2` … `alice-99`), never another member's or the
+  site's. On a collision or an invalid
   label, PieFed offers one pre-filled alternative (`alice-2`) that the member can accept with one click. The goal
   is that creating an account is a single click.
 - **A10 (O6) The relay cap.** A waiting list and queuing, throttling, and selection by follower count (§9).
@@ -336,6 +338,10 @@ The report is `interop/spike_atproto/report.json`.
 - **Email.** A made-up address (`atproto+<id>@<domain>`) is accepted, and the account reads
   `emailConfirmed: false`. The harness PDS has no SMTP, so whether a PDS with SMTP mails it was not observed.
   Deployments should leave the PDS's email settings unset: PieFed holds the credentials and never needs a reset mail.
+  PieFed gives each account a random address under `accounts.invalid` (RFC 2606, never delivered; the PDS accepts
+  it), so even a PDS given SMTP mails a reset to nobody.
+- **Deleting.** A deletion the PDS has not confirmed keeps its row (`deleting`: no copies, no place, still the
+  password) and is asked again daily, so no live account is left that PieFed can no longer reach.
 - **Session lifetimes.** Access tokens last 2 hours and refresh tokens 90 days. `createSession` with the sealed
   password works, by DID, after any loss.
 - **Refresh replay.** Unlike OAuth, a password session's **used refresh token is accepted again within a grace

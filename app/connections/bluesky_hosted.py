@@ -40,6 +40,7 @@ from app.utils import get_setting, get_task_session, patch_db_session
 
 HOSTED = 'hosted'
 ACTIVE, WAITING, DEACTIVATED, MOVED = 'active', 'waiting', 'deactivated', 'moved'
+DELETING = 'deleting'         # the PDS has not yet confirmed the account's deletion: tried again daily
 HOSTING = 'bluesky_hosting'     # the switch's name: "Members can create accounts here", for the instance and per domain
 LABEL_MIN, LABEL_MAX = 3, 18    # the PDS's limits on the first label of a handle under its own domains
 INACTIVE = timedelta(days=90)   # sticky: a slot with no copy for this long is freed
@@ -50,6 +51,10 @@ PROFILE_IMAGE_BYTES = 950_000   # app.bsky.actor.profile takes avatar and banner
 HANDLE_ERRORS = ('HandleNotAvailable', 'InvalidHandle', 'UnsupportedDomain')
 DESCRIBE_KEY = 'atproto:describe'   # the PDS's describeServer, kept ten minutes
 CREATE_KEY = 'atproto:create'       # held for a second after each account creation
+# an account's email: under a reserved domain that never receives mail (RFC 2606), so no reset mail can reach
+# anyone, even if the PDS is given SMTP; PieFed holds the password and never needs one
+ACCOUNT_EMAIL_DOMAIN = 'accounts.invalid'
+MAX_NUMBER = 99                     # the highest numbered alternative a member's own name may take
 
 
 class HandleRefused(ServiceError):
@@ -226,9 +231,31 @@ def alternative(label: str, number: int = 2) -> str:
     return f'{label[:LABEL_MAX - len(suffix)].rstrip("-")}{suffix}'
 
 
-def next_alternative(label: str) -> str:
-    match = re.fullmatch(r'(.+)-(\d+)', label)
-    return alternative(match.group(1), int(match.group(2)) + 1) if match else alternative(label)
+def number_of(base: str, label: str) -> int | None:
+    """Which of the member's own labels this is: 1 for the name itself, n for its n-th alternative, None for any
+    other."""
+    if label == base:
+        return 1
+    return next((number for number in range(2, MAX_NUMBER + 1) if alternative(base, number) == label), None)
+
+
+def own_label(user, wanted: str | None = None) -> str:
+    """The label a member may have: their own name as a label, or one of its numbered alternatives (A9). Nobody may
+    take another member's name, or a name of the site's: HandleRefused offers their own."""
+    base = label_of(user.user_name)
+    wanted = (wanted or '').strip().lower() or base
+    if number_of(base, wanted) is None:
+        raise HandleRefused(_('A Bluesky handle here is your own name.'), base)
+    return wanted
+
+
+def next_label(user, label: str) -> str:
+    """The member's next own label after `label`."""
+    base = label_of(user.user_name)
+    number = (number_of(base, label) or 1) + 1
+    if number > MAX_NUMBER:
+        raise HandleRefused(_('No handle of your name is free.'), base)
+    return alternative(base, number)
 
 
 def handle_of(user, label: str) -> str:
@@ -303,14 +330,14 @@ def create_account(user, label: str) -> dict:
     """The account on the PDS, under `<label>.<home domain>`: its tokens. HandleRefused offers the next label."""
     handle = handle_of(user, label)
     password = secrets.token_urlsafe(32)
-    body = {'handle': handle, 'email': f'atproto+{user.id}@{home_domain(user).domain}', 'password': password}
+    body = {'handle': handle, 'email': f'{secrets.token_hex(12)}@{ACCOUNT_EMAIL_DOMAIN}', 'password': password}
     if describe().get('inviteCodeRequired'):
         body['inviteCode'] = call('POST', f'{pds_url()}/xrpc/com.atproto.server.createInviteCode', auth=_admin(),
                                   json={'useCount': 1}).json()['code']
     _space_creations()
     response = fetch('POST', f'{pds_url()}/xrpc/com.atproto.server.createAccount', json=body)
     if _handle_refused(response):
-        raise HandleRefused(_('@%(handle)s cannot be had.', handle=handle), next_alternative(label))
+        raise HandleRefused(_('@%(handle)s cannot be had.', handle=handle), next_label(user, label))
     return _tokens(check(response).json(), password)
 
 
@@ -335,11 +362,15 @@ def request_account(user, label: str | None = None) -> SocialConnection:
     has one gets it back (reactivated, or still waiting). Raises HandleRefused when the PDS will not give the
     handle, and ServiceError when it cannot be reached."""
     connection = hosted_of(user)
+    if connection is not None and connection.slot_state == DELETING and delete_account(connection):
+        connection = None   # the old one is gone at last: a new one may be made
     if connection is not None:
+        if connection.slot_state == DELETING:
+            raise Transient(_('Your last Bluesky account is still being deleted: try again later.'))
         if connection.slot_state == DEACTIVATED:
             reactivate(connection)
         return connection
-    label = label_of(label or user.user_name)
+    label = own_label(user, label)
     connection = SocialConnection(user_id=user.id, service='bluesky', variant=HOSTED, default_on=False,
                                   import_own=True, remote_id=f'waiting:{user.id}', remote_name=handle_of(user, label),
                                   sealed_tokens=seal_tokens({'label': label}), slot_state=WAITING)
@@ -368,7 +399,7 @@ def grant(connection: SocialConnection) -> bool:
             tokens = sign_in(connection.remote_id, open_tokens(connection)['password'])
             HostedSession(tokens).xrpc('POST', 'com.atproto.server.activateAccount')
         else:
-            label = open_tokens(connection).get('label') or label_of(connection.user.user_name)
+            label = open_tokens(connection).get('label') or own_label(connection.user)
             for _attempt in range(5):
                 try:
                     tokens = create_account(connection.user, label)
@@ -411,29 +442,37 @@ def reactivate(connection: SocialConnection) -> None:
         db.session.commit()
 
 
-def delete_account(connection: SocialConnection) -> None:
-    """The account goes from the PDS for good (the member deleted it, or their PieFed account went), and with it
-    the row. The PDS is asked once; a failure is logged and the row goes anyway."""
-    if has_account(connection) and configured():
+def delete_account(connection: SocialConnection) -> bool:
+    """The account goes from the PDS for good (the member deleted it, or their PieFed account went), and then its
+    row. Until the PDS confirms it, the row stays, DELETING (it takes no copies and holds no place), with the
+    password that reaches the account, and the daily task asks again. Whether it is gone."""
+    if has_account(connection):
         try:
+            if not configured():
+                raise Transient(_('The Bluesky server is not set up here.'))
             call('POST', f'{pds_url()}/xrpc/com.atproto.admin.deleteAccount', auth=_admin(),
                  json={'did': connection.remote_id})
         except ServiceError as failure:
             current_app.logger.warning(f'atproto: deleting {connection.remote_id} failed: {failure.message}')
+            connection.slot_state, connection.slot_pinned = DELETING, False
+            connection.is_identity = False
+            db.session.commit()
+            return False
     db.session.delete(connection)
     db.session.commit()
+    return True
 
 
 def rename(connection: SocialConnection, label: str) -> str:
     """A new handle under the same domain (§8): the DID stays, the old handle stops resolving at once. The new
     handle; HandleRefused when it cannot be had."""
-    label = label_of(label)
+    label = own_label(connection.user, label)
     handle = handle_of(connection.user, label)
     spend('profile')
     response = fetch('POST', f'{pds_url()}/xrpc/com.atproto.identity.updateHandle', json={'handle': handle},
                      headers={'Authorization': f"Bearer {usable_tokens(connection.id, SERVICES['bluesky'])['access_token']}"})
     if _handle_refused(response):
-        raise HandleRefused(_('@%(handle)s cannot be had.', handle=handle), next_alternative(label))
+        raise HandleRefused(_('@%(handle)s cannot be had.', handle=handle), next_label(connection.user, label))
     check(response)
     connection.remote_name = handle
     db.session.commit()
@@ -551,7 +590,8 @@ def daily() -> dict:
     """Free slots by the policy, then fill free slots from the waiting list in order (§9). What it did."""
     freed = granted = 0
     if not configured():
-        return {'freed': 0, 'granted': 0}
+        return {'deleted': 0, 'freed': 0, 'granted': 0}
+    deleted = sum(delete_account(row) for row in hosted_rows().filter_by(slot_state=DELETING).all())
     policy = current_app.config.get('ATPROTO_SLOT_POLICY')
     active = hosted_rows().filter_by(slot_state=ACTIVE).all()
     if policy == 'ranked':
@@ -581,7 +621,7 @@ def daily() -> dict:
                 break
             continue   # the PDS is full of accounts: only those who have one may come back
         granted += grant(row)
-    return {'freed': freed, 'granted': granted}
+    return {'deleted': deleted, 'freed': freed, 'granted': granted}
 
 
 @celery.task

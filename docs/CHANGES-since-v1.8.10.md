@@ -1994,11 +1994,12 @@ commit each:
   on the connected accounts page, on a Bluesky PDS run beside PieFed: their microblog posts
   go there whole and are ticked on the post form, while a post in any other community goes as
   a link card only when ticked (a new Bluesky connection starts unticked for those). The
-  handle comes from the user name; a taken one offers the next (`alice-2`). Their profile
+  handle is the member's own name, never another's; a taken one offers the next (`alice-2`). Their profile
   (name, bio with a link back, avatar, banner) goes with it, and so do their latest 50
   microblog posts, with their own times. They can turn the account off (it keeps its name
   and reads as deactivated), on again, rename it, get an app password for Bluesky apps, or
-  delete it; deleting a PieFed account deletes its Bluesky account. A new PDS may hold 100
+  delete it; deleting a PieFed account deletes its Bluesky account (a deletion the server has not
+  confirmed is asked again daily). Accounts get an address that receives no mail. A new PDS may hold 100
   accounts on Bluesky's relay, so a member past the cap waits on a list ordered by followers,
   told when their place is ready; the daily maintenance frees places by the slot policy and
   fills them, and admins can give or keep a place at Admin > Connected accounts, where they

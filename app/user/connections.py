@@ -110,7 +110,10 @@ def user_connections():
     mine = hosted.hosted_of(current_user)
     create = None
     if mine is None and hosted.hosting_on(home):   # A9: the handle is derived, or the alternative offered
-        label = hosted.label_of(request.args.get('label') or current_user.user_name)
+        try:
+            label = hosted.own_label(current_user, request.args.get('label'))
+        except hosted.HandleRefused as refused:   # only the member's own name, or one of its alternatives
+            label = refused.suggestion
         create = {'label': label, 'handle': hosted.handle_of(current_user, label)}
     place = hosted.place_of(mine) if mine is not None and mine.slot_state == hosted.WAITING else None
     return render_template('user/connections.html', title=_('Connected accounts'), user=current_user,

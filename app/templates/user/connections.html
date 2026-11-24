@@ -35,6 +35,8 @@
                     {% set is_hosted = connection.variant == hosted.HOSTED -%}
                     {% if is_hosted and connection.slot_state == hosted.WAITING -%}
                         <span class="badge text-bg-info">{{ _('On the waiting list: number %(place)s', place=place) }}</span>
+                    {% elif is_hosted and connection.slot_state == hosted.DELETING -%}
+                        <span class="badge text-bg-warning">{{ _('Being deleted') }}</span>
                     {% elif is_hosted and connection.slot_state == hosted.DEACTIVATED -%}
                         <span class="badge text-bg-secondary">{{ _('Turned off') }}</span>
                     {% elif connection.state == 'reauth' -%}
@@ -77,7 +79,7 @@
                                 <form method="post" class="d-flex gap-1" action="{{ url_for('user.user_bluesky_handle', connection_id=connection.id) }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <label class="visually-hidden" for="label_{{ connection.id }}">{{ _('New name') }}</label>
-                                    <input type="text" class="form-control form-control-sm" name="label" id="label_{{ connection.id }}" maxlength="18" autocapitalize="none" spellcheck="false" placeholder="{{ connection.remote_name.split('.')[0] }}">
+                                    <input type="text" class="form-control form-control-sm" name="label" id="label_{{ connection.id }}" maxlength="18" autocapitalize="none" spellcheck="false" placeholder="{{ connection.remote_name.split('.')[0] }}" title="{{ _('Your name, or your name with a number: %(name)s-2', name=hosted.label_of(user.user_name)) }}">
                                     <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Change handle') }}</button>
                                 </form>
                             {% elif connection.slot_state == hosted.DEACTIVATED -%}

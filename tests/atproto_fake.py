@@ -22,6 +22,7 @@ class FakePDS:
         self.taken: set[str] = set()            # handles another account has
         self.invites: set[str] = set()
         self.calls: list[str] = []
+        self.requests: list[httpx.Request] = []
         self.fail: dict[str, httpx.Response] = {}   # nsid -> the answer it gives instead, once
         router.route(host='pds.example').mock(side_effect=self._handle)
 
@@ -49,6 +50,7 @@ class FakePDS:
     def _handle(self, request: httpx.Request) -> httpx.Response:
         nsid = request.url.path.removeprefix('/xrpc/')
         self.calls.append(nsid)
+        self.requests.append(request)
         if nsid in self.fail:
             return self.fail.pop(nsid)
         body = json.loads(request.content) if request.content and request.headers.get(
