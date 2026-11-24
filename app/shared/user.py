@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from app import db, cache, plugins
 from app.atproto import actors as atproto_actors
+from app.atproto import identity as atproto_identity
 from app.constants import *
 from app.local_only import REMOTE_CONTACT_REFUSAL, found_here, hidden_here, refuses_remote_contact
 from app.onion import has_real_ip
@@ -60,6 +61,7 @@ def block_another_user(person_id, src, auth=None):
         db.session.commit()
 
         cache.delete_memoized(blocked_users, user_id)
+        atproto_identity.blocked(user_id, person)   # an ATProto account is blocked on Bluesky too, by the identity
 
     # Nothing to fed? (Lemmy doesn't federate anything to the blocked person)
 
@@ -88,6 +90,7 @@ def unblock_another_user(person_id, src, auth=None):
         db.session.commit()
 
         cache.delete_memoized(blocked_users, user_id)
+        atproto_identity.blocked(user_id, db.session.get(User, person_id))
 
     # Nothing to fed? (Lemmy doesn't federate anything to the unblocked person)
 
@@ -265,7 +268,7 @@ def follow_user_as(user: User, to_follow: User):
 
     # R265: pending is None, as the column says -- a remote follow until its Accept arrives, or a manual approval
     is_accepted = None
-    atproto = atproto_actors.is_atproto(to_follow)   # A6: a Bluesky follow is accepted here at once, and sends nothing
+    atproto = atproto_actors.is_atproto(to_follow)   # A6: a Bluesky follow is accepted here at once (no ActivityPub)
     if atproto or (to_follow.is_local() and to_follow.ap_manually_approves_followers is not True):
         is_accepted = True
         user.num_following += 1
@@ -302,6 +305,7 @@ def follow_user_as(user: User, to_follow: User):
 
     elif atproto:
         atproto_actors.followed(user.id, follow_id)
+        atproto_identity.followed(user.id, to_follow)   # with an identity, a follow on Bluesky too
     else:
         task_selector('follow_user', to_follow_id=follow_id, user_id=user.id)
 
@@ -330,7 +334,7 @@ def unfollow_user_as(user: User, to_unfollow: User):
     db.session.commit()
 
     if atproto_actors.is_atproto(to_unfollow):
-        pass   # A6: nothing was sent, so nothing is undone
+        atproto_identity.followed(user.id, to_unfollow)   # the identity's follow, if it made one, goes
     elif not to_unfollow.is_local():
         task_selector('unfollow_user', to_follow_id=follow_id, user_id=user.id)
     else:

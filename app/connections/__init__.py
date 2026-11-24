@@ -103,6 +103,7 @@ class Account:
     remote_name: str
     tokens: dict
     variant: str | None = None
+    identity: bool = False    # a Bluesky sign-in that granted what a member's identity needs (ATProto spec §5)
 
 
 class Service:

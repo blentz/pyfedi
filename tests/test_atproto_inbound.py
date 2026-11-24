@@ -290,9 +290,13 @@ def test_attachments_and_embedded_links():
     assert ingest.attachments_of({'$type': 'app.bsky.embed.video'}, 'p', 'd') == []
     assert ingest.attachments_of(None, 'p', 'd') == [] and ingest.attachments_of({'$type': 'x'}, 'p', 'd') == []
     quote = {'$type': 'app.bsky.embed.record', 'record': {'uri': 'at://did:plc:q/app.bsky.feed.post/3kq'}}
-    assert 'https://bsky.app/profile/did:plc:q/post/3kq' in ingest.links_of(quote)
+    assert ingest.links_of(quote) == ''   # a quoted post is the Note's `quote` (P4), not a link
+    assert ingest.quoted_of(quote) == 'at://did:plc:q/app.bsky.feed.post/3kq'
     nested = {'$type': 'app.bsky.embed.recordWithMedia', 'record': {'record': quote['record']}}
-    assert 'post/3kq' in ingest.links_of(nested)
+    assert ingest.quoted_of(nested) == 'at://did:plc:q/app.bsky.feed.post/3kq'
+    for not_a_post in (None, {'$type': 'app.bsky.embed.images'}, {'$type': 'app.bsky.embed.record', 'record': 'x'},
+                       {'$type': 'app.bsky.embed.record', 'record': {'uri': 'at://did:plc:q/app.bsky.graph.list/l'}}):
+        assert ingest.quoted_of(not_a_post) is None
     external = {'$type': 'app.bsky.embed.external', 'external': {'uri': 'https://news.example/a'}}
     assert 'https://news.example/a' in ingest.links_of(external)
     for nothing in (None, {'$type': 'app.bsky.embed.external', 'external': {'uri': 'javascript:x'}},
@@ -330,11 +334,12 @@ def test_a_post_by_a_login_only_account(inbound):
 
 def test_our_own_echo_is_skipped(inbound):
     uri = f'at://{inbound.bob}/{POST}/3kcopy'
-    connection = SocialConnection(user_id=inbound.author.id, service='bluesky', variant='oauth', remote_id=inbound.bob,
-                                  remote_name='x', sealed_tokens=seal_tokens({}))
+    post = ingest.post(inbound.bob, '3kother', note())
+    connection = SocialConnection(user_id=inbound.author.id, service='bluesky', variant='oauth',
+                                  remote_id='did:plc:mmmmmmmmmmmmmmmmmmmmmmmm', remote_name='x',
+                                  sealed_tokens=seal_tokens({}))
     db.session.add(connection)
     db.session.commit()
-    post = Post.query.first() or ingest.post(inbound.bob, '3kother', note())
     db.session.add(SocialCrosspost(post_id=post.id, connection_id=connection.id, service='bluesky', state='sent',
                                    remote_id=uri))
     db.session.add(AtprotoRecord(uri=f'at://{inbound.bob}/{POST}/3kout', did=inbound.bob, collection=POST,
@@ -343,6 +348,9 @@ def test_our_own_echo_is_skipped(inbound):
     assert ingest.post(inbound.bob, '3kcopy', note()) is None
     assert ingest.post(inbound.bob, '3kout', note()) is None
     assert ingest.post(inbound.bob, '3kodd', 'not a record') is None
+    # a member's own account is never an actor here: what it writes outside PieFed is theirs to import (P5)
+    assert ingest.post(connection.remote_id, '3kmine', note()) is None
+    assert User.query.filter_by(ap_profile_id=actors.profile_url(connection.remote_id)).first() is None
 
 
 def test_a_blocked_network_or_actor_brings_nothing(inbound):
@@ -461,7 +469,8 @@ def test_events(inbound, monkeypatch):
                 {'did': 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa', 'kind': 'identity'},
                 {'did': 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa', 'collection': 'app.bsky.actor.profile',
                  'operation': 'update', 'rkey': 'self'},
-                {'did': inbound.bob, 'collection': 'app.bsky.feed.like', 'operation': 'create', 'rkey': 'x'}):
+                {'did': inbound.bob, 'collection': 'app.bsky.feed.like', 'operation': 'create', 'rkey': 'x'},
+                {'did': inbound.bob, 'collection': 'app.bsky.graph.block', 'operation': 'create', 'rkey': 'x'}):
         ingest.handle(odd)   # nothing to do, nothing raised
 
 

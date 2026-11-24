@@ -5,6 +5,9 @@ hashtag facets in UTF-8 byte offsets; up to four pictures with their alt text, o
 card; `sexual` or `graphic-media` self-labels for NSFW or NSFL. A post behind a content warning sends the warning
 and the link only.
 
+A microblog post that links to a Bluesky post quotes it (app.bsky.embed.record, with its pictures or video as
+recordWithMedia): PieFed has no quote button, and a link is how Bluesky's own apps start a quote.
+
 A post in any other community becomes a card: its title, and an external embed linking back to it with its
 description and its first picture as the thumbnail.
 """
@@ -15,11 +18,12 @@ import time
 from datetime import datetime, timezone
 
 from app.atproto import Session
-from app.connections import Permanent
+from app.atproto.resolve import did_document, pds_of, resolve_handle
+from app.connections import Permanent, ServiceError
 from app.connections import content
 from app.connections.content import StoredVideo, body_text, cut, image_bytes, plain_text
 from app.connections.eligibility import image_files, uploaded_video
-from app.connections.http import check, fetch
+from app.connections.http import call, check, fetch
 from app.constants import POST_TYPE_LINK
 from app.models import media_of
 from app.utils import is_local_microblogs
@@ -33,6 +37,7 @@ MAX_IMAGE_SIDE = 2000
 MAX_VIDEO_BYTES = 300_000_000   # app.bsky.embed.video's blob: video/mp4 only, up to this (CA spec 19.5)
 LINK = re.compile(r'https?://[^\s<>"\]\)]+')
 TAG = re.compile(r'(?:^|(?<=\s))#([^\s#\.,!?;:()\[\]"\']{1,64})')
+QUOTE_LINK = re.compile(r'https://bsky\.app/profile/([A-Za-z0-9._:%-]+)/post/([A-Za-z0-9._~:-]{1,512})')
 TID_CHARS = '234567abcdefghijklmnopqrstuvwxyz'   # atproto's sortable base32
 
 
@@ -143,6 +148,36 @@ def video_embed(post, blob: dict) -> dict:
     return embed
 
 
+def quote_ref(post) -> dict | None:
+    """The strong reference ({uri, cid}) of the Bluesky post the post's text first links to, read from its author's
+    PDS; None when it links to none, or that post cannot be read (the link then stays a link)."""
+    match = QUOTE_LINK.search(body_text(post))
+    if match is None:
+        return None
+    who, rkey = match.group(1).lower(), match.group(2)
+    try:
+        did = who if who.startswith('did:') else resolve_handle(who)
+        if not did:
+            return None
+        answer = call('GET', f'{pds_of(did_document(did))}/xrpc/com.atproto.repo.getRecord',
+                      params={'repo': did, 'collection': POST, 'rkey': rkey}).json()
+    except ServiceError:
+        return None
+    uri, cid = (answer.get('uri'), answer.get('cid')) if isinstance(answer, dict) else (None, None)
+    if not isinstance(uri, str) or not uri.startswith(f'at://{did}/{POST}/') or not isinstance(cid, str) or not cid:
+        return None
+    return {'uri': uri, 'cid': cid}
+
+
+def quoting(embed: dict | None, ref: dict) -> dict:
+    """A post's embed with a quote of `ref` added: alone, or with its pictures or video (an external card gives way:
+    a post has one embed)."""
+    quote = {'$type': 'app.bsky.embed.record', 'record': ref}
+    if embed is not None and embed['$type'] in ('app.bsky.embed.images', 'app.bsky.embed.video'):
+        return {'$type': 'app.bsky.embed.recordWithMedia', 'record': quote, 'media': embed}
+    return quote
+
+
 def _finish(record: dict, post) -> dict:
     """The parts every record of a post has: facets for its text, its language, its self-labels."""
     if found := facets(record['text']):
@@ -177,6 +212,9 @@ def build_record(post, session: Session, video: dict | None = None, created_at: 
     elif post.type == POST_TYPE_LINK and post.url and not post.content_warning:
         record['embed'] = {'$type': 'app.bsky.embed.external', 'external': {
             'uri': post.url, 'title': (post.title or '')[:300], 'description': cut(plain_text(post), 300)}}
+    ref = None if post.content_warning else quote_ref(post)
+    if ref is not None:
+        record['embed'] = quoting(record.get('embed'), ref)
     return _finish(record, post)
 
 

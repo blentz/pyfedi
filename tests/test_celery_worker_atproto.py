@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-TASK_MODULES = {'app.atproto.actors', 'app.atproto.ingest', 'app.connections.bluesky_hosted'}
+TASK_MODULES = {'app.atproto.actors', 'app.atproto.identity', 'app.atproto.ingest', 'app.atproto.notify',
+                'app.connections.bluesky_hosted'}
 
 
 def imported(path: Path) -> set[str]:
@@ -28,8 +29,9 @@ def test_each_worker_imports_the_atproto_task_modules(entry):
 
 def test_their_tasks_are_registered_once_imported(app):
     from app import celery
-    from app.atproto import actors, ingest   # noqa: F401
+    from app.atproto import actors, identity, ingest, notify   # noqa: F401
     from app.connections import bluesky_hosted   # noqa: F401
     for name in ('app.atproto.ingest.event_task', 'app.atproto.actors.backfill_task', 'app.atproto.actors.refresh_task',
-                 'app.connections.bluesky_hosted.profile_task', 'app.connections.bluesky_hosted.daily_task'):
+                 'app.connections.bluesky_hosted.profile_task', 'app.connections.bluesky_hosted.daily_task',
+                 'app.atproto.identity.sync_task', 'app.atproto.notify.poll_task'):
         assert name in celery.tasks

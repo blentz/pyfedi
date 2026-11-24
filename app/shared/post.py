@@ -20,6 +20,7 @@ from app import db, cache, plugins, limiter
 from app.activitypub.serializers.microblog import body_hashtags
 from app.activitypub.util import find_hashtag_or_create, make_image_sizes, notify_about_post, host_of, \
     record_boost, remove_boost
+from app.atproto import identity as atproto_identity
 from app.connections.dispatch import (form_choice, post_edited, post_gone, post_published, post_restored,
                                       record_choices)
 from app.community.util import tags_from_string_old, end_poll_date, flair_from_form, flairs_from_string
@@ -99,6 +100,8 @@ def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src,
     undo = post.vote(user, vote_direction, emoji)
 
     task_selector('vote_for_post', user_id=user.id, post_id=post_id, vote_to_undo=undo, vote_direction=vote_direction, federate=federate, emoji=emoji)
+    if federate:   # a public upvote of an ATProto post is a like from the voter's identity (private votes stay here)
+        atproto_identity.voted(user.id, post)
 
     if src == SRC_API:
         return user.id
@@ -156,6 +159,7 @@ def boost_post(post_id: int, src, auth=None):
     if db.session.query(PostBoost.id).filter_by(user_id=user.id, post_id=post.id).first() is None:
         record_boost(post, user)
         boosts_task.queue_boost(user.id, post.id)
+        atproto_identity.boosted(user.id, post)
     return user.id
 
 
@@ -167,6 +171,7 @@ def unboost_post(post_id: int, src, auth=None):
     if db.session.query(PostBoost.id).filter_by(user_id=user.id, post_id=post.id).first() is not None:
         remove_boost(post, user)
         boosts_task.queue_boost(user.id, post.id, undo=True)
+        atproto_identity.boosted(user.id, post)
     return user.id
 
 

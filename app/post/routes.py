@@ -60,6 +60,7 @@ from app.shared.site import block_remote_instance
 # package before they are defined (import cycle: app.shared.community)
 import app.shared.community as shared_community
 from app.shared.media import episode_form_wanted, episode_of, media_of
+from app.atproto import identity as atproto_identity
 from app.connections.dispatch import post_published
 from app.shared.tasks import task_selector
 import app.variants as variants
@@ -452,6 +453,7 @@ def show_post(post_id: int, sort, low_bandwidth, autoplay):
                                    poll_choices=poll_choices, poll_total_votes=poll_total_votes,
                                    event=event, creator=creator, ap_alternate=ap_alternate,
                                    canonical=post.ap_id, form=form, replies=replies, more_replies=more_replies,
+                                   bluesky_offer=atproto_identity.offer(current_user, post),
                                    user_flair=user_flair, lazy_load_replies=lazy_load_replies,
                                    THREAD_CUTOFF_DEPTH=constants.THREAD_CUTOFF_DEPTH,
                                    description=description, og_image=og_image, sort=sort,

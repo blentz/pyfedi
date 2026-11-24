@@ -33,6 +33,7 @@ class FakePDS:
         self.records: dict[str, dict] = {}      # at:// uri -> record
         self.taken: set[str] = set()            # handles another account has
         self.invites: set[str] = set()
+        self.notifications: dict[str, list] = {}   # did -> its notifications, newest first
         self.calls: list[str] = []
         self.requests: list[httpx.Request] = []
         self.fail: dict[str, httpx.Response] = {}   # nsid -> the answer it gives instead, once
@@ -236,4 +237,18 @@ class FakePDS:
         uri = f"at://{params['repo']}/{params['collection']}/{params['rkey']}"
         if uri not in self.records:
             return self._error(400, 'RecordNotFound')
-        return httpx.Response(200, json={'uri': uri, 'value': self.records[uri]})
+        return httpx.Response(200, json={'uri': uri, 'cid': 'bafyg', 'value': self.records[uri]})
+
+    def _app_bsky_notification_listNotifications(self, request, body):
+        """The caller's notifications (`self.notifications[did]`, newest first), a page at a time: the cursor is
+        where the next page starts."""
+        did = self._caller(request)
+        if did is None:
+            return self._error(401, 'AuthMissing')
+        items = self.notifications.get(did, [])
+        start = int(request.url.params.get('cursor') or 0)
+        end = start + int(request.url.params.get('limit', 50))
+        answer = {'notifications': items[start:end]}
+        if end < len(items):
+            answer['cursor'] = str(end)
+        return httpx.Response(200, json=answer)

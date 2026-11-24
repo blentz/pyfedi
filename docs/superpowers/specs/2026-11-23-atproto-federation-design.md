@@ -121,11 +121,13 @@ Owner rulings, 2026-11-23:
 
   For hosted rows, `remote_id` is the DID, `remote_name` the handle, and `sealed_tokens` holds `{password, access,
   refresh, pds_url}`.
-- **OAuth identity scopes.** An oauth connection becomes the identity by re-consenting to CA's scope plus:
-  - `repo:app.bsky.feed.like`, `repo:app.bsky.feed.repost`, `repo:app.bsky.graph.follow` and
-    `repo:app.bsky.graph.block`, each with `action=create&action=delete`;
-  - `rpc:app.bsky.notification.listNotifications?aud=*`.
-  
+- **OAuth scopes.** Every Bluesky sign-in now asks for CA's scope plus
+  `rpc:app.bsky.notification.listNotifications?aud=*`, so replies to copies come back (§7). An oauth connection
+  becomes the identity by signing in again ("Use for follows and replies") for that scope plus
+  `repo:app.bsky.feed.like`, `repo:app.bsky.feed.repost`, `repo:app.bsky.graph.follow` and
+  `repo:app.bsky.graph.block`, each with `action=create&action=delete`. A sign-in that grants less changes nothing.
+  The client metadata declares the widest scope. Tokens keep the scope granted.
+
   It never asks for `app.bsky.actor.profile`: a connected account's profile is the member's own business.
 - `social_crosspost` keeps carrying **post copies** for every service and both variants, with unchanged states.
 - **`atproto_record`** is new. It holds every ATProto record that is not a post copy, both directions: replies,
@@ -161,12 +163,23 @@ sends the post again (CA §7).
 | Reply to an ATProto post or reply | `app.bsky.feed.post` with `reply {root, parent}`; deleted with the reply |
 | Upvote | `app.bsky.feed.like`; un-vote deletes it; downvotes send nothing |
 | Boost | `app.bsky.feed.repost`; un-boost deletes it |
-| Quote | post with `app.bsky.embed.record` |
+| Quote: a microblog post whose text links a Bluesky post (PieFed has no quote button; a link is how Bluesky's apps start one) | its copy embeds `app.bsky.embed.record`, or `recordWithMedia` with its pictures or video (P4) |
 | Follow / unfollow | `app.bsky.graph.follow`, accepted at once / deleted |
 | Block / unblock | `app.bsky.graph.block` / deleted |
 | Profile change (hosted only) | `app.bsky.actor.profile` putRecord: name, bio plus a profile link, avatar, banner |
 
-When a member replies to an ATProto thread, that reply is not also sent as a copy: it is the reply.
+When a member replies to an ATProto thread, that reply is not also sent as a copy: it is the reply. A thread is on
+Bluesky when its post and the reply answered both have records (one that came in, a member's reply their identity
+sent, or a post's copy) and one of the two is an ATProto account's. A reply that stays here (a non-federating
+domain's member or community, or followers-only) is not sent.
+
+**Reconciled, not replayed (P4).** Each identity record is made to match what PieFed holds now (the vote, boost,
+reply, follow or block): `app.atproto.identity.sync`, a Celery task per change, one at a time per record (a Redis
+lock). Its `atproto_record` row, with its record key, is written before the record is made, so a write whose answer
+was lost is found on the PDS rather than made twice, and the record's Jetstream echo is known as ours. Private votes
+send nothing. A member with no identity sends nothing; when one appears, every follow and block of an ATProto
+account and the last 7 days of votes, boosts and replies are reconciled, so what they did first goes out then.
+`flask send-queue` takes up rows a lost task left half made.
 
 **Sessions and locks.** All writes are Celery tasks that use CA's per-connection refresh lock and its per-service
 concurrency cap. Hosted writes also pass the PDS-wide budget (§9).
@@ -204,11 +217,19 @@ harness took 9,000 DIDs (a 342 KB URL). 5,000 leaves headroom for proxies in fro
 | `account` inactive or taken down | Their content hidden. Deleted when the account is deleted. |
 | a post by one of our identities that we did not write (A7, `import_own`) | The member's own microblog post, marked "from Bluesky". It is not copied back to Bluesky. Mastodon and others get it through the usual ActivityPub federation. |
 
-**Notifications.** Replies, mentions, quotes, likes and reposts by people nobody here follows reach us through a
-Celery beat poll of each identity's `app.bsky.notification.listNotifications` every 2 minutes, using its PDS's
-AppView proxy. A copy-only connection is polled too, so that replies on the member's copies come back to the PieFed
-post (via `social_crosspost.remote_id`). Polling it needs the `rpc:` scope, so such a connection's reconnect
-prompt offers that scope.
+**Notifications.** Replies, mentions, quotes, likes, reposts and follows by people nobody here follows reach us
+through a poll of each Bluesky connection's `app.bsky.notification.listNotifications` every 2 minutes (queued by
+`flask send-queue`, `app.atproto.notify`), using its PDS's AppView proxy. Each notification's record goes through the
+same code as a Jetstream event. A copy-only connection is polled too, so that replies on the member's copies come
+back to the PieFed post (via `social_crosspost.remote_id`). Polling it needs the `rpc:` scope, which new sign-ins
+ask for; one connected before that is not polled until it signs in again.
+
+**Answers to our records (P4).** A reply to a copy or to a reply an identity sent lands under it, a like of one is an
+upvote, a repost of a copy is a boost, and a follow of an identity is a follower with a notification. A mention of a
+member's Bluesky account is a Mention of the member (its link stays the bsky.app profile, which never becomes a
+microblog post's link). A quote post names what it quotes as its Note's `quote` (spec 2026-10-12 C2): a member's post
+when it quotes a copy. A member's own Bluesky accounts are never ATProto actors here: what they write outside PieFed
+is A7's import (P5).
 
 **Labels and visibility.** Self-labels `porn`, `sexual` and `nudity` make a post NSFW, and `graphic-media` makes
 it NSFL. `!no-unauthenticated` on a post or reply sets its `requires_login`, and on the account the
@@ -228,8 +249,11 @@ actor is named by its DID, and a handle another actor held moves to the one it n
   **Create @alice.example.org** (one click, A9) and **Connect an existing account** (CA's OAuth flow). It also has
   two switches: "Use for follows and replies" (on for hosted, offered for oauth with the wider consent) and "Bring in
   posts I write on Bluesky" (`import_own`).
-- **Inline opt-in.** When a member without an identity hits Reply, Like or Boost on ATProto content, a sheet
-  offers both options, with Create first. After it finishes, the action completes.
+- **Inline opt-in.** A member without an identity sees, on an ATProto post's page, an offer of both options,
+  with Create first, and that what they do there reaches Bluesky once one is ready. Create and Connect come back to
+  the post. Their likes, boosts and replies are recorded here at once, as for anyone; the identity's catch-up (§6)
+  sends them when it starts, so the action completes. (P4 shows the offer on the page rather than intercepting each
+  button: the actions never wait on a sign-in, and nothing is lost if the member leaves halfway.)
 - **Status on posts.** As in CA: "Posted to Bluesky ↗", failures, Retry.
 - **Off and on.** Disconnecting a hosted account deactivates it (`deactivateAccount`), so it reads as deactivated
   on Bluesky. Reconnecting reactivates it and keeps the same DID and handle. Deleting the PieFed account deletes the
@@ -307,8 +331,9 @@ actor is named by its DID, and a handle another actor held moves to the one it n
   posts, reposts, replies and deletes into feeds, profile and handle updates, read-only follows with a backfill of
   20, labels, `requires_login`. Likes, follows of our identities, quotes as quote posts and notifications are P4;
   `account` events and A7 imports P5.
-- **P4 identity interactions** for both variants: replies, likes, reposts, quotes, follows and blocks out;
-  notifications in; the inline opt-in sheet; the OAuth identity re-consent.
+- **P4 identity interactions (done 2026-11-24)** for both variants: replies, likes, reposts, quotes, follows and
+  blocks out; likes, follows, replies, reposts and quotes of our records in; notifications in; the inline offer; the
+  OAuth identity re-consent; the Bluesky badge.
 - **P5 lifecycle and moderation.** `identity` and `account` events, takedowns, instance block, A7 imports, moves.
 - **P6 live check.**
 

@@ -34,8 +34,13 @@
             {% if user.avatar_id and not low_bandwidth and not collapsed -%}
                 <img src="{{ user.avatar_thumbnail() }}" alt="" loading="lazy" class="{{ 'gif' if user.avatar_thumbnail().endswith('.gif') }}" decoding="async" referrerpolicy="no-referrer" />
             {% endif -%}
+            {% if user.ap_domain == 'bsky.app' -%}{# an ATProto account (spec 2026-11-23 §7): @handle, and a Bluesky badge #}
+            {% if user.title %}{{ user.display_name() }}{% if add_domain %} <span class="text-muted">@{{ user.user_name }}</span>{% endif %}{% else %}@{{ user.user_name }}{% endif %}
+            {%- else -%}
             {{ user.display_name() }}{% if add_domain and not user.is_local() %}<span class="text-muted">@{{ user.ap_domain }}</span>{% endif %}
+            {%- endif %}
         </a>
+        {% if user.ap_domain == 'bsky.app' %}<span class="badge text-bg-light border bluesky_badge" title="{{ _('A Bluesky account') }}">{{ _('Bluesky') }}</span>{% endif %}
         <div class="user_preview d-none" id="preview_{{ user.id }}"
                 {% if htmx_redirect_back_to -%}
                     hx-get="{{ url_for('user.user_preview', user_id=user.id, return_to=htmx_redirect_back_to) }}"

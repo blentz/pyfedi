@@ -115,7 +115,7 @@ def test_the_metadata_names_the_main_domain_and_the_public_key(app, bsky):
     assert metadata['client_id'] == 'https://test.piefed.local/connections/bluesky/client-metadata.json'
     assert metadata['redirect_uris'] == ['https://test.piefed.local/user/settings/connections/bluesky/callback']
     assert metadata['token_endpoint_auth_method'] == 'private_key_jwt' and metadata['dpop_bound_access_tokens']
-    assert metadata['scope'] == bluesky.SCOPE
+    assert metadata['scope'] == bluesky.IDENTITY_SCOPE   # the most any sign-in asks for (ATProto spec §5)
     assert len(keys) == 1 and 'd' not in keys[0] and keys[0]['alg'] == 'ES256' and keys[0]['kid']
 
 
@@ -655,3 +655,44 @@ def test_the_key_command_prints_a_usable_key(app):
     result = app.test_cli_runner().invoke(args=['connections-bluesky-key'])
     key = ECAlgorithm.from_jwk(result.output.strip())
     assert key.curve.name == 'secp256r1' and hasattr(key, 'private_numbers')
+
+
+# --------------------------------------------------------------------------
+# an identity (ATProto spec 2026-11-23 §5, A8): the wider scope
+# --------------------------------------------------------------------------
+
+def test_an_identity_sign_in_asks_for_the_wider_scope(app, bsky, http_mock):
+    serve_identity(http_mock)
+    serve_server(http_mock)
+    par = _par(http_mock)
+    with app.test_request_context():
+        bsky.service.authorize_url(None, 's', 'ignored', {'identity': True}, hint=DID)
+    scope = form_of(par.calls.last.request)['scope']
+    assert scope == bluesky.IDENTITY_SCOPE and 'repo:app.bsky.graph.block?action=create&action=delete' in scope
+    assert bluesky.NOTIFY_SCOPE in bluesky.SCOPE.split() and 'app.bsky.actor.profile' not in scope
+
+
+def test_an_identity_sign_in_that_granted_it_all(app, bsky, http_mock):
+    http_mock.post(f'{PDS}/oauth/token').respond(200, json=_token_answer(scope=bluesky.IDENTITY_SCOPE))
+    serve_identity(http_mock)
+    serve_server(http_mock)
+    with app.test_request_context():
+        [account] = bsky.service.finish(None, {'iss': PDS, 'code': 'c'}, 'ignored', {**_pending(), 'identity': True})
+    assert account.identity and account.tokens['scope'] == bluesky.IDENTITY_SCOPE
+    assert bluesky.identity_granted(bluesky.IDENTITY_SCOPE) and not bluesky.identity_granted(bluesky.SCOPE)
+
+
+def test_an_identity_sign_in_that_granted_less_changes_nothing(app, bsky, http_mock):
+    http_mock.post(f'{PDS}/oauth/token').respond(200, json=_token_answer())
+    serve_identity(http_mock)
+    serve_server(http_mock)
+    with app.test_request_context(), pytest.raises(Permanent):
+        bsky.service.finish(None, {'iss': PDS, 'code': 'c'}, 'ignored', {**_pending(), 'identity': True})
+
+
+def test_a_refresh_keeps_the_scope_it_had_when_the_answer_names_none(app, bsky, http_mock):
+    answer = _token_answer(access_token='at-2')
+    del answer['scope']
+    http_mock.post(f'{PDS}/oauth/token').respond(200, json=answer)
+    with app.test_request_context():
+        assert bsky.service.refresh(tokens(scope='kept'))['scope'] == 'kept'

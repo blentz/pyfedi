@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.orm.exc import NoResultFound
 
 from app import db, limiter
+from app.atproto import identity as atproto_identity
 from app.constants import *
 from app.federation_urls import object_base, owner_base
 from app.models import Notification, NotificationSubscription, Post, PostReply, PostReplyBookmark, PostReplyVote, \
@@ -83,6 +84,8 @@ def vote_for_reply(reply_id: int, vote_direction, federate: bool, emoji: str | N
 
     task_selector('vote_for_reply', user_id=user.id, reply_id=reply_id, vote_to_undo=undo,
                   vote_direction=vote_direction, federate=federate, emoji=emoji)
+    if federate:   # a public upvote of an ATProto reply is a like from the voter's identity (private votes stay here)
+        atproto_identity.voted(user.id, reply)
 
     if src == SRC_API:
         return user.id
@@ -252,6 +255,7 @@ def make_reply(input, post, parent_id, src, auth=None):
         flash(_('Your comment has been added.'))
 
     task_selector('make_reply', reply_id=reply.id, parent_id=parent_id)
+    atproto_identity.replied(reply)   # a reply in a thread on Bluesky is a record of the author's identity there
 
     if src == SRC_API:
         return user.id, reply
@@ -332,6 +336,7 @@ def delete_reply(reply_id, src, auth):
     db.session.commit()
 
     task_selector('delete_reply', user_id=user_id, reply_id=reply.id)
+    atproto_identity.replied(reply)
 
     if src == SRC_API:
         return user_id, reply
@@ -372,6 +377,7 @@ def restore_reply(reply_id, src, auth):
         flash(_('Comment restored.'))
 
     task_selector('restore_reply', user_id=user_id, reply_id=reply.id)
+    atproto_identity.replied(reply)
 
     if src == SRC_API:
         return user_id, reply
@@ -521,6 +527,7 @@ def mod_remove_reply(reply_id, reason, src, auth):
                   link=f'post/{reply.post_id}#comment_{reply.id}')
 
     task_selector('delete_reply', user_id=user.id, reply_id=reply.id, reason=reason)
+    atproto_identity.replied(reply)
 
     if src == SRC_API:
         return user.id, reply
@@ -559,6 +566,7 @@ def mod_restore_reply(reply_id, reason, src, auth):
                   link=f'post/{reply.post_id}#comment_{reply.id}')
 
     task_selector('restore_reply', user_id=user.id, reply_id=reply.id, reason=reason)
+    atproto_identity.replied(reply)
 
     if src == SRC_API:
         return user.id, reply

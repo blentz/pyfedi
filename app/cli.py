@@ -87,7 +87,9 @@ from app.local_names import local_named
 from app.local_only import restamp_notifications, without_local_only
 from app.storefront import clear_domain_cache, default_domain, domain_base_url, home_storefront, hosted_instance_ids, \
     instance_id_of, normalise_host
+from app.atproto.identity import sweep as atproto_identity_sweep
 from app.atproto.jetstream import register_commands as register_atproto_commands
+from app.atproto.notify import poll_due as atproto_poll_due
 from app.discovery.cli import register_discovery_commands
 from app.relays.cli import register_relay_commands
 from app.cms_cli import register_cms_commands
@@ -1083,6 +1085,8 @@ def register(app):
 
                         requeue_stuck_media()   # A13.9: uploads a killed probe_media left behind
                         sweep_crossposts()   # connected accounts: retries and work a lost task left (spec §8)
+                        atproto_identity_sweep()   # Bluesky identity records a lost task left half made
+                        atproto_poll_due()   # Bluesky notifications, every two minutes for each account
 
                         send_batched_activities()
 

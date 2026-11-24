@@ -1,0 +1,29 @@
+{# ATProto spec §8: on a Bluesky post, a member with no Bluesky identity is offered one in place. What they do here
+   before it is ready (likes, boosts, replies, follows) goes out once it is. -#}
+<div class="alert alert-info bluesky_offer mt-2" role="region" aria-label="{{ _('Bluesky') }}">
+    <p class="mb-2">{{ _('This post is from Bluesky. Your likes, boosts and replies here stay on this site until you have a Bluesky account here; then they go out to Bluesky too, including what you do now.') }}</p>
+    {% if bluesky_offer.at_home -%}
+    <div class="d-flex flex-wrap gap-2 align-items-end">
+        {% if bluesky_offer.create -%}
+        <form method="post" action="{{ url_for('user.user_bluesky_create') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="label" value="{{ bluesky_offer.create.label }}">
+            <input type="hidden" name="next" value="{{ request.path }}">
+            <button type="submit" class="btn btn-sm btn-primary">{{ _('Create @%(handle)s', handle=bluesky_offer.create.handle) }}</button>
+        </form>
+        {% endif -%}
+        {% if bluesky_offer.connect -%}
+        <form method="post" class="d-flex gap-1 align-items-end" action="{{ url_for('user.user_connection_connect', service_name='bluesky') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="identity" value="1">
+            <input type="hidden" name="next" value="{{ request.path }}">
+            <label class="visually-hidden" for="bluesky_offer_hint">{{ _('Your handle or server, for example alice.bsky.social') }}</label>
+            <input type="text" class="form-control form-control-sm" name="hint" id="bluesky_offer_hint" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="{{ _('Your handle') }}">
+            <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap">{{ _('Connect an existing account') }}</button>
+        </form>
+        {% endif -%}
+    </div>
+    {% else -%}
+    <a class="btn btn-sm btn-primary" href="{{ bluesky_offer.settings }}">{{ _('Set up a Bluesky account') }}</a>
+    {% endif -%}
+</div>

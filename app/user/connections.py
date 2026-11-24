@@ -15,6 +15,7 @@ from app.connections import KEY, SERVICES, Account, ServiceError, sealing_availa
 from app.connections.apps import current, enabled, enabled_services, for_domain
 from app.connections import bluesky, facebook, instagram, youtube  # noqa: F401 (registers the services)
 from app.connections import bluesky_hosted as hosted
+from app.atproto import identity as atproto_identity
 from app.connections.dispatch import disconnect, retry
 from app.connections.tokens import seal_tokens
 from app.connections.content import image_bytes
@@ -22,7 +23,7 @@ from app.models import File, SocialConnection, SocialCrosspost
 from app.sealing import SealUnavailable, seal_with, unseal_with
 from app.storefront import current_storefront
 from app.user import bp
-from app.utils import login_required, render_template
+from app.utils import login_required, render_template, safe_redirect_target
 
 FLOW = 'connections_flow'
 
@@ -118,7 +119,8 @@ def user_connections():
     place = hosted.place_of(mine) if mine is not None and mine.slot_state == hosted.WAITING else None
     return render_template('user/connections.html', title=_('Connected accounts'), user=current_user,
                            connections=connections, offers=offers, main_domain=_home().domain,
-                           on_main_domain=_at_home(), create=create, place=place, hosted=hosted)
+                           on_main_domain=_at_home(), create=create, place=place, hosted=hosted,
+                           identity=identity_of_member())
 
 
 @bp.route('/user/settings/connections/<service_name>/connect', methods=['POST'])
@@ -127,7 +129,8 @@ def user_connection_connect(service_name):
     service = _service_or_404(service_name)
     variant = request.form.get('variant') or None
     state = secrets.token_urlsafe(24)
-    pending = {}
+    # a Bluesky account asked to be the member's identity: its sign-in asks for the wider scope (ATProto spec §5)
+    pending = {'identity': True} if service.name == 'bluesky' and request.form.get('identity') == '1' else {}
     try:
         with for_domain(current_user.site_domain_id):
             if variant not in (service.variants or (None,)):
@@ -138,7 +141,8 @@ def user_connection_connect(service_name):
         flash(_('%(service)s could not be reached: %(error)s', service=service.label, error=failure.message), 'error')
         return redirect(url_for('user.user_connections'))
     session[FLOW] = seal_with(KEY, {'state': state, 'service': service.name, 'variant': variant, 'pending': pending,
-                                    'user_id': current_user.id})
+                                    'user_id': current_user.id,   # where a sign-in started elsewhere returns (§8)
+                                    'next': safe_redirect_target(request.form.get('next'), '')})
     return redirect(url)
 
 
@@ -168,8 +172,16 @@ def _store(service, account: Account) -> SocialConnection:
         connection.app_domain_id = app.domain_id if app is not None else None
         connection.app_client_id = bluesky.client_id() if kind == 'bluesky' else (app.client_id if app else None)
     connection.state, connection.last_error = 'ok', None
+    if account.identity and identity_of_member() is None:   # A8: the identity when they have none
+        connection.is_identity = True
     db.session.commit()
+    if connection.is_identity:   # new, or reconnected: what they did meanwhile, on Bluesky now
+        atproto_identity.caught_up(current_user.id)
     return connection
+
+
+def identity_of_member() -> SocialConnection | None:
+    return SocialConnection.query.filter_by(user_id=current_user.id, service='bluesky', is_identity=True).first()
 
 
 @bp.route('/user/settings/connections/<service_name>/callback', methods=['GET'])
@@ -203,7 +215,7 @@ def user_connection_callback(service_name):
         session.pop(FLOW, None)
         connection = _store(service, accounts[0])
         flash(_('Connected %(service)s: %(name)s', service=service.label, name=connection.remote_name))
-        return redirect(url_for('user.user_connections'))
+        return redirect(flow.get('next') or url_for('user.user_connections'))
     flow['accounts'] = [vars(account) for account in accounts]
     session[FLOW] = seal_with(KEY, flow)
     return redirect(url_for('user.user_connection_choose', service_name=service.name))
@@ -296,7 +308,7 @@ def user_bluesky_create():
     else:
         flash(_('Every Bluesky place here is taken: you are on the waiting list, and will be told when yours is '
                 'ready.'), 'info')
-    return redirect(url_for('user.user_connections'))
+    return redirect(safe_redirect_target(request.form.get('next'), url_for('user.user_connections')))
 
 
 @bp.route('/user/settings/connections/<int:connection_id>/turn-off', methods=['POST'])

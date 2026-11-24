@@ -399,8 +399,10 @@ def request_account(user, label: str | None = None) -> SocialConnection:
 
 
 def _after_start(connection: SocialConnection) -> None:
+    from app.atproto import identity   # cycle: app.atproto.identity imports this module
     put_profile_later(connection.user_id)
     backfill(connection)
+    identity.caught_up(connection.user_id)   # what the member did here before, on Bluesky now (§8)
 
 
 def grant(connection: SocialConnection) -> bool:

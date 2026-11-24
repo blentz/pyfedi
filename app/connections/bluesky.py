@@ -33,7 +33,11 @@ from app.connections import bluesky_hosted as hosted
 from app.connections.apps import context_domain, current
 from app.connections.http import check, fetch
 
-SCOPE = 'atproto repo:app.bsky.feed.post?action=create&action=delete blob:*/*'
+NOTIFY_SCOPE = 'rpc:app.bsky.notification.listNotifications?aud=*'   # replies to copies come back (ATProto §7)
+SCOPE = f'atproto repo:app.bsky.feed.post?action=create&action=delete blob:*/* {NOTIFY_SCOPE}'
+# an identity (ATProto spec §5, A8) also likes, reposts, follows and blocks; never its profile, the member's own
+IDENTITY_REPOS = ('app.bsky.feed.like', 'app.bsky.feed.repost', 'app.bsky.graph.follow', 'app.bsky.graph.block')
+IDENTITY_SCOPE = SCOPE + ''.join(f' repo:{nsid}?action=create&action=delete' for nsid in IDENTITY_REPOS)
 VIDEO_CHUNK = 1 << 20
 UPLOAD_SECONDS = 120        # a PDS call may carry a picture up
 _nonces: dict[str, str] = {}   # the last DPoP nonce each server gave: a stale one costs one retry
@@ -108,7 +112,7 @@ def client_metadata() -> dict:
         'grant_types': ['authorization_code', 'refresh_token'],
         'response_types': ['code'],
         'redirect_uris': [redirect_uri()],
-        'scope': SCOPE,
+        'scope': IDENTITY_SCOPE,   # the most any sign-in asks for
         'dpop_bound_access_tokens': True,
         'token_endpoint_auth_method': 'private_key_jwt',
         'token_endpoint_auth_signing_alg': 'ES256',
@@ -214,6 +218,11 @@ def xrpc(tokens: dict, method: str, nsid: str, **kwargs):
     return check(response)
 
 
+def identity_granted(granted: str) -> bool:
+    """Whether a sign-in granted all an identity needs (IDENTITY_SCOPE)."""
+    return set(IDENTITY_SCOPE.split()) <= set(granted.split())
+
+
 class OAuthSession(Session):
     """An OAuth connection's tokens as an app.atproto Session: each call DPoP-bound (xrpc)."""
 
@@ -275,7 +284,8 @@ class BlueskyService(Service):
         issuer, metadata = authorization_server(server)
         dpop_jwk = new_key_jwk()
         verifier = secrets.token_urlsafe(48)
-        form = {'response_type': 'code', 'redirect_uri': redirect_uri(), 'scope': SCOPE, 'state': state,
+        scope = IDENTITY_SCOPE if pending.get('identity') else SCOPE   # the caller asks for an identity (§5)
+        form = {'response_type': 'code', 'redirect_uri': redirect_uri(), 'scope': scope, 'state': state,
                 'code_challenge': _b64(hashlib.sha256(verifier.encode()).digest()), 'code_challenge_method': 'S256'}
         if login_hint:
             form['login_hint'] = login_hint
@@ -301,11 +311,16 @@ class BlueskyService(Service):
         pds = pds_of(document)
         if authorization_server(pds)[0] != pending['issuer']:   # a server-started sign-in: is it that account's?
             raise Permanent(_("That sign-in server does not hold this account."))
+        granted = str(answer.get('scope', ''))
         tokens = {'access_token': answer['access_token'], 'refresh_token': answer.get('refresh_token'),
                   'expires_at': time.time() + int(answer.get('expires_in') or 300), 'dpop_jwk': pending['dpop_jwk'],
                   'pds': pds, 'issuer': pending['issuer'], 'token_endpoint': pending['token_endpoint'],
-                  'revocation_endpoint': pending.get('revocation_endpoint'), 'did': sub}
-        return [Account(remote_id=sub, remote_name=handle_of(document) or sub, tokens=tokens, variant='oauth')]
+                  'revocation_endpoint': pending.get('revocation_endpoint'), 'did': sub, 'scope': granted}
+        identity = bool(pending.get('identity')) and identity_granted(granted)
+        if pending.get('identity') and not identity:
+            raise Permanent(_('Bluesky did not allow follows and replies: nothing was changed.'))
+        return [Account(remote_id=sub, remote_name=handle_of(document) or sub, tokens=tokens, variant='oauth',
+                        identity=identity)]
 
     def refresh(self, tokens):
         if tokens.get('kind') == hosted.HOSTED:
@@ -316,7 +331,7 @@ class BlueskyService(Service):
             'grant_type': 'refresh_token', 'refresh_token': tokens['refresh_token']}).json()
         if answer.get('sub') != tokens['did']:
             raise AuthFailed(_('Bluesky refreshed a different account.'))
-        return {**tokens, 'access_token': answer['access_token'],
+        return {**tokens, 'access_token': answer['access_token'], 'scope': answer.get('scope') or tokens.get('scope'),
                 'refresh_token': answer.get('refresh_token') or tokens['refresh_token'],
                 'expires_at': time.time() + int(answer.get('expires_in') or 300)}
 

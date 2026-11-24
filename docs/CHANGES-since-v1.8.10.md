@@ -2015,6 +2015,15 @@ commit each:
   (`entrypoint_jetstream.sh`), a long-lived service of its own, hands each event to Celery. Self-labels mark posts
   NSFW or NSFL, and an account or post that asks to be hidden from logged-out readers is. Bluesky accounts are remote
   users on the `bsky.app` instance, so blocking that instance blocks the network.
+- **A member's Bluesky identity.** A member's Bluesky account here, or an own account they let PieFed use ("Use for
+  follows and replies", a second sign-in for the wider permission), is their identity: an upvote of a Bluesky post or
+  reply is a like there, a boost a repost, a reply in a Bluesky thread a reply there, and following or blocking a
+  Bluesky account follows or blocks it there. Undoing any of them deletes it, and private votes send nothing. A
+  microblog post linking a Bluesky post quotes it. What comes back: replies, likes and reposts of members' copies and
+  replies, follows of their accounts (a follower here, and a notification), mentions (a Mention), and quote posts,
+  shown as quotes. Bluesky notifications are read every two minutes (by `flask send-queue`) for what Jetstream does
+  not carry. On a Bluesky post, a member with no Bluesky account is offered one; what they did meanwhile goes out once
+  it is ready. Bluesky authors show as `@handle` with a Bluesky badge.
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:

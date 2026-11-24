@@ -46,6 +46,7 @@
                     {% else -%}
                         <span class="badge text-bg-success">{{ _('Working') }}</span>
                     {% endif -%}
+                    {% if connection.is_identity %}<span class="badge text-bg-primary">{{ _('Follows and replies') }}</span>{% endif %}
                     {% if connection.last_error and connection.state == 'reauth' %}<div class="small text-muted">{{ connection.last_error }}</div>{% endif %}
                     <div class="d-flex flex-wrap gap-2 mt-2">
                         <form method="post" action="{{ url_for('user.user_connection_default', connection_id=connection.id) }}">
@@ -64,6 +65,15 @@
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <input type="hidden" name="variant" value="{{ connection.variant or '' }}">
                                 <button type="submit" class="btn btn-sm btn-primary">{{ _('Reconnect') }}</button>
+                            </form>
+                        {% endif -%}
+                        {% if on_main_domain and on and not identity and connection.service == 'bluesky' and connection.variant == 'oauth' and connection.state != 'reauth' -%}
+                            <form method="post" action="{{ url_for('user.user_connection_connect', service_name='bluesky') }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="identity" value="1">
+                                <input type="hidden" name="hint" value="{{ connection.remote_id }}">
+                                <button type="submit" class="btn btn-sm btn-outline-primary">{{ _('Use for follows and replies') }}</button>
+                                <div class="small text-muted w-100">{{ _('Your likes, boosts, follows, blocks and replies to Bluesky posts here go out from this account. Bluesky asks you to allow it.') }}</div>
                             </form>
                         {% endif -%}
                         {% if is_hosted and on_main_domain -%}
@@ -105,7 +115,7 @@
 
         {% if on_main_domain and create -%}
             <h2 class="fs-5">{{ _('A Bluesky account of your own') }}</h2>
-            <p>{{ _('Made here in one click: your microblog posts go out as @%(handle)s, and you can sign in to Bluesky apps with an app password.', handle=create.handle) }}</p>
+            <p>{{ _('Made here in one click: your microblog posts go out as @%(handle)s, your likes, boosts, follows and replies to Bluesky posts go out from it too, and you can sign in to Bluesky apps with an app password.', handle=create.handle) }}</p>
             <form method="post" class="mb-4" action="{{ url_for('user.user_bluesky_create') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="label" value="{{ create.label }}">

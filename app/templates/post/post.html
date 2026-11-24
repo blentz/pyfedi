@@ -67,6 +67,7 @@
             </div>
         {% endif -%}
         {% include 'post/_post_full.html' -%}
+        {% if bluesky_offer %}{% include 'post/_bluesky_offer.html' %}{% endif -%}
         {% if current_user.is_authenticated and post.user_id == current_user.id and post.social_crossposts -%}
             {% include 'post/_crossposts.html' %}
         {% endif -%}
