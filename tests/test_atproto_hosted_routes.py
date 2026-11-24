@@ -45,6 +45,21 @@ def test_the_page_offers_connecting_an_own_account_with_the_key(hosted_world, mo
     assert 'Connect Bluesky' in page(hosted_world)
 
 
+def test_with_no_handle_left_nothing_is_offered(hosted_world, monkeypatch):
+    none_left = hosted.HandleRefused('No handle of your name is free.', None)
+    monkeypatch.setattr(hosted, 'own_label', lambda user, wanted=None: (_ for _ in ()).throw(none_left))
+    assert 'Create @' not in page(hosted_world)
+    monkeypatch.setattr(hosted, 'request_account', lambda user, label=None: (_ for _ in ()).throw(none_left))
+    response = post(hosted_world, '/user/settings/connections/bluesky/create', label='author')
+    assert response.location.endswith(PAGE)
+    assert 'No handle of your name is free.' in page(hosted_world)
+    connection = a_hosted(hosted_world, hosted_world.author)
+    monkeypatch.setattr(hosted, 'rename', lambda connection, label: (_ for _ in ()).throw(none_left))
+    post(hosted_world, f'/user/settings/connections/{connection.id}/handle', label='author-2')
+    body = page(hosted_world)
+    assert 'No handle of your name is free.' in body and 'instead?' not in body
+
+
 def test_no_creation_where_hosting_is_off(hosted_world):
     set_setting(setting_name(hosted.HOSTING), False)
     body = page(hosted_world)

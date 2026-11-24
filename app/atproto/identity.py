@@ -472,7 +472,8 @@ def offer(user, post) -> dict | None:
             label = hosted.own_label(user)
         except hosted.HandleRefused as refused:
             label = refused.suggestion
-        create = {'label': label, 'handle': hosted.handle_of(user, label)}
+        if label is not None:
+            create = {'label': label, 'handle': hosted.handle_of(user, label)}
     connect = client_key() is not None and enabled(SERVICES['bluesky'], user.site_domain_id)
     if create is None and not connect:
         return None

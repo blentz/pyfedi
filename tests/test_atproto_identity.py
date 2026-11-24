@@ -533,6 +533,8 @@ def test_the_offer_on_a_bluesky_post(world, monkeypatch):
         hosted.HandleRefused('taken', 'author-2')))
     with world.app.test_request_context(base_url=f'https://{world.home}'):
         assert identity.offer(world.author, post)['create']['label'] == 'author-2'
+    monkeypatch.setattr(hosted, 'own_label', lambda user: (_ for _ in ()).throw(hosted.HandleRefused('none', None)))
+    assert identity.offer(world.author, post) is None   # no label of theirs left, and no Connect here
     monkeypatch.setattr(hosted, 'hosting_on', lambda domain_id: False)
     assert identity.offer(world.author, post) is None   # neither a Create nor a Connect is possible
     monkeypatch.setattr(identity, 'client_key', lambda: object())

@@ -115,7 +115,8 @@ def user_connections():
             label = hosted.own_label(current_user, request.args.get('label'))
         except hosted.HandleRefused as refused:   # only the member's own name, or one of its alternatives
             label = refused.suggestion
-        create = {'label': label, 'handle': hosted.handle_of(current_user, label)}
+        if label is not None:   # none left: nothing to offer
+            create = {'label': label, 'handle': hosted.handle_of(current_user, label)}
     place = hosted.place_of(mine) if mine is not None and mine.slot_state == hosted.WAITING else None
     return render_template('user/connections.html', title=_('Connected accounts'), user=current_user,
                            connections=connections, offers=offers, main_domain=_home().domain,
@@ -310,6 +311,9 @@ def user_bluesky_create():
     try:
         connection = hosted.request_account(current_user, request.form.get('label', '')[:64] or None)
     except hosted.HandleRefused as refused:
+        if refused.suggestion is None:
+            flash(refused.message, 'warning')
+            return redirect(url_for('user.user_connections'))
         flash(_('%(error)s Try @%(handle)s instead?', error=refused.message,
                 handle=hosted.handle_of(current_user, refused.suggestion)), 'warning')
         return redirect(url_for('user.user_connections', label=refused.suggestion))
@@ -365,8 +369,9 @@ def user_bluesky_handle(connection_id):
     try:
         handle = hosted.rename(connection, request.form.get('label', '')[:64])
     except hosted.HandleRefused as refused:
-        flash(_('%(error)s Try @%(handle)s instead?', error=refused.message,
-                handle=hosted.handle_of(current_user, refused.suggestion)), 'warning')
+        flash(refused.message if refused.suggestion is None else _(
+            '%(error)s Try @%(handle)s instead?', error=refused.message,
+            handle=hosted.handle_of(current_user, refused.suggestion)), 'warning')
     except ServiceError as failure:
         flash(_('Bluesky could not be reached: %(error)s', error=failure.message), 'error')
     else:

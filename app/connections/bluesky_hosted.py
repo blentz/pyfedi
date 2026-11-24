@@ -59,9 +59,10 @@ MAX_NUMBER = 99                     # the highest numbered alternative a member'
 
 
 class HandleRefused(ServiceError):
-    """The PDS will not give this handle (taken, reserved or invalid): `suggestion` is a label it may give."""
+    """The PDS will not give this handle (taken, reserved or invalid): `suggestion` is a label it may give, never
+    one the site keeps; None when no label of the member's is left."""
 
-    def __init__(self, message: str, suggestion: str):
+    def __init__(self, message: str, suggestion: str | None):
         super().__init__(message)
         self.suggestion = suggestion
 
@@ -273,7 +274,7 @@ def next_label(user, label: str) -> str:
         candidate = alternative(base, number)
         if candidate not in reserved_labels() and not belongs_to_another(user, candidate):
             return candidate
-    raise HandleRefused(_('No handle of your name is free.'), base)
+    raise HandleRefused(_('No handle of your name is free.'), None)
 
 
 def reserved_labels() -> set[str]:
@@ -351,7 +352,11 @@ def _space_creations() -> None:
 
 
 def create_account(user, label: str) -> dict:
-    """The account on the PDS, under `<label>.<home domain>`: its tokens. HandleRefused offers the next label."""
+    """The account on the PDS, under `<label>.<home domain>`: its tokens. HandleRefused offers the next label. A
+    label the site keeps is refused here too, whatever asked for it."""
+    if not label or label in reserved_labels():
+        raise HandleRefused(_('@%(handle)s is a name this site keeps for itself.', handle=handle_of(user, label or '')),
+                            None)
     handle = handle_of(user, label)
     password = secrets.token_urlsafe(32)
     body = {'handle': handle, 'email': f'{secrets.token_hex(12)}@{ACCOUNT_EMAIL_DOMAIN}', 'password': password}
@@ -430,6 +435,8 @@ def grant(connection: SocialConnection) -> bool:
             except HandleRefused as refused:
                 label = refused.suggestion
             for _attempt in range(5):
+                if label is None:   # no label of the member's is left
+                    return False
                 try:
                     tokens = create_account(connection.user, label)
                     break

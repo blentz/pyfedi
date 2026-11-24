@@ -173,8 +173,26 @@ def test_the_next_label_to_offer(hosted_world):
     assert hosted.next_label(alice, 'alice') == 'alice-2' and hosted.next_label(alice, 'alice-2') == 'alice-3'
     assert hosted.next_label(bob2, 'bob-2') == 'bob-2-2'   # a name that ends in a number keeps it
     assert hosted.next_label(alice, 'someone') == 'alice-2'
-    with pytest.raises(hosted.HandleRefused):
+    with pytest.raises(hosted.HandleRefused) as refused:
         hosted.next_label(alice, f'alice-{hosted.MAX_NUMBER}')
+    assert refused.value.suggestion is None   # none left: nothing offered
+
+
+def test_a_name_the_site_keeps_is_never_made(hosted_world, monkeypatch):
+    """Whatever asks (a grant retrying a suggestion, a stale row): the PDS is never asked for a kept name."""
+    monkeypatch.setitem(hosted_world.app.config, 'ATPROTO_RESERVED_LABELS', 'pay')
+    for label in ('pay', '', None):
+        with pytest.raises(hosted.HandleRefused) as refused:
+            hosted.create_account(hosted_world.author, label)
+        assert refused.value.suggestion is None
+    assert not hosted_world.pds.calls
+
+
+def test_a_grant_with_no_label_left_waits(hosted_world, monkeypatch):
+    row = a_hosted(hosted_world, hosted_world.author, state=hosted.WAITING)
+    monkeypatch.setattr(hosted, 'own_label', lambda user, wanted=None: (_ for _ in ()).throw(
+        hosted.HandleRefused('none left', None)))
+    assert hosted.grant(row) is False and row.slot_state == hosted.WAITING and not hosted_world.pds.calls
 
 
 def test_a_member_may_have_only_their_own_name(hosted_world):
