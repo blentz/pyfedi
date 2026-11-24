@@ -100,8 +100,7 @@ def vote_for_post(post_id: int, vote_direction, federate: bool, emoji: str, src,
     undo = post.vote(user, vote_direction, emoji)
 
     task_selector('vote_for_post', user_id=user.id, post_id=post_id, vote_to_undo=undo, vote_direction=vote_direction, federate=federate, emoji=emoji)
-    if federate:   # a public upvote of an ATProto post is a like from the voter's identity (private votes stay here)
-        atproto_identity.voted(user.id, post)
+    atproto_identity.voted(user.id, post, public=federate)   # a public upvote of an ATProto post is a like there
 
     if src == SRC_API:
         return user.id

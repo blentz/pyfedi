@@ -1,4 +1,5 @@
-"""ATProto groundwork: a Bluesky connection's variant and identity, its records, the stream cursor, login-only posts
+"""ATProto groundwork: a Bluesky connection's variant and identity, its records, the stream cursor, login-only posts,
+votes a Bluesky identity may like
 
 Revision ID: a95a82e17b01
 Revises: f3b7d1a9c5e2
@@ -33,6 +34,9 @@ def upgrade():
         batch_op.add_column(sa.Column('requires_login', sa.Boolean(), nullable=False, server_default='false'))
     with op.batch_alter_table('post_reply') as batch_op:
         batch_op.add_column(sa.Column('requires_login', sa.Boolean(), nullable=False, server_default='false'))
+    for table in ('post_vote', 'post_reply_vote'):   # a public upvote a Bluesky identity may like (P4)
+        with op.batch_alter_table(table) as batch_op:
+            batch_op.add_column(sa.Column('atproto_like', sa.Boolean(), nullable=False, server_default='false'))
 
     op.create_table(
         'atproto_record',
@@ -73,6 +77,9 @@ def downgrade():
     for column in ('did', 'connection_id', 'post_id', 'post_reply_id', 'user_id'):
         op.drop_index(f'ix_atproto_record_{column}', table_name='atproto_record')
     op.drop_table('atproto_record')
+    for table in ('post_reply_vote', 'post_vote'):
+        with op.batch_alter_table(table) as batch_op:
+            batch_op.drop_column('atproto_like')
     with op.batch_alter_table('post_reply') as batch_op:
         batch_op.drop_column('requires_login')
     with op.batch_alter_table('user') as batch_op:

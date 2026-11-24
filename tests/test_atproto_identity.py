@@ -165,6 +165,31 @@ def test_a_downvote_or_a_private_vote_sends_nothing(world):
     assert mine(world, LIKE) == {}
 
 
+def test_a_like_taken_back_privately_goes_too(world):
+    post = bob_post(world)
+    vote_for_post(post.id, 'upvote', True, None, SRC_API, auth=world.auth)
+    assert len(mine(world, LIKE)) == 1
+    vote_for_post(post.id, 'upvote', False, None, SRC_API, auth=world.auth)   # the same vote again, privately
+    assert mine(world, LIKE) == {}
+
+
+@pytest.mark.parametrize('reason', ['private community', 'local-only community', 'banned', 'followers only'])
+def test_a_vote_that_may_not_be_told_is_never_a_like(world, monkeypatch, reason):
+    post = bob_post(world)
+    if reason == 'private community':
+        world.microblogs.private = True
+    elif reason == 'local-only community':
+        world.microblogs.local_only = True
+    elif reason == 'banned':
+        monkeypatch.setattr(identity, 'user_banned_from_community', lambda user_id, community_id: True)
+    else:
+        post.visibility = 'followers'
+    db.session.commit()
+    vote_for_post(post.id, 'upvote', True, None, SRC_API, auth=world.auth)
+    assert mine(world, LIKE) == {}
+    assert PostVote.query.filter_by(user_id=world.author.id, post_id=post.id).one().atproto_like is False
+
+
 def test_an_upvote_of_a_reply(world):
     bob_post(world)
     theirs = ingest.post(world.bob, '3kr', note('re', reply={'parent': {'uri': f'at://{world.bob}/{POST}/3kp'}}),
@@ -283,7 +308,7 @@ def test_what_is_not_bluesky_sends_nothing(world, monkeypatch):
     monkeypatch.setattr(identity, 'later', lambda *args: queued.append(args))
     own = a_microblog(world)
     other = a_member('other')
-    identity.voted(world.author.id, own)
+    identity.voted(world.author.id, own, public=True)
     identity.boosted(world.author.id, own)
     identity.followed(world.author.id, other)
     identity.blocked(world.author.id, other)
@@ -310,7 +335,7 @@ def test_a_member_with_no_identity_sends_nothing_and_catches_up_later(world):
     vote_for_reply(theirs.id, 'upvote', True, None, SRC_API, auth=world.auth)
     old = bob_post(world, '3kold')
     db.session.add(PostVote(user_id=world.author.id, author_id=old.user_id, post_id=old.id, effect=1,
-                            federated_like=True, created_at=utcnow() - timedelta(days=30)))   # too long ago
+                            atproto_like=True, created_at=utcnow() - timedelta(days=30)))   # too long ago
     private = bob_post(world, '3kpriv')
     vote_for_post(private.id, 'upvote', False, None, SRC_API, auth=world.auth)   # voted privately: never sent
     db.session.commit()
@@ -351,7 +376,7 @@ def test_what_was_undone_while_it_could_not_write_is_caught_up(world):
 def test_a_write_whose_answer_was_lost_is_found_not_made_twice(world):
     post = bob_post(world)
     db.session.add(PostVote(user_id=world.author.id, author_id=post.user_id, post_id=post.id, effect=1,
-                            federated_like=True))
+                            atproto_like=True))
     db.session.commit()
     world.pds.fail['com.atproto.repo.createRecord'] = httpx.Response(502)
     with pytest.raises(identity.Transient):
@@ -383,7 +408,7 @@ def test_an_account_that_cannot_write_keeps_its_record_until_it_can(world):
 def test_a_member_whose_identity_went_away_keeps_nothing_pending(world):
     post = bob_post(world)
     db.session.add(PostVote(user_id=world.author.id, author_id=post.user_id, post_id=post.id, effect=1,
-                            federated_like=True))
+                            atproto_like=True))
     db.session.commit()
     world.identity.state = 'reauth'
     db.session.commit()
@@ -393,7 +418,7 @@ def test_a_member_whose_identity_went_away_keeps_nothing_pending(world):
 def test_the_task_waits_for_a_busy_lock_the_budget_and_a_failure(world, monkeypatch):
     post = bob_post(world)
     db.session.add(PostVote(user_id=world.author.id, author_id=post.user_id, post_id=post.id, effect=1,
-                            federated_like=True))
+                            atproto_like=True))
     db.session.commit()
     args = (world.author.id, 'like_post', post.id)
     lock = identity.app_pkg.redis_client.lock(f'{identity.LOCK}{world.author.id}:like_post:{post.id}', timeout=5)

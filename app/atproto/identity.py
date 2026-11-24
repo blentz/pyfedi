@@ -38,7 +38,7 @@ from app.connections.tokens import REAUTH, usable_tokens
 from app.local_only import community_local_only, user_local_only
 from app.models import AtprotoRecord, Post, PostBoost, PostReply, PostReplyVote, PostVote, SocialConnection, \
     SocialCrosspost, User, UserBlock, UserFollower
-from app.utils import get_task_session, patch_db_session
+from app.utils import get_task_session, patch_db_session, user_banned_from_community
 from app.visibility import is_open
 
 LIKE, REPOST = 'app.bsky.feed.like', 'app.bsky.feed.repost'
@@ -144,14 +144,16 @@ def wanted(user_id: int, kind: str, target_id: int):
         model = PostVote if kind == 'like_post' else PostBoost
         mine = model.query.filter_by(user_id=user_id, post_id=post.id)
         if kind == 'like_post':   # a public upvote: a private one is never marked (`voted`)
-            mine = mine.filter(PostVote.effect > 0, PostVote.federated_like.is_(True))
+            mine = mine.filter(PostVote.effect > 0, PostVote.atproto_like.is_(True))
+        if not may_tell(user_id, post):
+            return None
         return post if mine.first() is not None else None
     if kind == 'like_reply':
         reply = db.session.get(PostReply, target_id)
-        if reply is None or reply.deleted or not actors.is_atproto(reply.author):
+        if reply is None or reply.deleted or not actors.is_atproto(reply.author) or not may_tell(user_id, reply):
             return None
         mine = PostReplyVote.query.filter(PostReplyVote.user_id == user_id, PostReplyVote.post_reply_id == reply.id,
-                                          PostReplyVote.effect > 0, PostReplyVote.federated_like.is_(True)).first()
+                                          PostReplyVote.effect > 0, PostReplyVote.atproto_like.is_(True)).first()
         return reply if mine is not None else None
     if kind == 'reply':
         reply = db.session.get(PostReply, target_id)
@@ -331,16 +333,26 @@ def involved(user_id: int) -> bool:
         SocialConnection.user_id == user_id, AtprotoRecord.direction == 'out').first() is not None
 
 
-def voted(user_id: int, item) -> None:
-    """The member voted publicly on a post or reply (or took the vote back): only then is this called. A public
-    upvote is marked as one that may be told (`federated_like`), whether or not the member has an identity yet, so
-    a catch-up later sends it and never a private one."""
+def may_tell(user_id: int, item) -> bool:
+    """Whether the member's action on a post or reply may be told outside this site: as send_vote decides for an
+    ActivityPub vote, the community federates and is not private, the member is not banned from it, and the post or
+    reply is open to anyone."""
+    community = item.community
+    return community is not None and not community.local_only and not community.private and \
+        not community_local_only(community) and not user_banned_from_community(user_id, community.id) and \
+        is_open(item)
+
+
+def voted(user_id: int, item, public: bool) -> None:
+    """The member voted on a post or reply, or took the vote back. A public upvote that may be told is marked
+    (`atproto_like`), whether or not the member has an identity yet, so a catch-up later sends it; a private vote
+    is unmarked, so it never is, and a like made before goes."""
     if not actors.is_atproto(item.author):
         return
     model, column = (PostReplyVote, PostReplyVote.post_reply_id) if isinstance(item, PostReply) else \
         (PostVote, PostVote.post_id)
-    model.query.filter(model.user_id == user_id, column == item.id, model.effect > 0).update(
-        {'federated_like': True}, synchronize_session=False)
+    model.query.filter(model.user_id == user_id, column == item.id).update(
+        {'atproto_like': public and may_tell(user_id, item)}, synchronize_session=False)
     db.session.commit()
     if involved(user_id):
         later(user_id, 'like_reply' if isinstance(item, PostReply) else 'like_post', item.id)
@@ -380,11 +392,11 @@ def caught_up(user_id: int) -> int:
         User, User.id == UserBlock.blocked_id).filter(UserBlock.blocker_id == user_id, domain)]
     work += [('like_post', post_id) for (post_id,) in db.session.query(PostVote.post_id).join(
         User, User.id == PostVote.author_id).filter(PostVote.user_id == user_id, PostVote.effect > 0,
-                                                    PostVote.federated_like.is_(True), PostVote.created_at >= since,
+                                                    PostVote.atproto_like.is_(True), PostVote.created_at >= since,
                                                     domain)]
     work += [('like_reply', reply_id) for (reply_id,) in db.session.query(PostReplyVote.post_reply_id).join(
         User, User.id == PostReplyVote.author_id).filter(PostReplyVote.user_id == user_id, PostReplyVote.effect > 0,
-                                                         PostReplyVote.federated_like.is_(True),
+                                                         PostReplyVote.atproto_like.is_(True),
                                                          PostReplyVote.created_at >= since, domain)]
     work += [('repost', post_id) for (post_id,) in db.session.query(PostBoost.post_id).join(
         Post, Post.id == PostBoost.post_id).join(User, User.id == Post.user_id).filter(

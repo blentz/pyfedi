@@ -5775,6 +5775,7 @@ class PostVote(db.Model):
     effect = db.Column(db.Float, index=True)
     emoji = db.Column(db.String(50))
     federated_like = db.Column(db.Boolean, nullable=True)  # True once send_vote sent a Like for this vote (peers hold it); False after a Dislike or Undo; NULL = never federated
+    atproto_like = db.Column(db.Boolean, nullable=False, default=False, server_default='false')  # a public upvote a Bluesky identity may like (ATProto spec §6); a private vote never is
     created_at = db.Column(db.DateTime, default=utcnow)
 
     __table_args__ = (
@@ -5795,6 +5796,7 @@ class PostReplyVote(db.Model):
     effect = db.Column(db.Float)
     emoji = db.Column(db.String(50))
     federated_like = db.Column(db.Boolean, nullable=True)  # True once send_vote sent a Like for this vote (peers hold it); False after a Dislike or Undo; NULL = never federated
+    atproto_like = db.Column(db.Boolean, nullable=False, default=False, server_default='false')  # a public upvote a Bluesky identity may like (ATProto spec §6); a private vote never is
     created_at = db.Column(db.DateTime, default=utcnow)
 
     __table_args__ = (

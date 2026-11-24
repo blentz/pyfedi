@@ -84,8 +84,7 @@ def vote_for_reply(reply_id: int, vote_direction, federate: bool, emoji: str | N
 
     task_selector('vote_for_reply', user_id=user.id, reply_id=reply_id, vote_to_undo=undo,
                   vote_direction=vote_direction, federate=federate, emoji=emoji)
-    if federate:   # a public upvote of an ATProto reply is a like from the voter's identity (private votes stay here)
-        atproto_identity.voted(user.id, reply)
+    atproto_identity.voted(user.id, reply, public=federate)   # a public upvote of an ATProto reply is a like there
 
     if src == SRC_API:
         return user.id

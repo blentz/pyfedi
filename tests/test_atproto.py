@@ -312,6 +312,7 @@ def test_the_migration_reverses_and_reapplies(connections_world):
             migration.downgrade()
             assert 'is_identity' not in columns(connection, 'social_connection')
             assert 'requires_login' not in columns(connection, 'post')
+            assert 'atproto_like' not in columns(connection, 'post_vote') | columns(connection, 'post_reply_vote')
             assert not inspect(connection).has_table('atproto_record')
             variants = connection.execute(text(
                 "SELECT remote_id, variant FROM social_connection WHERE service = 'bluesky'")).all()
@@ -320,6 +321,7 @@ def test_the_migration_reverses_and_reapplies(connections_world):
                 .scalar() is None
             migration.upgrade()
         assert {'is_identity', 'import_own', 'slot_state'} <= columns(connection, 'social_connection')
+        assert 'atproto_like' in columns(connection, 'post_vote') & columns(connection, 'post_reply_vote')
         assert inspect(connection).has_table('atproto_record') and inspect(connection).has_table('atproto_cursor')
         assert connection.execute(text(
             "SELECT variant, is_identity, import_own FROM social_connection WHERE remote_id = 'o1'")).one() == \
