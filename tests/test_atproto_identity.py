@@ -173,7 +173,8 @@ def test_a_like_taken_back_privately_goes_too(world):
     assert mine(world, LIKE) == {}
 
 
-@pytest.mark.parametrize('reason', ['private community', 'local-only community', 'banned', 'followers only'])
+@pytest.mark.parametrize('reason', ['private community', 'local-only community', 'banned', 'followers only',
+                                    'local-only member'])
 def test_a_vote_that_may_not_be_told_is_never_a_like(world, monkeypatch, reason):
     post = bob_post(world)
     if reason == 'private community':
@@ -182,6 +183,8 @@ def test_a_vote_that_may_not_be_told_is_never_a_like(world, monkeypatch, reason)
         world.microblogs.local_only = True
     elif reason == 'banned':
         monkeypatch.setattr(identity, 'user_banned_from_community', lambda user_id, community_id: True)
+    elif reason == 'local-only member':
+        monkeypatch.setattr(identity, 'user_local_only', lambda user: user.id == world.author.id)
     else:
         post.visibility = 'followers'
     db.session.commit()
@@ -287,6 +290,15 @@ def test_replies_that_stay_here(world, monkeypatch):
     assert identity.wanted(world.author.id, 'reply', 999999) is None
     other = a_member('other')
     assert identity.wanted(other.id, 'reply', kept.id) is None   # not theirs
+
+
+def test_a_member_whose_domain_does_not_federate_tells_bluesky_nothing(world, monkeypatch):
+    bob = actors.actor_for(world.bob)
+    monkeypatch.setattr(identity, 'user_local_only', lambda user: True)
+    follow_user_as(world.author, bob)
+    block_another_user(bob.id, SRC_API, world.auth)
+    assert mine(world, FOLLOW) == {} and mine(world, BLOCK) == {}
+    assert identity.wanted(999999, 'follow', bob.id) is None and identity.may_tell(999999, bob_post(world)) is False
 
 
 def test_a_follow_and_a_block(world):

@@ -136,7 +136,11 @@ def thread_of(reply: PostReply) -> tuple | None:
 
 def wanted(user_id: int, kind: str, target_id: int):
     """What the identity's record of this should say, or None when there should be none: the subject's record
-    (a like or repost), the reply itself (a reply), or the account (a follow or block)."""
+    (a like or repost), the reply itself (a reply), or the account (a follow or block). A member whose domain does
+    not federate tells Bluesky nothing at all."""
+    member = db.session.get(User, user_id)
+    if member is None or user_local_only(member):
+        return None
     if kind in ('like_post', 'repost'):
         post = db.session.get(Post, target_id)
         if post is None or post.deleted or not actors.is_atproto(post.author):
@@ -335,10 +339,14 @@ def involved(user_id: int) -> bool:
 
 def may_tell(user_id: int, item) -> bool:
     """Whether the member's action on a post or reply may be told outside this site: as send_vote decides for an
-    ActivityPub vote, the community federates and is not private, the member is not banned from it, and the post or
-    reply is open to anyone."""
+    ActivityPub vote, the member's domain federates, the community federates and is not private, the member is not
+    banned from it, and the post or reply is open to anyone. (Its own `local_only` is not asked: the posts and replies
+    a like or repost answers are Bluesky's, on which it means only that their author asked to be hidden from readers
+    who are not signed in, which a like on Bluesky itself respects.)"""
     community = item.community
-    return community is not None and not community.local_only and not community.private and \
+    member = db.session.get(User, user_id)
+    return member is not None and not user_local_only(member) and community is not None and \
+        not community.local_only and not community.private and \
         not community_local_only(community) and not user_banned_from_community(user_id, community.id) and \
         is_open(item)
 
