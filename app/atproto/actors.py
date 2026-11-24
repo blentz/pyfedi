@@ -15,8 +15,10 @@ from urllib.parse import urlencode
 
 from flask import current_app
 
+from sqlalchemy import text
+
 from app import celery, db
-from app.atproto.names import DOMAIN, looks_atproto
+from app.atproto.names import DOMAIN, HANDLE, looks_atproto
 from app.atproto.resolve import did_document, handle_of, pds_of, resolve_handle
 from app.clock import utcnow
 from app.connections import ServiceError
@@ -95,19 +97,48 @@ def self_labels(record: dict | None) -> set[str]:
     return {value.get('val') for value in values or [] if isinstance(value, dict) and isinstance(value.get('val'), str)}
 
 
+def restamp(user_id: int, login_only: bool) -> None:
+    """The account changed its `!no-unauthenticated`: its posts and replies, and ATProto replies under its posts,
+    are stamped again (app.atproto.ingest.login_only). Members' own replies are left as they are: they federate."""
+    db.session.execute(text('UPDATE post SET local_only = requires_login OR :flag WHERE user_id = :user'),
+                       {'flag': login_only, 'user': user_id})
+    db.session.execute(text(
+        'UPDATE post_reply r SET local_only = r.requires_login OR (r.user_id = :user AND :flag) '
+        'OR (r.user_id <> :user AND u.requires_login) '
+        'OR EXISTS (SELECT 1 FROM post p WHERE p.id = r.post_id AND p.local_only) '
+        'FROM "user" u WHERE u.id = r.user_id AND u.ap_domain = :domain '
+        'AND (r.user_id = :user OR r.post_id IN (SELECT id FROM post WHERE user_id = :user))'),
+        {'flag': login_only, 'user': user_id, 'domain': DOMAIN})
+
+
+def verified_handle(did: str, document: dict) -> str:
+    """The handle the DID document claims, when it is a handle and resolves back to this DID (ATProto's two-way
+    check: a document may claim any name); else the DID itself, which is what the actor is then called."""
+    claimed = (handle_of(document) or '').lower()
+    if claimed and HANDLE.fullmatch(claimed) and resolve_handle(claimed) == did:
+        return claimed
+    return did
+
+
 def refresh(user: User) -> User:
     """Read the actor's DID document and profile again, and store what they say."""
     did = did_of(user)
     document = did_document(did)
     pds = pds_of(document)
-    handle = handle_of(document) or did
+    handle = verified_handle(did, document)
     profile = read_record(pds, did, 'app.bsky.actor.profile', 'self') or {}
-    user.user_name = user.ap_id = handle.lower()[:255]
+    if handle != did:   # one actor per handle: another that claimed it before keeps only its DID
+        for other in User.query.filter(User.ap_domain == DOMAIN, User.ap_id == handle, User.id != user.id).all():
+            other.user_name = other.ap_id = did_of(other)
+    user.user_name = user.ap_id = handle[:255]
     user.title = (profile.get('displayName') or '').strip()[:256] or None
     about = (profile.get('description') or '').strip()
     user.about = about
     user.about_html = markdown_to_html(about) if about else ''
-    user.requires_login = NO_UNAUTHENTICATED in self_labels(profile)
+    login_only = NO_UNAUTHENTICATED in self_labels(profile)
+    if login_only != bool(user.requires_login) and user.id is not None:
+        restamp(user.id, login_only)
+    user.requires_login = login_only
     for field, column in (('avatar', 'avatar'), ('banner', 'cover')):
         url = blob_url(pds, did, profile.get(field))
         current = getattr(user, column)

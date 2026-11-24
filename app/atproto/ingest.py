@@ -216,15 +216,26 @@ def post(did: str, rkey: str, record: dict, cid=None, hops: int = MAX_HOPS):
     if made is None:
         return None
     labels = labels_of(record)
+    made.requires_login = actors.NO_UNAUTHENTICATED in labels   # the record's own ask; its account's is the user's
+    made.local_only = made.local_only or login_only(made, user)
     if isinstance(made, Post):
         made.nsfw = made.nsfw or bool(labels & NSFW)
         made.nsfl = made.nsfl or bool(labels & NSFL)
-        made.requires_login = actors.NO_UNAUTHENTICATED in labels or user.requires_login
         db.session.commit()
         _keep(uri, cid, did, POST, post_id=made.id)
     else:
+        db.session.commit()
         _keep(uri, cid, did, POST, post_reply_id=made.id, post_id=made.post_id)
     return made
+
+
+def login_only(content, user: User) -> bool:
+    """Whether readers who are not signed in may not see it (`!no-unauthenticated`, §7): its own ask, its account's,
+    or, for a reply, the post it is under being hidden from them. Such content is stamped local_only, which every
+    list, page and the API already keep from such readers; PieFed never federates a Bluesky record anyway."""
+    if content.requires_login or user.requires_login:
+        return True
+    return isinstance(content, PostReply) and content.post is not None and bool(content.post.local_only)
 
 
 def fetched(uri: str, hops: int):

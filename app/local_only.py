@@ -209,8 +209,6 @@ def _feed_hidden(feed, signed_in: bool) -> bool:
 
 
 def _content_hidden(content, signed_in: bool) -> bool:
-    if not signed_in and requires_login(content):
-        return True
     if not content.local_only:
         return False
     if not signed_in:
@@ -264,6 +262,8 @@ def hidden_here(obj, signed_in: bool | None = None) -> bool:
     signed_in = _signed_in(signed_in)
     if isinstance(obj, (models.Post, models.PostReply)):
         return _content_hidden(obj, signed_in)
+    if isinstance(obj, models.User) and not signed_in and obj.requires_login:   # ATProto !no-unauthenticated (spec
+        return True                                                           # 2026-11-23 §7): its profile too
     if isinstance(obj, models.Feed):
         return _feed_hidden(obj, signed_in)
     return _actor_hidden(obj, signed_in)
@@ -318,7 +318,7 @@ def hidden_here_clause(model, signed_in: bool | None = None):
     if model not in (models.Post, models.PostReply):
         return _actor_hidden_clause(model, signed_in)
     if not signed_in:
-        return or_(model.local_only.is_(True), _requires_login_clause(model))
+        return model.local_only.is_(True)
     author, community = aliased(models.User), aliased(models.Community)   # never correlated with the query's own
     by_author = _actor_hidden_clause(author, True)
     if hides_nothing(by_author):   # the hidden domains are the same for both: no local-only domain but this one
@@ -334,21 +334,6 @@ def hidden_here_clause(model, signed_in: bool | None = None):
                                      _actor_hidden_clause(ancestor_author, True)))
         owners.append(_unreadable_path_clause(model))   # fail closed (ruling, N-m3)
     return and_(model.local_only.is_(True), or_(*owners))
-
-
-def requires_login(content) -> bool:
-    """A post its author asked to keep from readers who are not signed in (ATProto `!no-unauthenticated`, spec
-    2026-11-23 §7), or a reply under one."""
-    post = content.post if isinstance(content, models.PostReply) else content
-    return bool(getattr(post, 'requires_login', False))   # anything but a post or reply: never
-
-
-def _requires_login_clause(model):
-    """`requires_login` as a condition on Post or PostReply rows: never NULL."""
-    if model is models.Post:
-        return model.requires_login.is_(True)
-    post = aliased(models.Post)
-    return exists().where(post.id == model.post_id, post.requires_login.is_(True))
 
 
 def _unreadable_path_clause(model):

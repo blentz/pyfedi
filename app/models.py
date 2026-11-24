@@ -4896,6 +4896,7 @@ class PostReply(db.Model):
     bookmarks = db.relationship('PostReplyBookmark', backref='reply', cascade='all, delete-orphan')
 
     local_only = db.Column(db.Boolean, nullable=False, default=False, server_default='false')  # not federated: stays on its own domain
+    requires_login = db.Column(db.Boolean, nullable=False, default=False, server_default='false')  # an ATProto reply that asks to be shown to signed-in readers only (!no-unauthenticated)
 
     __table_args__ = (
         db.Index(

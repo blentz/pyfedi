@@ -31,6 +31,8 @@ def upgrade():
         batch_op.add_column(sa.Column('requires_login', sa.Boolean(), nullable=False, server_default='false'))
     with op.batch_alter_table('user') as batch_op:
         batch_op.add_column(sa.Column('requires_login', sa.Boolean(), nullable=False, server_default='false'))
+    with op.batch_alter_table('post_reply') as batch_op:
+        batch_op.add_column(sa.Column('requires_login', sa.Boolean(), nullable=False, server_default='false'))
 
     op.create_table(
         'atproto_record',
@@ -71,6 +73,8 @@ def downgrade():
     for column in ('did', 'connection_id', 'post_id', 'post_reply_id', 'user_id'):
         op.drop_index(f'ix_atproto_record_{column}', table_name='atproto_record')
     op.drop_table('atproto_record')
+    with op.batch_alter_table('post_reply') as batch_op:
+        batch_op.drop_column('requires_login')
     with op.batch_alter_table('user') as batch_op:
         batch_op.drop_column('requires_login')
     with op.batch_alter_table('post') as batch_op:

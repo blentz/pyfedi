@@ -211,8 +211,14 @@ post (via `social_crosspost.remote_id`). Polling it needs the `rpc:` scope, so s
 prompt offers that scope.
 
 **Labels and visibility.** Self-labels `porn`, `sexual` and `nudity` make a post NSFW, and `graphic-media` makes
-it NSFL. `!no-unauthenticated`, on the account or the post, sets a new `Post.requires_login`: hidden from logged-out
-viewers. Remote content blocklists and blocked phrases apply as usual.
+it NSFL. `!no-unauthenticated` on a post or reply sets its `requires_login`, and on the account the
+user's. Either stamps the content `local_only`, which every list, page and API read already keeps from logged-out
+readers (a Bluesky record is never federated from here anyway); so is a reply under such a post. When an account
+changes its flag, its content and the ATProto replies under its posts are stamped again. The account's profile is
+hidden from logged-out readers too.
+
+A handle is taken only when it resolves back to the DID that claims it (ATProto's two-way check); otherwise the
+actor is named by its DID, and a handle another actor held moves to the one it now resolves to. Remote content blocklists and blocked phrases apply as usual.
 
 **Display.** An ATProto author shows as `@handle` with a Bluesky badge, and their profile links to `bsky.app`.
 

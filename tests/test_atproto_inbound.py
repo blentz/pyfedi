@@ -313,7 +313,7 @@ def test_a_post_goes_to_the_microblogs_with_its_labels(inbound):
     assert isinstance(made, Post) and made.user_id == user.id
     assert made.community_id == find_microblogging_community().id
     assert made.ap_id == f'https://bsky.app/profile/{inbound.bob}/post/3kone'
-    assert (made.nsfw, made.nsfl, made.requires_login) == (True, True, True)
+    assert (made.nsfw, made.nsfl, made.requires_login, made.local_only) == (True, True, True, True)
     row = AtprotoRecord.query.filter_by(uri=f'at://{inbound.bob}/{POST}/3kone').one()
     assert (row.direction, row.post_id, row.cid, row.collection) == ('in', made.id, 'bafyc', POST)
     assert ingest.post(inbound.bob, '3kone', note()).id == made.id   # delivered twice: made once
@@ -324,7 +324,8 @@ def test_a_post_by_a_login_only_account(inbound):
     user = bob(inbound)
     user.requires_login = True
     db.session.commit()
-    assert ingest.post(inbound.bob, '3kq', note()).requires_login is True
+    made = ingest.post(inbound.bob, '3kq', note())
+    assert (made.requires_login, made.local_only) == (False, True)   # the account's ask, not the post's own
 
 
 def test_our_own_echo_is_skipped(inbound):
@@ -508,3 +509,57 @@ def test_a_login_only_post_and_its_replies_are_hidden_from_strangers(inbound, ap
         assert Post.query.filter(hidden_here_clause(Post, signed_in=False)).count() == 1
         assert PostReply.query.filter(hidden_here_clause(PostReply, signed_in=False)).count() == 1
     assert inbound.client.get(f'/post/{post.id}').status_code == 200
+
+
+# --------------------------------------------------------------------------
+# from the security review of P3
+# --------------------------------------------------------------------------
+
+def test_a_handle_is_taken_only_when_it_resolves_back(inbound):
+    impostor = inbound.pds.account('bob.bsky.example')   # its DID document claims bob's handle
+    user = actors.actor_for(impostor)
+    assert user.ap_id == user.user_name == impostor   # the resolver says bob's handle is bob's DID: not this one
+    assert actors.verified_handle(impostor, {'alsoKnownAs': ['at://Not A Handle']}) == impostor
+    assert actors.verified_handle(inbound.bob, {'alsoKnownAs': ['at://BOB.bsky.example']}) == 'bob.bsky.example'
+
+
+def test_a_handle_moves_to_the_actor_it_resolves_to(inbound):
+    first = bob(inbound)
+    other = inbound.pds.account('other.bsky.example')
+    second = actors.actor_for(other)
+    inbound.pds.accounts[inbound.bob]['handle'] = 'bob-old.bsky.example'
+    inbound.pds.accounts[other]['handle'] = 'bob.bsky.example'   # bob's old handle is the other account's now
+    actors.refresh(second)
+    assert second.ap_id == 'bob.bsky.example' and first.ap_id == inbound.bob   # bob keeps only his DID until refreshed
+    actors.refresh(first)
+    assert first.ap_id == 'bob-old.bsky.example'
+
+
+def test_a_login_only_account_and_its_replies_are_hidden_from_strangers(inbound, app):
+    from app.local_only import hidden_here, hidden_here_clause
+    carol = inbound.pds.account('carol.bsky.example')
+    root = inbound.pds.put(carol, POST, '3kroot', note('open'))
+    reply = ingest.post(inbound.bob, '3kr', note('re', reply={'parent': {'uri': root}}))
+    labelled = ingest.post(inbound.bob, '3kl', note('mine', reply={'parent': {'uri': root}}, labels={
+        'values': [{'val': '!no-unauthenticated'}]}))
+    own = ingest.post(inbound.bob, '3kp', note('a post of his'))
+    under = ingest.post(carol, '3ku', note('carol answers', reply={'parent': {'uri': f'at://{inbound.bob}/{POST}/3kp'}}))
+    author = reply.author
+    assert (labelled.requires_login, labelled.local_only) == (True, True)
+    assert not reply.local_only and not own.local_only and not under.local_only
+    inbound.pds.put(inbound.bob, 'app.bsky.actor.profile', 'self', {'labels': {'values': [
+        {'val': '!no-unauthenticated'}]}})
+    actors.refresh(author)   # the account says so later than its posts and replies: they are stamped again
+    db.session.expire_all()
+    assert author.requires_login and reply.local_only and own.local_only and under.local_only
+    with app.test_request_context():
+        assert hidden_here(reply, signed_in=False) and hidden_here(author, signed_in=False)
+        assert not hidden_here(author, signed_in=True) and not hidden_here(reply, signed_in=True)
+        assert not hidden_here(reply.post, signed_in=False)   # carol's open post stays open
+        assert {row.id for row in PostReply.query.filter(hidden_here_clause(PostReply, signed_in=False))} == \
+            {reply.id, labelled.id, under.id}
+    inbound.pds.put(inbound.bob, 'app.bsky.actor.profile', 'self', {})
+    actors.refresh(author)   # and back
+    db.session.expire_all()
+    assert not author.requires_login and not reply.local_only and labelled.local_only and not own.local_only
+    assert not under.local_only
