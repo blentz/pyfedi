@@ -136,6 +136,10 @@ class Service:
                 return True
         return connection.default_on
 
+    def sendable(self, connection) -> bool:
+        """Copies may go to this connection now (a hosted Bluesky account that is waiting or off takes none)."""
+        return True
+
     def can_delete(self, variant: str | None) -> bool:
         return True
 

@@ -344,6 +344,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 48 | `d4f8a2c6e1b9` social_connections | Adds the `social_connection` and `social_crosspost` tables: members' connected accounts (tokens sealed) and each post's copies on them. (`83aa1637`) | No |
 | 49 | `e6a2c9d4f8b1` connection_apps | Creates `connection_app` (a domain's own Meta, Instagram, Google and Bluesky app credentials, secrets sealed) and adds `app_domain_id` and `app_client_id` to `social_connection`: the app each connection was made with. (`a960a103`) | No |
 | 50 | `f3b7d1a9c5e2` crosspost_progress | Adds `progress` (JSON) to `social_crosspost`, what a copy's sending did so far, and widens its `state` to 20 characters for `unconfirmed`. The downgrade turns unconfirmed copies into failed ones. | No |
+| 51 | `a95a82e17b01` atproto_groundwork | Adds `is_identity` (one per member, a partial unique index), `import_own`, `slot_state` and `slot_pinned` to `social_connection` and marks every Bluesky connection and copy `oauth`; adds `post.requires_login` (NOT NULL, default false); creates `atproto_record` (ATProto records that are not post copies) and `atproto_cursor` (the Jetstream position). The downgrade deletes hosted Bluesky connections. | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -378,6 +379,10 @@ New or changed settings in `env.sample`, `env.docker.sample` and `config.py`:
 | `CONNECTIONS_SECRETS_KEY` | empty | Fernet key(s), newest first, comma separated, that seal members' connected-account tokens in the database (any Fernet key; `flask generate-payment-key` makes one). Empty means no service is offered. Back it up apart from the database. (`83aa1637`) |
 | `BLUESKY_OAUTH_KEY` | empty | An ES256 private JWK that signs PieFed's Bluesky OAuth client assertions; `flask connections-bluesky-key` prints a new one. Bluesky also needs `SERVER_NAME` on a public domain: a Bluesky server refuses a client on `.test`, `.local`, `.localhost`, `.invalid` or `.example`. (`5f5f2e77`) |
 | `BLUESKY_PLC_URL`, `BLUESKY_RESOLVER`, `BLUESKY_DEFAULT_SERVER` | `https://plc.directory`, `https://bsky.social`, `https://bsky.social` | Where Bluesky DIDs and handles resolve, and where a member who types no handle signs in. Leave them. (`5f5f2e77`) |
+| `ATPROTO_PDS_URL`, `ATPROTO_PDS_ADMIN_PASSWORD` | empty | The Bluesky PDS run beside PieFed, on which members create accounts, and its admin password. Each domain offering handles needs wildcard DNS and TLS with `/.well-known/atproto-did` on `*.<domain>` sent to the PDS, and the PDS lists it in `PDS_SERVICE_HANDLE_DOMAINS`. Leave the PDS's email settings unset. |
+| `ATPROTO_MAX_ACCOUNTS`, `ATPROTO_HOSTED_LIMIT` | `100`, `100` | Accounts active at once, and accounts the PDS holds at all (turned off ones count): Bluesky's relay takes 100 from a new PDS until asked for more. Past either, members wait. |
+| `ATPROTO_SLOT_POLICY` | `sticky` | `sticky`: a place is kept until 90 days pass with no copy, then the account is turned off. `ranked`: the top accounts by followers keep places, recomputed daily. |
+| `ATPROTO_BUDGET_SECOND`, `ATPROTO_BUDGET_HOUR`, `ATPROTO_BUDGET_DAY` | `40`, `2000`, `18000` | Writes the PDS makes, under the relay's 50 a second, 2,600 an hour and 21,000 a day. |
 | `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` | empty | A Meta app with Facebook Login for Business and the Page permissions (`pages_show_list`, `pages_manage_posts`, `pages_read_engagement`), which need Meta's App Review and Business Verification before members outside the app's own roles can connect. Its redirect is `https://<SERVER_NAME>/user/settings/connections/facebook/callback`. (`23529744`) |
 | `FACEBOOK_GRAPH_VERSION` | `v27.0` | The Graph API version PieFed calls; raise it when Meta retires this one. (`23529744`) |
 | `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET` | empty | Instagram Login (the Instagram app id of the Meta app), for members whose Instagram account has no Facebook Page; its redirect is `https://<SERVER_NAME>/user/settings/connections/instagram/callback`. With `FACEBOOK_APP_ID` set as well, Instagram is also offered through Facebook (the same Meta app, with `instagram_basic`, `instagram_content_publish` and `instagram_manage_contents`), which can delete copies. Both need Meta's App Review. (`6516ec15`) |
@@ -1985,6 +1990,22 @@ commit each:
   made for a post deleted while it went is deleted in turn (`fe0187c3`). Spec
   `docs/superpowers/specs/2026-11-13-connected-accounts-design.md` (rulings C1 to C13;
   `83aa1637`, `5f5f2e77`, `23529744`, `6516ec15`, `c16d585b`, `e527654d`).
+- **Bluesky accounts made here.** A member creates `@name.<their home domain>` in one click
+  on the connected accounts page, on a Bluesky PDS run beside PieFed: their microblog posts
+  go there whole and are ticked on the post form, while a post in any other community goes as
+  a link card only when ticked (a new Bluesky connection starts unticked for those). The
+  handle comes from the user name; a taken one offers the next (`alice-2`). Their profile
+  (name, bio with a link back, avatar, banner) goes with it, and so do their latest 50
+  microblog posts, with their own times. They can turn the account off (it keeps its name
+  and reads as deactivated), on again, rename it, get an app password for Bluesky apps, or
+  delete it; deleting a PieFed account deletes its Bluesky account. A new PDS may hold 100
+  accounts on Bluesky's relay, so a member past the cap waits on a list ordered by followers,
+  told when their place is ready; the daily maintenance frees places by the slot policy and
+  fills them, and admins can give or keep a place at Admin > Connected accounts, where they
+  also switch creation on. Each domain may switch it off, or on, at Admin > Domains >
+  Connected accounts. Every write from the PDS takes its turn in a budget kept under the
+  relay's event limits, deletes first and backfill last. Spec
+  `docs/superpowers/specs/2026-11-23-atproto-federation-design.md` (rulings A1 to A10).
 
 There are 146 `feat` commits. The first twelve came during the coverage
 campaign:

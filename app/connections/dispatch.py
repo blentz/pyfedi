@@ -32,6 +32,7 @@ from app import celery, db
 from app.clock import utcnow
 from app.connections import (SERVICES, AuthFailed, Pending, Progress, QuotaWait, Sent, ServiceError, Transient,
                              Unconfirmed)
+from app.connections import bluesky_hosted
 from app.connections.apps import KINDS, current, enabled, for_domain
 from app.connections.eligibility import DROP, refusal
 from app.connections.tokens import REAUTH, needs_reconnecting, open_tokens, usable_tokens
@@ -47,7 +48,7 @@ WORK = {'queued': 'send', 'processing': 'resume', 'editing': 'edit', 'deleting':
 POLL = timedelta(seconds=30)    # between asks while the service works on a copy (the sweep runs each minute)
 PROCESSING_LIMIT = 30 * 60      # seconds a copy may stay processing before it fails
 # sends at once per service kind and app (spec 19.6, as Postiz caps each provider's queue); others wait a minute
-SLOTS = {'facebook': 4, 'instagram': 4, 'youtube': 2, 'bluesky': 4}
+SLOTS = {'facebook': 4, 'instagram': 4, 'youtube': 2, 'bluesky': 4, 'bluesky_hosted': 4}
 SLOT_HOLD = 2 * 3600            # seconds a slot count lives unused: a worker that died gives its slot back by then
 BUSY_WAIT = timedelta(minutes=1)
 
@@ -72,7 +73,7 @@ def offered_connections(user, post_type: int) -> list:
     offered = []
     for connection in SocialConnection.query.filter_by(user_id=user.id).order_by(SocialConnection.id).all():
         service = SERVICES.get(connection.service)
-        if enabled(service, user.site_domain_id) and service.fits_type(post_type):
+        if enabled(service, user.site_domain_id) and service.fits_type(post_type) and service.sendable(connection):
             offered.append((connection, service))
     return offered
 
@@ -83,7 +84,7 @@ def record_choices(post: Post, chosen: list[int] | None) -> None:
     connections = SocialConnection.query.filter_by(user_id=post.user_id).all()
     for connection in connections:
         service = SERVICES.get(connection.service)
-        if not enabled(service, post.author.site_domain_id):
+        if not enabled(service, post.author.site_domain_id) or not service.sendable(connection):
             continue
         if service.ticked(connection, post.community) if chosen is None else connection.id in chosen:
             db.session.add(SocialCrosspost(post_id=post.id, connection_id=connection.id,
@@ -173,7 +174,11 @@ def retry(row: SocialCrosspost) -> None:
 
 def disconnect(connection: SocialConnection) -> None:
     """Revoke the tokens at the service (best effort) and forget the connection. The copies stay where they are:
-    a member who wants them gone deletes the post first (spec §4)."""
+    a member who wants them gone deletes the post first (spec §4). An account PieFed hosts is deleted from its PDS
+    (ATProto spec §8): only the member can still reach it, through PieFed."""
+    if connection.variant == bluesky_hosted.HOSTED:
+        bluesky_hosted.delete_account(connection)
+        return
     service = SERVICES.get(connection.service)
     if service is not None:
         try:
@@ -280,6 +285,9 @@ def perform(row_id: int) -> None:
     if service is None or connection is None or (
             work in ('send', 'resume') and not enabled(service, connection.user.site_domain_id)):
         _give_up(row, work, _('This account is no longer connected.'))
+        return
+    if not service.sendable(connection):   # a hosted Bluesky account waiting for its slot, or turned off
+        _give_up(row, work, _('This account is not active just now.'))
         return
     with for_domain(connection.user.site_domain_id):   # the member's home domain's app (C10)
         _perform(row_id, work, service, connection)

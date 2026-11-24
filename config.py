@@ -165,6 +165,17 @@ class Config(object):
     BLUESKY_PLC_URL = os.environ.get('BLUESKY_PLC_URL') or 'https://plc.directory'
     BLUESKY_RESOLVER = os.environ.get('BLUESKY_RESOLVER') or 'https://bsky.social'
     BLUESKY_DEFAULT_SERVER = os.environ.get('BLUESKY_DEFAULT_SERVER') or 'https://bsky.social'
+    # Bluesky accounts PieFed hosts on its own PDS (spec 2026-11-23-atproto-federation-design.md §9, §10): its address
+    # and admin password; how many may be active at once, and how many the PDS may hold (the relay's account limit);
+    # how slots are kept (sticky | ranked); and the PDS-wide write budget a second, an hour and a day
+    ATPROTO_PDS_URL = (os.environ.get('ATPROTO_PDS_URL') or '').rstrip('/')
+    ATPROTO_PDS_ADMIN_PASSWORD = os.environ.get('ATPROTO_PDS_ADMIN_PASSWORD') or ''
+    ATPROTO_MAX_ACCOUNTS = int(os.environ.get('ATPROTO_MAX_ACCOUNTS') or 100)
+    ATPROTO_HOSTED_LIMIT = int(os.environ.get('ATPROTO_HOSTED_LIMIT') or 100)
+    ATPROTO_SLOT_POLICY = os.environ.get('ATPROTO_SLOT_POLICY') or 'sticky'
+    ATPROTO_BUDGET_SECOND = int(os.environ.get('ATPROTO_BUDGET_SECOND') or 40)
+    ATPROTO_BUDGET_HOUR = int(os.environ.get('ATPROTO_BUDGET_HOUR') or 2000)
+    ATPROTO_BUDGET_DAY = int(os.environ.get('ATPROTO_BUDGET_DAY') or 18000)
     FACEBOOK_APP_ID = os.environ.get('FACEBOOK_APP_ID') or ''
     FACEBOOK_APP_SECRET = os.environ.get('FACEBOOK_APP_SECRET') or ''
     FACEBOOK_GRAPH_VERSION = os.environ.get('FACEBOOK_GRAPH_VERSION') or 'v27.0'

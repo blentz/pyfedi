@@ -7611,6 +7611,7 @@ class SocialConnection(db.Model):
     is_identity = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     import_own = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
     slot_state = db.Column(db.String(12))
+    slot_pinned = db.Column(db.Boolean, nullable=False, default=False, server_default='false')   # an admin's grant: kept whatever the policy
 
     user = db.relationship('User', backref=db.backref('social_connections', passive_deletes=True))
 

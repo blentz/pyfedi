@@ -82,7 +82,14 @@ def new_tid() -> str:
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    return stamp(datetime.now(timezone.utc))
+
+
+def stamp(moment: datetime) -> str:
+    """A time as the lexicon's datetime: UTC, with a Z (a naive time is UTC, as PieFed stores them)."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 
 def existing_record(session: Session, rkey: str, collection: str = POST) -> str | None:
@@ -147,9 +154,9 @@ def _finish(record: dict, post) -> dict:
     return record
 
 
-def build_record(post, session: Session, video: dict | None = None) -> dict:
+def build_record(post, session: Session, video: dict | None = None, created_at: str | None = None) -> dict:
     """The full app.bsky.feed.post record for `post`, with `video` (an uploaded blob) when it has one. Uploads its
-    pictures to the PDS on the way."""
+    pictures to the PDS on the way. `created_at` is the record's time when it is not now (a backfilled post's)."""
     files = [] if post.content_warning or uploaded_video(post) else image_files(post)
     with_link = bool(post.content_warning) or (uploaded_video(post) and video is None) or len(files) > MAX_IMAGES
     images = []
@@ -162,7 +169,7 @@ def build_record(post, session: Session, video: dict | None = None) -> dict:
         jpeg_bytes, width, height = jpeg
         images.append({'alt': (file.alt_text or '')[:2000], 'image': upload_blob(session, jpeg_bytes, 'image/jpeg'),
                        'aspectRatio': {'width': width, 'height': height}})
-    record = {'$type': POST, 'text': compose(post, with_link), 'createdAt': now()}
+    record = {'$type': POST, 'text': compose(post, with_link), 'createdAt': created_at or now()}
     if video is not None:
         record['embed'] = video_embed(post, video)
     elif images:
@@ -173,7 +180,7 @@ def build_record(post, session: Session, video: dict | None = None) -> dict:
     return _finish(record, post)
 
 
-def build_card(post, session: Session) -> dict:
+def build_card(post, session: Session, created_at: str | None = None) -> dict:
     """The card record for a post outside the microblogs (spec §6, A5): its title as the text, and an external
     embed linking back to it, with its description and its first picture as the thumbnail. Behind a content
     warning: the warning as the text, and the card without description or picture."""
@@ -189,7 +196,7 @@ def build_card(post, session: Session) -> dict:
             jpeg = as_jpeg(data) if data else None
             if jpeg is not None:
                 external['thumb'] = upload_blob(session, jpeg[0], 'image/jpeg')
-    record = {'$type': POST, 'text': text, 'createdAt': now(),
+    record = {'$type': POST, 'text': text, 'createdAt': created_at or now(),
               'embed': {'$type': 'app.bsky.embed.external', 'external': external}}
     return _finish(record, post)
 
@@ -200,10 +207,12 @@ def goes_whole(post) -> bool:
     return community is not None and is_local_microblogs(community)
 
 
-def send_copy(post, session: Session, progress) -> str:
+def send_copy(post, session: Session, progress, before_write=None) -> str:
     """Make the post's copy (a full post or a card) and answer its at:// URI. Under a record key chosen before the
     first attempt and kept in `progress` (CA spec 19.2): an attempt after one that got no answer first asks the PDS
-    whether that one made the record, so a copy is never made twice. A video is uploaded once, whatever comes after."""
+    whether that one made the record, so a copy is never made twice. A video is uploaded once, whatever comes after.
+    A backfilled copy (`progress` says `backfill`) keeps the post's own time. `before_write` is called just before the
+    record is made (the hosted variant takes its budget there)."""
     rkey = progress.data.get('rkey')
     uri = existing_record(session, rkey) if rkey else None
     if uri is not None:
@@ -211,13 +220,16 @@ def send_copy(post, session: Session, progress) -> str:
     if rkey is None:
         rkey = progress.data['rkey'] = new_tid()
         progress.save()
+    created_at = stamp(post.posted_at) if progress.data.get('backfill') and post.posted_at else None
     if not goes_whole(post):
-        record = build_card(post, session)
+        record = build_card(post, session, created_at)
     else:
         if 'video' not in progress.data and uploaded_video(post):
             progress.data['video'] = upload_video(post, session)
             progress.save()
-        record = build_record(post, session, progress.data.get('video'))
+        record = build_record(post, session, progress.data.get('video'), created_at)
+    if before_write is not None:
+        before_write()
     return session.xrpc('POST', 'com.atproto.repo.createRecord', json={
         'repo': session.did, 'collection': POST, 'rkey': rkey, 'record': record}).json()['uri']
 

@@ -29,6 +29,7 @@ from app.atproto import Session, records
 from app.atproto.resolve import DEFAULT_SERVER, DOCUMENT_BYTES, HANDLE, did_document, handle_of, json_of, \
     pds_of, resolve_handle
 from app.connections import Account, AuthFailed, Permanent, Progress, Sent, Service, ServiceError, register
+from app.connections import bluesky_hosted as hosted
 from app.connections.apps import context_domain, current
 from app.connections.http import check, fetch
 
@@ -239,12 +240,21 @@ class BlueskyService(Service):
     ticks_microblog = True   # a microblog post is always ticked (A5)
 
     def configured(self) -> bool:
-        return client_key() is not None
+        """Members may connect their own accounts (the OAuth key is set), or have one made here (the PDS is)."""
+        return client_key() is not None or hosted.configured()
+
+    def kind_of(self, variant):
+        return 'bluesky_hosted' if variant == hosted.HOSTED else self.name   # a hosted account needs no app
+
+    def sendable(self, connection) -> bool:
+        return connection.variant != hosted.HOSTED or connection.slot_state == hosted.ACTIVE
 
     def fits(self, post) -> bool:
         return True
 
     def authorize_url(self, variant, state, redirect_to, pending, hint=''):
+        if client_key() is None:   # only accounts made here are offered
+            raise Permanent(_('Connecting an existing Bluesky account is not set up here.'))
         hint = (hint or '').strip().lstrip('@').lower()
         did = login_hint = None
         if hint.startswith('did:'):
@@ -298,6 +308,8 @@ class BlueskyService(Service):
         return [Account(remote_id=sub, remote_name=handle_of(document) or sub, tokens=tokens, variant='oauth')]
 
     def refresh(self, tokens):
+        if tokens.get('kind') == hosted.HOSTED:
+            return hosted.refresh(tokens)
         if not tokens.get('refresh_token'):
             raise AuthFailed(_('This connection has expired.'))
         answer = _auth_post(tokens['token_endpoint'], tokens['issuer'], tokens['dpop_jwk'], {
@@ -309,13 +321,22 @@ class BlueskyService(Service):
                 'expires_at': time.time() + int(answer.get('expires_in') or 300)}
 
     def send(self, post, tokens, connection, progress=None):
-        uri = records.send_copy(post, OAuthSession(tokens), progress or Progress())
+        progress = progress or Progress()
+        if tokens.get('kind') == hosted.HOSTED:   # its turn in the PDS-wide budget, just before the record (§9)
+            kind = 'backfill' if progress.data.get('backfill') else 'post'
+            uri = records.send_copy(post, hosted.HostedSession(tokens), progress, lambda: hosted.spend(kind))
+        else:
+            uri = records.send_copy(post, OAuthSession(tokens), progress)
         return Sent(remote_id=uri, remote_url=records.web_url(uri))
 
     def delete(self, tokens, remote_id):
-        records.delete_record(OAuthSession(tokens), remote_id)
+        if tokens.get('kind') == hosted.HOSTED:
+            hosted.spend('delete')
+            records.delete_record(hosted.HostedSession(tokens), remote_id)
+        else:
+            records.delete_record(OAuthSession(tokens), remote_id)
 
-    def revoke(self, tokens):
+    def revoke(self, tokens):   # a hosted account is deactivated or deleted instead (bluesky_hosted)
         if tokens.get('revocation_endpoint') and tokens.get('refresh_token'):
             _auth_post(tokens['revocation_endpoint'], tokens['issuer'], tokens['dpop_jwk'], {
                 'token': tokens['refresh_token'], 'token_type_hint': 'refresh_token'})

@@ -234,7 +234,8 @@ viewers. Remote content blocklists and blocked phrases apply as usual.
 - **Selection by follower count.** The waiting list is ordered by follower count (local plus remote followers),
   then by date joined. A daily task fills free slots from the top, and the member is notified. `ATPROTO_SLOT_POLICY`
   chooses what happens to members who already have a slot:
-  - `sticky` (default): a slot is kept, but is freed after 90 days with no eligible post.
+  - `sticky` (default): a slot is kept, but is freed after 90 days with no eligible post: the account is turned off
+    (deactivated) and the member told; turning it on again joins the waiting list if no slot is free.
   - `ranked`: slots are recomputed daily as the top N by follower count among everyone who asked. A member who
     drops out is deactivated, and reactivated when they rank again.
 
@@ -252,8 +253,12 @@ viewers. Remote content blocklists and blocked phrases apply as usual.
   `CONNECTIONS_SECRETS_KEY`.
 - CA's per-service admin switch for Bluesky gains a second switch, "Members can create accounts here". It is
   offered only when the PDS settings are set.
-- Per domain (`DomainConfig`): "Bluesky accounts on this domain". It is offered when the domain federates, is not an
-  onion, and is listed in the PDS's `describeServer.availableUserDomains`.
+- Per domain: "Bluesky accounts on this domain" (on, off, or as the instance), on the domain's Connected accounts
+  page beside CA's per-domain service switches (C12). It is offered when the domain federates, is not an onion, and
+  is listed in the PDS's `describeServer.availableUserDomains`.
+- `ATPROTO_HOSTED_LIMIT` (default 100) caps the accounts the PDS holds at all, turned off ones included: the relay
+  counts every account a PDS has, so a new account waits once it is reached, while a turned-off one may still come
+  back.
 
 ## 11. Testing
 

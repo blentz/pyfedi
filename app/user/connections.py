@@ -14,6 +14,7 @@ from app import db, storefront
 from app.connections import KEY, SERVICES, Account, ServiceError, sealing_available
 from app.connections.apps import current, enabled, enabled_services, for_domain
 from app.connections import bluesky, facebook, instagram, youtube  # noqa: F401 (registers the services)
+from app.connections import bluesky_hosted as hosted
 from app.connections.dispatch import disconnect, retry
 from app.connections.tokens import seal_tokens
 from app.connections.content import image_bytes
@@ -104,10 +105,17 @@ def user_connections():
     connections = [(row, SERVICES.get(row.service), enabled(SERVICES.get(row.service), home)) for row in rows]
     with for_domain(home):   # Instagram's ways in follow the apps the domain has
         offers = [(service, variant) for service in enabled_services(home)
-                  for variant in (service.variants or (None,))]
+                  for variant in (service.variants or (None,))
+                  if service.name != 'bluesky' or bluesky.client_key() is not None]   # an own account needs the key
+    mine = hosted.hosted_of(current_user)
+    create = None
+    if mine is None and hosted.hosting_on(home):   # A9: the handle is derived, or the alternative offered
+        label = hosted.label_of(request.args.get('label') or current_user.user_name)
+        create = {'label': label, 'handle': hosted.handle_of(current_user, label)}
+    place = hosted.place_of(mine) if mine is not None and mine.slot_state == hosted.WAITING else None
     return render_template('user/connections.html', title=_('Connected accounts'), user=current_user,
                            connections=connections, offers=offers, main_domain=_home().domain,
-                           on_main_domain=_at_home())
+                           on_main_domain=_at_home(), create=create, place=place, hosted=hosted)
 
 
 @bp.route('/user/settings/connections/<service_name>/connect', methods=['POST'])
@@ -251,3 +259,106 @@ def user_crosspost_retry(crosspost_id):
         abort(400)
     retry(row)
     return redirect(f'/post/{row.post_id}')
+
+
+# --------------------------------------------------------------------------
+# a Bluesky account made here (ATProto spec §8, §9)
+# --------------------------------------------------------------------------
+
+def _own_hosted_or_404(connection_id: int) -> SocialConnection:
+    connection = _own_connection_or_404(connection_id)
+    if connection.variant != hosted.HOSTED or not _at_home():
+        abort(404)
+    return connection
+
+
+@bp.route('/user/settings/connections/bluesky/create', methods=['POST'])
+@login_required
+def user_bluesky_create():
+    """One click (A9): the account is made under the derived handle, or the member waits for a slot. A handle the
+    PDS will not give brings the page back offering the next one."""
+    if not _at_home() or not hosted.hosting_on(current_user.site_domain_id):
+        abort(404)
+    try:
+        connection = hosted.request_account(current_user, request.form.get('label', '')[:64] or None)
+    except hosted.HandleRefused as refused:
+        flash(_('%(error)s Try @%(handle)s instead?', error=refused.message,
+                handle=hosted.handle_of(current_user, refused.suggestion)), 'warning')
+        return redirect(url_for('user.user_connections', label=refused.suggestion))
+    except ServiceError as failure:
+        flash(_('Bluesky could not be reached: %(error)s', error=failure.message), 'error')
+        return redirect(url_for('user.user_connections'))
+    if connection.slot_state == hosted.ACTIVE:
+        flash(_('Your Bluesky account @%(handle)s is ready.', handle=connection.remote_name))
+    else:
+        flash(_('Every Bluesky place here is taken: you are on the waiting list, and will be told when yours is '
+                'ready.'), 'info')
+    return redirect(url_for('user.user_connections'))
+
+
+@bp.route('/user/settings/connections/<int:connection_id>/turn-off', methods=['POST'])
+@login_required
+def user_bluesky_turn_off(connection_id):
+    connection = _own_hosted_or_404(connection_id)
+    if connection.slot_state != hosted.ACTIVE:
+        abort(400)
+    try:
+        hosted.deactivate(connection)
+    except ServiceError as failure:
+        flash(_('Bluesky could not be reached: %(error)s', error=failure.message), 'error')
+    else:
+        flash(_('@%(handle)s is turned off: it keeps its name, and reads as deactivated on Bluesky.',
+                handle=connection.remote_name))
+    return redirect(url_for('user.user_connections'))
+
+
+@bp.route('/user/settings/connections/<int:connection_id>/turn-on', methods=['POST'])
+@login_required
+def user_bluesky_turn_on(connection_id):
+    connection = _own_hosted_or_404(connection_id)
+    if connection.slot_state != hosted.DEACTIVATED:
+        abort(400)
+    try:
+        hosted.reactivate(connection)
+    except ServiceError as failure:
+        flash(_('Bluesky could not be reached: %(error)s', error=failure.message), 'error')
+    else:
+        flash(_('@%(handle)s is on again.', handle=connection.remote_name) if connection.slot_state == hosted.ACTIVE
+              else _('Every Bluesky place here is taken: you are on the waiting list.'))
+    return redirect(url_for('user.user_connections'))
+
+
+@bp.route('/user/settings/connections/<int:connection_id>/handle', methods=['POST'])
+@login_required
+def user_bluesky_handle(connection_id):
+    connection = _own_hosted_or_404(connection_id)
+    if connection.slot_state != hosted.ACTIVE:
+        abort(400)
+    try:
+        handle = hosted.rename(connection, request.form.get('label', '')[:64])
+    except hosted.HandleRefused as refused:
+        flash(_('%(error)s Try @%(handle)s instead?', error=refused.message,
+                handle=hosted.handle_of(current_user, refused.suggestion)), 'warning')
+    except ServiceError as failure:
+        flash(_('Bluesky could not be reached: %(error)s', error=failure.message), 'error')
+    else:
+        flash(_('Your Bluesky handle is now @%(handle)s.', handle=handle))
+    return redirect(url_for('user.user_connections'))
+
+
+@bp.route('/user/settings/connections/<int:connection_id>/app-password', methods=['POST'])
+@login_required
+def user_bluesky_app_password(connection_id):
+    """A new app password, shown on this page once: never stored, never put in the session cookie."""
+    connection = _own_hosted_or_404(connection_id)
+    if connection.slot_state != hosted.ACTIVE:
+        abort(400)
+    try:
+        password = hosted.app_password(connection)
+    except ServiceError as failure:
+        flash(_('Bluesky could not be reached: %(error)s', error=failure.message), 'error')
+        return redirect(url_for('user.user_connections'))
+    response = make_response(render_template('user/bluesky_app_password.html', title=_('App password'),
+                                             user=current_user, handle=connection.remote_name, password=password))
+    response.headers['Cache-Control'] = 'no-store'
+    return response

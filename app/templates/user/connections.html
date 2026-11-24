@@ -32,7 +32,12 @@
                 <li class="list-group-item">
                     <strong>{{ service.variant_label(connection.variant) if service else connection.service }}</strong>:
                     {{ connection.remote_name }}
-                    {% if connection.state == 'reauth' -%}
+                    {% set is_hosted = connection.variant == hosted.HOSTED -%}
+                    {% if is_hosted and connection.slot_state == hosted.WAITING -%}
+                        <span class="badge text-bg-info">{{ _('On the waiting list: number %(place)s', place=place) }}</span>
+                    {% elif is_hosted and connection.slot_state == hosted.DEACTIVATED -%}
+                        <span class="badge text-bg-secondary">{{ _('Turned off') }}</span>
+                    {% elif connection.state == 'reauth' -%}
                         <span class="badge text-bg-danger">{{ _('Needs reconnecting') }}</span>
                     {% elif not on -%}
                         <span class="badge text-bg-secondary">{{ _('Switched off by the admins') }}</span>
@@ -59,15 +64,51 @@
                                 <button type="submit" class="btn btn-sm btn-primary">{{ _('Reconnect') }}</button>
                             </form>
                         {% endif -%}
+                        {% if is_hosted and on_main_domain -%}
+                            {% if connection.slot_state == hosted.ACTIVE -%}
+                                <form method="post" action="{{ url_for('user.user_bluesky_app_password', connection_id=connection.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Get an app password') }}</button>
+                                </form>
+                                <form method="post" action="{{ url_for('user.user_bluesky_turn_off', connection_id=connection.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary confirm_first">{{ _('Turn off') }}</button>
+                                </form>
+                                <form method="post" class="d-flex gap-1" action="{{ url_for('user.user_bluesky_handle', connection_id=connection.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <label class="visually-hidden" for="label_{{ connection.id }}">{{ _('New name') }}</label>
+                                    <input type="text" class="form-control form-control-sm" name="label" id="label_{{ connection.id }}" maxlength="18" autocapitalize="none" spellcheck="false" placeholder="{{ connection.remote_name.split('.')[0] }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Change handle') }}</button>
+                                </form>
+                            {% elif connection.slot_state == hosted.DEACTIVATED -%}
+                                <form method="post" action="{{ url_for('user.user_bluesky_turn_on', connection_id=connection.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-sm btn-primary">{{ _('Turn on') }}</button>
+                                </form>
+                            {% endif -%}
+                        {% endif -%}
                         <form method="post" action="{{ url_for('user.user_connection_disconnect', connection_id=connection.id) }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="btn btn-sm btn-outline-danger confirm_first">{{ _('Disconnect') }}</button>
+                            <button type="submit" class="btn btn-sm btn-outline-danger confirm_first">
+                                {%- if is_hosted and hosted.has_account(connection) %}{{ _('Delete this Bluesky account') }}
+                                {%- elif is_hosted %}{{ _('Leave the waiting list') }}
+                                {%- else %}{{ _('Disconnect') }}{% endif %}</button>
                         </form>
                     </div>
                 </li>
             {% endfor -%}
             </ul>
             <p class="small text-muted">{{ _('Disconnecting leaves the copies already posted where they are. Delete a post first to delete its copies.') }}</p>
+        {% endif -%}
+
+        {% if on_main_domain and create -%}
+            <h2 class="fs-5">{{ _('A Bluesky account of your own') }}</h2>
+            <p>{{ _('Made here in one click: your microblog posts go out as @%(handle)s, and you can sign in to Bluesky apps with an app password.', handle=create.handle) }}</p>
+            <form method="post" class="mb-4" action="{{ url_for('user.user_bluesky_create') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="label" value="{{ create.label }}">
+                <button type="submit" class="btn btn-primary">{{ _('Create @%(handle)s', handle=create.handle) }}</button>
+            </form>
         {% endif -%}
 
         {% if on_main_domain and offers -%}
@@ -85,7 +126,7 @@
                 </form>
             {% endfor -%}
             </div>
-        {% elif not connections -%}
+        {% elif not connections and not create -%}
             <p>{{ _('No services are available here yet.') }}</p>
         {% endif -%}
     </main>

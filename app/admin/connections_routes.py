@@ -5,7 +5,7 @@ addresses each domain using the instance's apps needs registered in them (C9). A
 `manage domain connected accounts` on that domain (C8), sets the domain's own apps, which its members use instead,
 and its own switches (C12). A domain's new app, or its removal, ends the connections made with another app (C11).
 """
-from flask import abort, flash, redirect, request, url_for
+from flask import abort, current_app, flash, redirect, request, url_for
 from flask_babel import _, lazy_gettext as _l
 from flask_login import current_user
 
@@ -14,6 +14,7 @@ from app.admin import bp
 from app.connections import SERVICES, sealing_available, setting_name
 from app.connections.apps import (KINDS, app_for, domain_app, domain_switch, enabled, for_domain, instance_app,
                                   remove_domain_app, save_domain_app, set_domain_switch)
+from app.connections import bluesky_hosted as hosted
 from app.connections.bluesky import key_id_of, new_key_jwk
 from app.connections.dispatch import reconnect_domain
 from app.models import SiteDomain, SocialConnection
@@ -36,6 +37,9 @@ def callbacks(domain, kind: str) -> list[str]:
 @login_required
 @permission_required('change instance settings')
 def admin_connections():
+    if request.method == 'POST' and request.form.get('action') in HOSTING_ACTIONS:
+        _hosting_action(request.form['action'])
+        return redirect(url_for('admin.admin_connections'))
     if request.method == 'POST':   # login_required has checked its CSRF token
         service = SERVICES.get(request.form.get('service', ''))
         if service is None or not sealing_available():
@@ -63,7 +67,52 @@ def admin_connections():
             if instance_app(kind) is not None and (domain.is_default or domain_app(kind, domain.id) is None):
                 registrations.append((domain.domain, KIND_LABELS[kind], callbacks(domain, kind)))
     return render_template('admin/connections.html', title=_('Connected accounts'), services=services,
-                           sealing=sealing_available(), registrations=registrations)
+                           sealing=sealing_available(), registrations=registrations, hosting=_hosting_summary())
+
+
+HOSTING_ACTIONS = ('hosting', 'grant', 'pin', 'unpin')
+
+
+def _hosting_summary() -> dict | None:
+    """Bluesky accounts hosted here (ATProto spec §9, §10): the switch, the slots, the waiting list and the active
+    accounts. None when the PDS is not set."""
+    if not hosted.configured():
+        return None
+    return {'on': bool(get_setting(setting_name(hosted.HOSTING), False)), 'domains': hosted.handle_domains(),
+            'active': hosted.active_count(), 'max': current_app.config['ATPROTO_MAX_ACCOUNTS'],
+            'accounts': hosted.account_count(), 'limit': current_app.config['ATPROTO_HOSTED_LIMIT'],
+            'policy': current_app.config['ATPROTO_SLOT_POLICY'], 'waiting': hosted.waiting_list(),
+            'active_rows': hosted.hosted_rows().filter_by(slot_state=hosted.ACTIVE)
+            .order_by(SocialConnection.id).all(), 'followers': hosted.followers}
+
+
+def _hosting_action(action: str) -> None:
+    if not hosted.configured() or not sealing_available():
+        abort(400)
+    if action == 'hosting':
+        on = request.form.get('on') == '1'
+        set_setting(setting_name(hosted.HOSTING), on)
+        flash(_('Members can create Bluesky accounts here.') if on
+              else _('Members can no longer create Bluesky accounts here. Those made already keep working.'))
+        return
+    connection = db.session.get(SocialConnection, request.form.get('connection_id', 0, type=int))
+    if connection is None or connection.variant != hosted.HOSTED:
+        abort(404)
+    if action == 'grant':
+        if connection.slot_state != hosted.WAITING:
+            abort(400)
+        if hosted.grant(connection):
+            connection.slot_pinned = True   # granted by hand: kept whatever the policy
+            db.session.commit()
+            flash(_('@%(handle)s has a place now.', handle=connection.remote_name))
+        else:
+            flash(_('Bluesky could not make that account just now: try again later.'), 'error')
+        return
+    if connection.slot_state != hosted.ACTIVE:
+        abort(400)
+    connection.slot_pinned = action == 'pin'
+    db.session.commit()
+    flash(_('Saved.'))
 
 
 def _domain_or_404(domain_id: int) -> SiteDomain:
@@ -86,6 +135,12 @@ def admin_domain_connections(domain_id):
         action = request.form.get('action', '')
         if action == 'switch':
             _save_switch(row.id)
+        elif action == 'hosting' and _domain_hosting(domain) is not None:
+            value = request.form.get('value') or None
+            if value not in (None, 'on', 'off'):
+                abort(400)
+            set_domain_switch(hosted.HOSTING, row.id, value)
+            flash(_('Saved.'))
         elif action in ('save', 'remove', 'make-key') and request.form.get('kind') in KINDS:
             _save_app(row.id, request.form['kind'], action)
         else:
@@ -106,7 +161,18 @@ def admin_domain_connections(domain_id):
                          'instance_on': bool(get_setting(setting_name(service.name), False))})
     return render_template('admin/domain_connections.html', title=_('Connected accounts: %(domain)s', domain=row.domain),
                            row=row, apps=apps, switches=switches, sealing=sealing_available(),
+                           hosting=_domain_hosting(domain),
                            bluesky_metadata=f'{storefront.domain_base_url(domain)}/connections/bluesky/client-metadata.json')
+
+
+def _domain_hosting(domain) -> dict | None:
+    """The domain's "Bluesky accounts on this domain" switch (ATProto spec §10): offered when the PDS is set and gives
+    handles under this domain, which federates and is no onion."""
+    if not hosted.configured() or not domain.federates or domain.is_onion or domain.domain not in hosted.handle_domains():
+        return None
+    return {'own': domain_switch(hosted.HOSTING, domain.id), 'instance_on': bool(get_setting(setting_name(hosted.HOSTING),
+                                                                                            False)),
+            'on': hosted.hosting_on(domain.id)}
 
 
 def _save_switch(domain_id: int) -> None:

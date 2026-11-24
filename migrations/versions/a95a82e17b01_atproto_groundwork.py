@@ -21,6 +21,7 @@ def upgrade():
         batch_op.add_column(sa.Column('is_identity', sa.Boolean(), nullable=False, server_default='false'))
         batch_op.add_column(sa.Column('import_own', sa.Boolean(), nullable=False, server_default='false'))
         batch_op.add_column(sa.Column('slot_state', sa.String(length=12), nullable=True))
+        batch_op.add_column(sa.Column('slot_pinned', sa.Boolean(), nullable=False, server_default='false'))
     op.create_index('uq_social_connection_identity', 'social_connection', ['user_id'], unique=True,
                     postgresql_where=sa.text('is_identity'))
     op.execute("UPDATE social_connection SET variant = 'oauth' WHERE service = 'bluesky' AND variant IS NULL")
@@ -76,6 +77,7 @@ def downgrade():
     op.execute("UPDATE social_connection SET variant = NULL WHERE service = 'bluesky' AND variant = 'oauth'")
     op.drop_index('uq_social_connection_identity', table_name='social_connection')
     with op.batch_alter_table('social_connection') as batch_op:
+        batch_op.drop_column('slot_pinned')
         batch_op.drop_column('slot_state')
         batch_op.drop_column('import_own')
         batch_op.drop_column('is_identity')

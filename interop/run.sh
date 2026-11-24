@@ -50,7 +50,8 @@ up_piefed() {
     fi
     # piped into `python -` (an interactive `flask shell` chokes on the blank-line rules of a pasted script)
     { printf 'from pyfedi import app\napp.app_context().push()\n'; cat interop/seed_piefed.py; } \
-        | $COMPOSE exec -T piefed-web python -
+        | $COMPOSE exec -T -e SSL_CERT_FILE=/tmp/harness-ca.crt piefed-web python -   # trust_ca.sh's bundle: it
+    # exports it to the container's own process alone, and the off state asks the PDS to delete accounts
 }
 
 # Loops publishes no image: build the pinned release from source the first time a host needs it (compose.interop.yaml's
@@ -221,7 +222,8 @@ start_plc() {
 # PieFed's Bluesky state for interop/bluesky (interop/bluesky/piefed_state.py): on for the run, off after
 bluesky_state() {
     { printf "from pyfedi import app\napp.app_context().push()\nSTATE = '%s'\n" "$1"; cat interop/bluesky/piefed_state.py; } \
-        | $COMPOSE exec -T piefed-web python -
+        | $COMPOSE exec -T -e SSL_CERT_FILE=/tmp/harness-ca.crt piefed-web python -   # trust_ca.sh's bundle: it
+    # exports it to the container's own process alone, and the off state asks the PDS to delete accounts
 }
 
 # Connected accounts P2, end to end: PieFed, the PLC directory and the PDS, then interop/bluesky in the Playwright
@@ -232,6 +234,10 @@ bluesky() {
     if ! grep -q '^BLUESKY_OAUTH_KEY=' interop/.env.interop; then
         key=$(podman run --rm --entrypoint python localhost/piefed-interop:latest -c "$BLUESKY_KEY_PY")
         printf '# Bluesky (connected accounts)\nBLUESKY_OAUTH_KEY=%s\nBLUESKY_PLC_URL=https://plc.test\nBLUESKY_RESOLVER=https://pds.test\nBLUESKY_DEFAULT_SERVER=https://pds.test\n' "$key" >> interop/.env.interop
+    fi
+    if ! grep -q '^ATPROTO_PDS_URL=' interop/.env.interop; then   # accounts PieFed makes on the PDS (ATProto P2)
+        admin=$(grep '^PDS_ADMIN_PASSWORD=' interop/.env.interop | cut -d= -f2-)
+        printf '# Bluesky accounts made here: one place, so the second member waits\nATPROTO_PDS_URL=https://pds.test\nATPROTO_PDS_ADMIN_PASSWORD=%s\nATPROTO_MAX_ACCOUNTS=1\n' "$admin" >> interop/.env.interop
     fi
     up_piefed   # recreates PieFed's containers, so they read the key
     $COMPOSE --profile apps build apps-runner

@@ -42,6 +42,49 @@
         {% else -%}
             <p>{{ _('No services are installed.') }}</p>
         {% endif -%}
+        {% if hosting -%}
+            <h2 class="fs-5 mt-4" id="bluesky-hosting">{{ _('Bluesky accounts made here') }}</h2>
+            <p class="small">{{ _('Members can create @name.<their domain> on the Bluesky server run beside PieFed. Handles are given under: %(domains)s.', domains=hosting.domains|join(', ') or _('no domain yet')) }}</p>
+            {% if sealing -%}
+            <form method="post" class="mb-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="action" value="hosting">
+                <input type="hidden" name="on" value="{{ '0' if hosting.on else '1' }}">
+                <button type="submit" class="btn btn-sm {{ 'btn-outline-danger' if hosting.on else 'btn-primary' }}">
+                    {{ _('Stop members creating accounts here') if hosting.on else _('Members can create accounts here') }}</button>
+            </form>
+            {% endif -%}
+            <p>{{ _('Active: %(active)s of %(max)s. Accounts on the server: %(accounts)s of %(limit)s. Slots are kept: %(policy)s.', active=hosting.active, max=hosting.max, accounts=hosting.accounts, limit=hosting.limit, policy=hosting.policy) }}</p>
+            {% if hosting.waiting -%}
+            <h3 class="fs-6">{{ _('Waiting list') }}</h3>
+            <table class="table table-sm">
+                <thead><tr><th>#</th><th>{{ _('Handle') }}</th><th>{{ _('Followers') }}</th><th></th></tr></thead>
+                <tbody>
+                {% for row in hosting.waiting -%}
+                    <tr><td>{{ loop.index }}</td><td>@{{ row.remote_name }}</td><td>{{ hosting.followers(row.user_id) }}</td>
+                        <td><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="action" value="grant"><input type="hidden" name="connection_id" value="{{ row.id }}">
+                            <button type="submit" class="btn btn-sm btn-outline-primary">{{ _('Give a place now') }}</button></form></td></tr>
+                {% endfor -%}
+                </tbody>
+            </table>
+            {% endif -%}
+            {% if hosting.active_rows -%}
+            <h3 class="fs-6">{{ _('Active accounts') }}</h3>
+            <table class="table table-sm">
+                <thead><tr><th>{{ _('Handle') }}</th><th>{{ _('Followers') }}</th><th></th></tr></thead>
+                <tbody>
+                {% for row in hosting.active_rows -%}
+                    <tr><td>@{{ row.remote_name }}{% if row.slot_pinned %} <span class="badge text-bg-secondary">{{ _('Kept') }}</span>{% endif %}</td>
+                        <td>{{ hosting.followers(row.user_id) }}</td>
+                        <td><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="action" value="{{ 'unpin' if row.slot_pinned else 'pin' }}"><input type="hidden" name="connection_id" value="{{ row.id }}">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Stop keeping its place') if row.slot_pinned else _('Keep its place') }}</button></form></td></tr>
+                {% endfor -%}
+                </tbody>
+            </table>
+            {% endif -%}
+        {% endif -%}
         {% if registrations -%}
             <h2 class="fs-5 mt-4">{{ _('Addresses to register in the instance apps') }}</h2>
             <p class="small">{{ _("Each domain whose members use the instance's apps signs in on its own address. Add these to each app's allowed redirect addresses (Meta: Valid OAuth Redirect URIs, and Instagram business login's redirect URIs; Google: Authorized redirect URIs). A domain with its own app lists its addresses on its own page.") }}</p>

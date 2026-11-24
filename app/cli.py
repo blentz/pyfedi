@@ -57,6 +57,7 @@ from app.media_cap import evict_old_post_media, remove_post_orphans, remove_user
 from app.shared.tasks.maintenance import add_remote_communities, remove_old_bot_content, pwn_bots
 from app.shared.post import feature_published_post, make_post
 from app.connections.bluesky import new_key_jwk
+from app.connections.bluesky_hosted import daily as bluesky_slots, daily_task as bluesky_slots_task
 from app.connections.dispatch import post_published, sweep as sweep_crossposts
 from app.shared.tasks.media import requeue_stuck_media
 from app.shared import video_uploads
@@ -930,6 +931,7 @@ def register(app):
                 if get_setting('auto_add_remote_communities', False):
                     add_remote_communities()
                 clean_up_tmp()
+                bluesky_slots()
                 print('All maintenance tasks completed synchronously (debug mode)')
             else:
                 if get_setting('enable_instance_chooser', False):
@@ -960,6 +962,7 @@ def register(app):
                     add_remote_communities.delay()
                 clean_up_tmp.delay()
                 expire_relayed_posts.delay()
+                bluesky_slots_task.delay()
                 print('All maintenance tasks scheduled successfully (production mode)')
 
 
@@ -1024,6 +1027,7 @@ def register(app):
         archive_old_users()
         print(f'22 {datetime.now()}')
         pwn_bots()
+        bluesky_slots()   # Bluesky accounts made here: free and fill their slots (ATProto spec §9)
         print(f'Finished {datetime.now()}')
 
         log_cron_task_to_db("daily_maintenance")

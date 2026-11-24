@@ -44,6 +44,21 @@
             </tbody>
         </table>
 
+        {% if hosting and sealing -%}
+            <h2 class="fs-5 mt-4">{{ _('Bluesky accounts on this domain') }}</h2>
+            <p class="small">{{ _('Members of this domain can create @name.%(domain)s: %(state)s.', domain=row.domain, state=_('on') if hosting.on else _('off')) }}</p>
+            <form method="post" class="d-flex gap-2 mb-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="action" value="hosting">
+                <select name="value" class="form-select form-select-sm w-auto" aria-label="{{ _('Bluesky accounts on this domain') }}">
+                    <option value="" {{ 'selected' if hosting.own is none }}>{{ _('As the instance (%(state)s)', state=_('on') if hosting.instance_on else _('off')) }}</option>
+                    <option value="off" {{ 'selected' if hosting.own == 'off' }}>{{ _('Off') }}</option>
+                    <option value="on" {{ 'selected' if hosting.own == 'on' }}>{{ _('On') }}</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-outline-primary">{{ _('Save') }}</button>
+            </form>
+        {% endif -%}
+
         <h2 class="fs-5 mt-4">{{ _("This domain's apps") }}</h2>
         {% for app in apps -%}
             <div class="card mb-3" id="app-{{ app.kind }}">

@@ -14,6 +14,7 @@ from markupsafe import Markup
 from sqlalchemy import desc, or_, text, asc
 
 from app import db, cache, celery
+from app.connections.bluesky_hosted import profile_changed as bluesky_profile_changed
 from app.payments.core import end_subscriptions_of
 from app.branding import current_branding
 from app.activitypub.signature import default_context, send_post_request
@@ -456,6 +457,7 @@ def edit_profile(actor):
         banner_file = request.files.get('banner_file')
         if banner_file and banner_file.filename != '':
             replace_cover(current_user, banner_file)
+        bluesky_profile_changed(current_user)   # a Bluesky account made here shows the same profile (ATProto §6)
 
         # Sync to LDAP
         try:
