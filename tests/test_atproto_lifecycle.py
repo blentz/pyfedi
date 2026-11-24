@@ -71,6 +71,24 @@ def test_an_inactive_account_is_hidden_until_it_comes_back(world):
     assert counts() == before and db.session.get(Post, gone.id).deleted   # its own delete stands
 
 
+def test_bans_made_while_an_account_was_inactive_stand(world):
+    from app.models import CommunityBan
+    kept = ingest.post(world.bob, '3kk', note('in the microblogs'))
+    bob = actors.actor_for(world.bob, fetch_new=False)
+    lifecycle.account(world.bob, False, 'deactivated')
+    db.session.add(CommunityBan(user_id=bob.id, community_id=kept.community_id, banned_by=world.author.id))
+    db.session.commit()
+    lifecycle.account(world.bob, True, None)
+    db.session.expire_all()
+    assert db.session.get(Post, kept.id).deleted   # the community's ban stands
+    CommunityBan.query.delete()
+    bob.banned = True
+    db.session.commit()
+    lifecycle.account(world.bob, True, None)
+    db.session.expire_all()
+    assert db.session.get(Post, kept.id).deleted   # the site's ban stands too
+
+
 def test_a_deleted_account_goes(world, monkeypatch):
     purged = []
     monkeypatch.setattr(lifecycle, 'purge_remote_user_then_delete', purged.append)

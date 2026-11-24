@@ -254,7 +254,8 @@ def _flip(user: User, hide: bool) -> None:
     """Hide the account's live posts and replies (or show again those it hid), and move every count they were in:
     the communities', the author's, a reply's post's and the replies' above it (`path` ends with the reply itself).
     Each count is its own statement: a row changed twice in one statement keeps only one of the changes."""
-    which = 'deleted = false' if hide else f'deleted = true AND deleted_by = {INACTIVE}'
+    which = 'deleted = false' if hide else f'deleted = true AND deleted_by = {INACTIVE} AND community_id NOT IN ' \
+        '(SELECT community_id FROM community_ban WHERE user_id = :user)'   # a community's ban stands
     values = {'hide': hide, 'by': INACTIVE if hide else None, 'user': user.id}
     posts = db.session.execute(text(f'UPDATE post SET deleted = :hide, deleted_by = :by WHERE user_id = :user AND '
                                     f'{which} RETURNING community_id'), values).scalars().all()
@@ -281,5 +282,8 @@ def hide_content(user: User) -> None:
 
 
 def restore_content(user: User) -> None:
-    """The account is active again: what its going inactive hid is shown again."""
+    """The account is active again: what its going inactive hid is shown again; never for an account banned or
+    deleted here meanwhile, nor in a community that banned it (their bans stand: only moderators lift them)."""
+    if user.banned or user.deleted:
+        return
     _flip(user, False)
