@@ -545,6 +545,15 @@ def test_a_login_only_account_and_its_replies_are_hidden_from_strangers(inbound,
     own = ingest.post(inbound.bob, '3kp', note('a post of his'))
     under = ingest.post(carol, '3ku', note('carol answers', reply={'parent': {'uri': f'at://{inbound.bob}/{POST}/3kp'}}))
     author = reply.author
+    from app.models import Language
+    member_reply = PostReply.new(inbound.author, own, None, 'mine too', '<p>mine too</p>', False,
+                                 Language.query.first().id, False, False)
+    deeper = PostReply.new(inbound.author, reply.post, reply, 'deeper', '<p>deeper</p>', False,
+                           Language.query.first().id, False, False)
+    elsewhere = PostReply.new(inbound.author, reply.post, None, 'elsewhere', '<p>elsewhere</p>', False,
+                              Language.query.first().id, False, False)
+    db.session.commit()
+    assert not member_reply.local_only and not deeper.local_only
     assert (labelled.requires_login, labelled.local_only) == (True, True)
     assert not reply.local_only and not own.local_only and not under.local_only
     inbound.pds.put(inbound.bob, 'app.bsky.actor.profile', 'self', {'labels': {'values': [
@@ -552,14 +561,15 @@ def test_a_login_only_account_and_its_replies_are_hidden_from_strangers(inbound,
     actors.refresh(author)   # the account says so later than its posts and replies: they are stamped again
     db.session.expire_all()
     assert author.requires_login and reply.local_only and own.local_only and under.local_only
+    assert member_reply.local_only and deeper.local_only and not elsewhere.local_only
     with app.test_request_context():
         assert hidden_here(reply, signed_in=False) and hidden_here(author, signed_in=False)
         assert not hidden_here(author, signed_in=True) and not hidden_here(reply, signed_in=True)
         assert not hidden_here(reply.post, signed_in=False)   # carol's open post stays open
         assert {row.id for row in PostReply.query.filter(hidden_here_clause(PostReply, signed_in=False))} == \
-            {reply.id, labelled.id, under.id}
+            {reply.id, labelled.id, under.id, member_reply.id, deeper.id}
     inbound.pds.put(inbound.bob, 'app.bsky.actor.profile', 'self', {})
     actors.refresh(author)   # and back
     db.session.expire_all()
     assert not author.requires_login and not reply.local_only and labelled.local_only and not own.local_only
-    assert not under.local_only
+    assert not under.local_only and member_reply.local_only   # a member's stamp stays, as every such stamp does

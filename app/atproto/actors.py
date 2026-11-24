@@ -99,7 +99,8 @@ def self_labels(record: dict | None) -> set[str]:
 
 def restamp(user_id: int, login_only: bool) -> None:
     """The account changed its `!no-unauthenticated`: its posts and replies, and ATProto replies under its posts,
-    are stamped again (app.atproto.ingest.login_only). Members' own replies are left as they are: they federate."""
+    are stamped again (app.atproto.ingest.login_only). Members' replies below it are stamped when it turns on, as
+    content_local_only stamps a reply to local-only content, and, like every such stamp, stay when it turns off."""
     db.session.execute(text('UPDATE post SET local_only = requires_login OR :flag WHERE user_id = :user'),
                        {'flag': login_only, 'user': user_id})
     db.session.execute(text(
@@ -109,6 +110,11 @@ def restamp(user_id: int, login_only: bool) -> None:
         'FROM "user" u WHERE u.id = r.user_id AND u.ap_domain = :domain '
         'AND (r.user_id = :user OR r.post_id IN (SELECT id FROM post WHERE user_id = :user))'),
         {'flag': login_only, 'user': user_id, 'domain': DOMAIN})
+    if login_only:   # members' replies below its posts or replies, written before: as content_local_only stamps new ones
+        db.session.execute(text(
+            'UPDATE post_reply r SET local_only = true FROM "user" u WHERE u.id = r.user_id AND u.ap_id IS NULL '
+            'AND (r.post_id IN (SELECT id FROM post WHERE user_id = :user) OR EXISTS (SELECT 1 FROM post_reply a '
+            'WHERE a.id = ANY(r.path) AND a.id <> r.id AND a.user_id = :user))'), {'user': user_id})
 
 
 def verified_handle(did: str, document: dict) -> str:
