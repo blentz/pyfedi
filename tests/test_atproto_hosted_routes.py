@@ -155,7 +155,39 @@ def test_an_app_password_is_shown_once_and_never_kept(hosted_world):
     assert 'Bluesky could not be reached' in page(hosted_world)
 
 
-@pytest.mark.parametrize('action', ['handle', 'app-password'])
+def test_the_page_offers_setting_a_birthdate(hosted_world):
+    connection = a_hosted(hosted_world, hosted_world.author)
+    assert f'/user/settings/connections/{connection.id}/birthdate' in page(hosted_world)
+
+
+def test_a_birthdate_is_set_on_bluesky_and_not_kept(hosted_world):
+    connection = a_hosted(hosted_world, hosted_world.author)
+    response = post(hosted_world, f'/user/settings/connections/{connection.id}/birthdate', birthdate='1990-02-03')
+    assert response.location.endswith(PAGE)
+    assert hosted_world.pds.preferences[connection.remote_id] == [
+        {'$type': hosted.PERSONAL_DETAILS, 'birthDate': '1990-02-03T00:00:00.000Z'}]
+    assert 'Your birthdate is set on Bluesky.' in page(hosted_world)
+    db.session.refresh(connection)
+    assert '1990' not in connection.sealed_tokens and '1990' not in str(connection.__dict__)
+
+
+@pytest.mark.parametrize('birthdate', ['', 'yesterday', '1899-12-31', '2999-01-01', '1990-02-30'])
+def test_a_birthdate_bluesky_would_not_take_is_refused(hosted_world, birthdate):
+    connection = a_hosted(hosted_world, hosted_world.author)
+    post(hosted_world, f'/user/settings/connections/{connection.id}/birthdate', birthdate=birthdate)
+    assert 'That is not a birthdate Bluesky takes.' in page(hosted_world)
+    assert connection.remote_id not in hosted_world.pds.preferences
+
+
+def test_a_birthdate_when_bluesky_cannot_be_reached(hosted_world):
+    connection = a_hosted(hosted_world, hosted_world.author)
+    hosted_world.pds.fail['app.bsky.actor.getPreferences'] = httpx.Response(502)
+    post(hosted_world, f'/user/settings/connections/{connection.id}/birthdate', birthdate='1990-02-03')
+    assert 'Bluesky could not be reached' in page(hosted_world)
+    assert connection.remote_id not in hosted_world.pds.preferences
+
+
+@pytest.mark.parametrize('action', ['handle', 'app-password', 'birthdate'])
 def test_an_inactive_account_refuses_changes(hosted_world, action):
     connection = a_hosted(hosted_world, hosted_world.author, state=hosted.WAITING)
     assert post(hosted_world, f'/user/settings/connections/{connection.id}/{action}').status_code == 400

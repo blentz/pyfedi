@@ -18,7 +18,7 @@ import json
 import re
 import secrets
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 
 import jwt
 from flask import current_app
@@ -520,6 +520,23 @@ def app_password(connection: SocialConnection) -> str:
     session = HostedSession(usable_tokens(connection.id, SERVICES['bluesky']))
     name = f'App password {utcnow():%Y-%m-%d %H:%M:%S}'
     return session.xrpc('POST', 'com.atproto.server.createAppPassword', json={'name': name}).json()['password']
+
+
+PERSONAL_DETAILS = 'app.bsky.actor.defs#personalDetailsPref'
+OLDEST_BIRTH = date(1900, 1, 1)
+
+
+def set_birthdate(connection: SocialConnection, birth: date) -> None:
+    """The account's birthdate, which Bluesky apps ask for before they show anything and take only from a session
+    of the account's own password, never an app password's. Bluesky keeps it among the account's preferences,
+    written all at once: the others are read first and kept as they are. Sent there, never stored here."""
+    if not OLDEST_BIRTH <= birth <= utcnow().date():
+        raise ValueError(birth)
+    session = HostedSession(usable_tokens(connection.id, SERVICES['bluesky']))
+    preferences = session.xrpc('GET', 'app.bsky.actor.getPreferences').json().get('preferences') or []
+    kept = [pref for pref in preferences if not (isinstance(pref, dict) and pref.get('$type') == PERSONAL_DETAILS)]
+    kept.append({'$type': PERSONAL_DETAILS, 'birthDate': f'{birth:%Y-%m-%d}T00:00:00.000Z'})
+    session.xrpc('POST', 'app.bsky.actor.putPreferences', json={'preferences': kept})
 
 
 # --------------------------------------------------------------------------
