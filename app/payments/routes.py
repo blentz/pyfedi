@@ -2,7 +2,7 @@
 
 A browser coming back from a provider grants nothing: only a verified webhook does (spec, Security).
 """
-from flask import abort, flash, g, redirect, request, session, url_for
+from flask import abort, current_app, flash, g, redirect, request, session, url_for
 from babel.numbers import get_currency_name
 from flask_babel import _, get_locale
 from flask_login import current_user
@@ -200,8 +200,10 @@ def _provider_url(offer, user, discount=None):
                                                          url_for('payments.result', result='success', _external=True),
                                                          url_for('payments.result', result='failure', _external=True),
                                                          discount=discount), None
-    except ProviderError:
-        return None, (render_template('generic_message.html', title=_('Donation plans'),
+    except ProviderError as error:   # the member sees only that it is down; the log says why, for the operator
+        current_app.logger.warning(f'Checkout for offer {offer.id} ({offer.provider_kind}) by user '
+                                   f'{user.id if user else None} failed: {error}')
+        return None, (render_template('generic_message.html', title=_('Payment unavailable'),
                                       message=_('The payment provider is unavailable at the moment. Please try again '
                                                 'later.')), 503)
 

@@ -6,7 +6,7 @@ who abandons the provider's page comes back by logging in: the right password le
 """
 from datetime import timedelta
 
-from flask import redirect, url_for
+from flask import current_app, redirect, url_for
 from flask_babel import _
 
 from app import celery, db
@@ -71,7 +71,9 @@ def registration_checkout(user: User):
             db.session.commit()
         return render_template('payments/summary.html', title=_('Before you pay'),
                                summary=summarise(offer, user, discount, url, lapsed), pay_url=url, back_url=None)
-    except ProviderError:
+    except ProviderError as error:   # the joiner sees only that it is down; the log says why, for the operator
+        current_app.logger.warning(f'Registration checkout for offer {offer.id if offer else None} '
+                                   f'({offer.provider_kind if offer else None}) by user {user.id} failed: {error}')
         return render_template('generic_message.html', title=_('Create new account'),
                                message=_('The payment provider is unavailable at the moment. Your account is saved: log in '
                                          'within two days to try again.')), 503

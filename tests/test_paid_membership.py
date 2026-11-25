@@ -317,6 +317,15 @@ class TestJoining:
             registration_checkout(joiner())
         assert provider.call_args.args[0].id == env.duke.id
 
+    def test_a_provider_that_is_down_is_logged_with_its_reason(self, env, provider):
+        self.register(env, tier=env.duke.id)
+        provider.side_effect = ProviderError('BTCPay unreachable: ConnectTimeout')
+        with env.app.test_request_context('/', base_url=env.base), patch.object(env.app.logger, 'warning') as warning:
+            g.site = env.site
+            assert registration_checkout(joiner())[1] == 503
+        logged = ' '.join(str(arg) for call in warning.call_args_list for arg in call.args)
+        assert 'BTCPay unreachable: ConnectTimeout' in logged and f'offer {env.duke.id}' in logged
+
     def test_a_tier_no_longer_offered_falls_back_to_the_domains(self, env, provider):
         self.register(env, tier=env.duke.id)
         env.duke.active = False

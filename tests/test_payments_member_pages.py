@@ -12,6 +12,7 @@ from app.constants import DONOR_WHILE_SUBSCRIBED
 from app.models import MemberSubscription, Offer, OfferDomain, Payment, PromoCode, PromoCodeUse, Site, SiteDomain, \
     utcnow
 from app.payments.core import apply_event
+from app.payments.errors import ProviderError
 from app.payments.events import Paid
 from app.payments.offers import money
 from app.storefront import clear_domain_cache
@@ -293,6 +294,23 @@ class TestCheckout:
         with patch('stripe.checkout.Session.create', side_effect=stripe.APIConnectionError('down')):
             response = post(env, f'/donations/checkout/{env.offer.id}')
         assert response.status_code == 503 and b'unavailable at the moment' in response.data
+
+    def test_a_refusal_is_titled_for_the_payment_not_the_plans(self, env):
+        """A member who pressed Pay is not looking at the plans; the page says what failed."""
+        login(env.client, env.member)
+        with patch('stripe.checkout.Session.create', side_effect=stripe.APIConnectionError('down')):
+            page = post(env, f'/donations/checkout/{env.offer.id}').get_data(as_text=True)
+        assert '<h1>Payment unavailable</h1>' in page and '<h1>Donation plans</h1>' not in page
+
+    def test_a_refusal_is_logged_with_its_reason(self, env):
+        """The member sees only that the provider is unavailable; the log says why, for whoever runs the site."""
+        login(env.client, env.member)
+        with patch('app.payments.adapters.stripe_adapter.StripeAdapter.checkout',
+                   side_effect=ProviderError('BTCPay refused: 403')), \
+                patch.object(env.app.logger, 'warning') as warning:
+            assert post(env, f'/donations/checkout/{env.offer.id}').status_code == 503
+        logged = ' '.join(str(arg) for call in warning.call_args_list for arg in call.args)
+        assert 'BTCPay refused: 403' in logged and f'offer {env.offer.id}' in logged
 
     def test_an_unknown_offer_is_not_found(self, env):
         login(env.client, env.member)
