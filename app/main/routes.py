@@ -43,6 +43,7 @@ from app.main.forms import ShareLinkForm, QuickPostForm, QUICK_POST_MAX
 from app.community.forms import CreateDiscussionForm
 from app.community.util import notify_admins_of_post_needing_approval
 import app.shared.post as shared_post
+from app.connections.dispatch import offered_connections
 from app.main.util import sidebar_active_communities, sidebar_new_instances, sidebar_upcoming_events, \
     sidebar_new_communities, _base_list_communities_context, reload_url
 from app.shared.tasks.maintenance import refresh_instance_chooser
@@ -446,10 +447,15 @@ def add_quick_post():
     if not quick_form.validate_on_submit():
         return choose_community_page(quick_form)
     body = quick_form.body.data.strip()
+    # connected accounts (C3): the box has no ticks of its own, so the post goes where the full compose form would
+    # have ticked for it (a microblog post always to Bluesky, ATProto spec A5)
+    ticked = [connection.id for connection, service in offered_connections(current_user, POST_TYPE_ARTICLE)
+              if service.ticked(connection, microblogs)]
     form = CreateDiscussionForm(formdata=None, meta={'csrf': False},
                                 data={'communities': microblogs.id, 'title': '', 'body': body, 'notify_author': True,
                                       'language_id': current_user.language_id or g.site.language_id,
-                                      'timezone': current_user.timezone, 'visibility': 'public'})
+                                      'timezone': current_user.timezone, 'visibility': 'public',
+                                      'crosspost_to': ticked})
     del form.flair
     try:
         # as community.add_post and the API: plugins may rewrite the title and content (a content filter, say), but

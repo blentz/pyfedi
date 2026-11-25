@@ -439,3 +439,52 @@ class TestTheMicroblogsComposeForm:
         redisplayed = self.post(app, client, joined, actor=joined.name)
 
         assert redisplayed.title.errors and Post.query.count() == 0
+
+
+class TestAQuickPostsConnectedAccounts:
+    """The quick post box has no ticks of its own: its post goes to the author's connected accounts the full
+    compose form would have ticked for it (C3), not to none of them."""
+
+    def connect(self, alice, default_on):
+        from app.connections.tokens import seal_tokens
+        from app.models import SocialConnection
+        connection = SocialConnection(user_id=alice.id, service='fake', remote_id='acct-1', remote_name='@me@fake',
+                                      default_on=default_on,
+                                      sealed_tokens=seal_tokens({'access': 'tok-1', 'expires_at': None}))
+        db.session.add(connection)
+        db.session.commit()
+        return connection
+
+    def copies(self, alice):
+        from app.models import SocialCrosspost
+        post = Post.query.filter_by(user_id=alice.id).one()
+        return [row.connection_id for row in SocialCrosspost.query.filter_by(post_id=post.id)]
+
+    def test_it_goes_to_an_account_ticked_by_default(self, app, poster, fake_service):
+        client, _joined, _microblogs = poster
+        alice = User.query.filter_by(user_name='alice').one()
+        connection = self.connect(alice, default_on=True)
+
+        quick_post(app, client, 'Hello fediverse.')
+
+        assert self.copies(alice) == [connection.id]
+
+    def test_it_skips_an_account_the_author_unticked(self, app, poster, fake_service):
+        client, _joined, _microblogs = poster
+        alice = User.query.filter_by(user_name='alice').one()
+        self.connect(alice, default_on=False)
+
+        quick_post(app, client, 'Hello fediverse.')
+
+        assert self.copies(alice) == []
+
+    def test_it_goes_where_a_microblog_post_is_always_ticked(self, app, poster, fake_service, monkeypatch):
+        """As Bluesky: ticked on every local microblog post whatever the connection's default (ATProto spec A5)."""
+        client, _joined, _microblogs = poster
+        alice = User.query.filter_by(user_name='alice').one()
+        monkeypatch.setattr(fake_service, 'ticks_microblog', True, raising=False)
+        connection = self.connect(alice, default_on=False)
+
+        quick_post(app, client, 'Hello fediverse.')
+
+        assert self.copies(alice) == [connection.id]
