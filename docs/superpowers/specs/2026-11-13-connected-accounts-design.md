@@ -123,7 +123,8 @@ finishes.
 All text is made from the post's title and Markdown body as plain text (`html_to_text`), with the post's own URL on
 its public clearnet domain (never an onion address) as the link back.
 
-- **Bluesky**: `title\n\nbody`, cut at 300 graphemes (counted as code points, never fewer: P2, §14) with "…" plus the link when longer; link facets with UTF-8
+- **Bluesky**: the body alone (Bluesky posts have no title; the title only when there is no body; ruled
+  2026-11-25), cut at 300 graphemes (counted as code points, never fewer: P2, §14) with "…" plus the link when longer; link facets with UTF-8
   byte offsets; hashtags as tag facets; `langs` from the post language. Embed: an uploaded video, else up to 4 images
   with alt text (re-encoded under the size cap), else a link post's external card (title, description, thumbnail).
   A gallery over 4 sends the first 4 and the link. Content warning: the text becomes "CW: <warning>" + link, no media.
@@ -251,8 +252,9 @@ off). `flask connections-bluesky-key` prints a new `BLUESKY_OAUTH_KEY`.
   server is the one the member signed in at, and a handle-started sign-in must come back as that handle's DID.
 - **Keys**: each connection gets its own DPoP key, sealed with its tokens; PieFed's client assertions are signed with
   `BLUESKY_OAUTH_KEY` (kid = its thumbprint).
-- **Text**: the Markdown body (links written out, so they become facets), after the title unless the body starts
-  with it. The 300 limit is counted in code points, which are never fewer than graphemes, and a cut never ends
+- **Text**: the Markdown body (links written out, so they become facets) alone, or the title when there is no
+  body (ruled 2026-11-25: a microblog's made-up title repeated its first words). A link card's description is the
+  body too, since the card shows the title. The 300 limit is counted in code points, which are never fewer than graphemes, and a cut never ends
   inside a combining sequence; the 3000-byte limit cannot be reached in 300 code points.
 - **Pictures**: re-encoded as JPEG under 950,000 bytes and 2000 px, uploaded as blobs with their alt text and aspect
   ratio; a picture that cannot be read is left out and the link said instead.

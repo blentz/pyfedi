@@ -21,7 +21,7 @@ from app.atproto import Session
 from app.atproto.resolve import did_document, pds_of, resolve_handle
 from app.connections import Permanent, ServiceError
 from app.connections import content
-from app.connections.content import StoredVideo, body_text, cut, image_bytes, plain_text
+from app.connections.content import StoredVideo, body_text, cut, image_bytes
 from app.connections.eligibility import image_files, uploaded_video
 from app.connections.http import call, check, fetch
 from app.constants import POST_TYPE_LINK
@@ -42,11 +42,12 @@ TID_CHARS = '234567abcdefghijklmnopqrstuvwxyz'   # atproto's sortable base32
 
 
 def compose(post, with_link: bool) -> str:
-    """The post's text: within 300 characters, with the link back when asked or when cut."""
+    """The post's text: its body alone, as Bluesky posts have no title (the title only when there is no body),
+    within 300 characters, with the link back when asked or when cut."""
     link = post.ap_id
     if post.content_warning:
         return cut(f'CW: {post.content_warning}', MAX_GRAPHEMES - len(link) - 1) + '\n' + link
-    text = plain_text(post)
+    text = body_text(post) or (post.title or '').strip()
     fits = len(text) <= MAX_GRAPHEMES
     if fits and not with_link:
         return text
@@ -211,7 +212,7 @@ def build_record(post, session: Session, video: dict | None = None, created_at: 
         record['embed'] = {'$type': 'app.bsky.embed.images', 'images': images}
     elif post.type == POST_TYPE_LINK and post.url and not post.content_warning:
         record['embed'] = {'$type': 'app.bsky.embed.external', 'external': {
-            'uri': post.url, 'title': (post.title or '')[:300], 'description': cut(plain_text(post), 300)}}
+            'uri': post.url, 'title': (post.title or '')[:300], 'description': cut(body_text(post), 300)}}
     ref = None if post.content_warning else quote_ref(post)
     if ref is not None:
         record['embed'] = quoting(record.get('embed'), ref)

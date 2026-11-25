@@ -375,6 +375,19 @@ def test_the_text_of_a_post(app):
     assert plain_text(a_post(title='Only a title')) == 'Only a title'
 
 
+def test_a_post_goes_to_bluesky_as_its_body_alone(app):
+    """Bluesky posts have no title: a microblog's made-up one ('[Microblog] ...') would repeat its first words."""
+    assert compose(a_post(title='[Microblog] This is a test', body='This is a test. Only a test.'),
+                   with_link=False) == 'This is a test. Only a test.'
+    assert compose(a_post(title='A title', body='The [docs](https://d.example/x) say so.'),
+                   with_link=False) == 'The docs https://d.example/x say so.'
+
+
+def test_a_post_with_no_body_goes_as_its_title(app):
+    assert compose(a_post(title='  Only a title  '), with_link=False) == 'Only a title'
+    assert compose(a_post(title=None), with_link=False) == ''
+
+
 def test_a_short_post_goes_as_it_is_and_a_long_one_is_cut_with_its_link(app):
     link = 'https://piefed.example/post/7'
     assert compose(a_post(body='short'), with_link=False) == 'short'
@@ -481,7 +494,7 @@ def test_a_link_post_carries_its_card(app, bsky):
     with app.test_request_context():
         record = build_record(post, session())
     assert record['embed'] == {'$type': 'app.bsky.embed.external', 'external': {
-        'uri': 'https://news.example/a', 'title': 'A find', 'description': 'A find\n\nworth reading'}}
+        'uri': 'https://news.example/a', 'title': 'A find', 'description': 'worth reading'}}   # the title is the card's
     assert 'langs' not in record and 'labels' not in record and 'facets' not in record
 
 
