@@ -12,6 +12,7 @@ Sub-project 81, slice C. Three defects, all measured:
   hiding every local post, comment and community from the caller (D1053) --
   D1035's shape at the other end of the same feature.
 """
+import re
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -885,3 +886,13 @@ def test_a_microblog_feed_outside_the_choices_is_refused(app, env, value):
     assert render.call_args.kwargs['form'].microblog_feed.errors
     db.session.refresh(viewer)
     assert viewer.microblog_feed == 'community'
+
+
+def test_the_settings_pages_buttons_wrap_inside_the_page(app, env, monkeypatch):
+    """The row of settings pages grew past the width of the page: it wraps instead of running over its border."""
+    monkeypatch.setitem(app.config, 'WTF_CSRF_ENABLED', True)   # the template calls form.csrf_token()
+    client, _viewer, _other = env
+    body = client.get('/user/settings').get_data(as_text=True)
+    row = re.search(r'<div class="([^"]*)">\s*<a href="/user/settings" class="btn', body)
+    assert row is not None
+    assert 'flex-wrap' in row.group(1).split() and 'btn-group' not in row.group(1).split()
