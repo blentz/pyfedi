@@ -104,7 +104,8 @@ A post is eligible for a connection when all hold:
 - the author is local, owns the connection, and the post is theirs;
 - status is published (scheduled posts go when they publish; drafts and processing media wait for the publish);
 - visibility is `public` (unlisted, followers-only and direct never leave the instance);
-- the community is not private and not `local_only`, and not on a private instance;
+- the community is not private and not `local_only` (a site that requires login to browse still sends: that gates
+  the website, not federation, and the post goes out over ActivityPub all the same; ruled 2026-11-25);
 - the service fits the post (table above);
 - **default**: NSFW/NSFL posts go only to Bluesky, carrying the self-labels `sexual` / `graphic-media`; Facebook,
   Instagram and YouTube skip them (their content rules), shown to the author as "skipped: NSFW".

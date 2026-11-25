@@ -397,12 +397,10 @@ def test_which_posts_go(connections_world, change, expected):
     assert refusal(post, connections_world.connection, connections_world.service) == expected
 
 
-@pytest.mark.parametrize('where', ['private', 'local_only', 'instance', 'not-theirs', 'unfit'])
+@pytest.mark.parametrize('where', ['private', 'local_only', 'not-theirs', 'unfit'])
 def test_private_places_and_other_shapes_never_go(connections_world, where):
     post = a_post(connections_world)
-    if where == 'instance':
-        db.session.get(Site, 1).private_instance = True
-    elif where == 'not-theirs':
+    if where == 'not-theirs':
         connections_world.connection.user_id = 1
     elif where == 'unfit':
         connections_world.service.fit = False
@@ -410,6 +408,14 @@ def test_private_places_and_other_shapes_never_go(connections_world, where):
         setattr(connections_world.community, where, True)
     db.session.commit()
     assert refusal(post, connections_world.connection, connections_world.service) == DROP
+
+
+def test_a_site_that_requires_login_to_browse_still_sends(connections_world):
+    """Requiring login to browse gates the website, not federation: the post goes out over ActivityPub all the same,
+    so its copies go too. The first domain's setting stands for every domain's here (multitenant domain config)."""
+    db.session.get(Site, 1).private_instance = True
+    db.session.commit()
+    assert refusal(a_post(connections_world), connections_world.connection, connections_world.service) is None
 
 
 def test_a_takes_nsfw_service_takes_nsfw(connections_world, monkeypatch):
