@@ -8,7 +8,7 @@ from typing import List
 import boto3
 from botocore.exceptions import ClientError
 from flask import current_app, render_template, url_for, flash
-from flask_babel import _  # todo: set the locale based on account_id so that _() works
+from flask_babel import _, ngettext  # todo: set the locale based on account_id so that _() works
 
 from app import celery, db
 from app.branding import branding_for
@@ -16,6 +16,8 @@ from app.mail_transport import message_id, tls_context
 from app.models import Site
 from app.storefront import default_domain, default_storefront, home_storefront, storefront_html, storefront_url
 from app.utils import get_setting, markdown_to_html, html_to_text
+from app.cms import plans_page_url
+from app.messaging.render import Value, overridden
 
 CHARSET = "UTF-8"
 
@@ -33,9 +35,12 @@ def send_password_reset_email(user):
         if current_app.debug:
             flash(_('Check the console for a link.'), 'warning')
             print(url_for('auth.reset_password', token=token, _external=True))
-        text_body = render_template('email/reset_password.txt', user=user, token=token)
-        html_body = render_template('email/reset_password.html', user=user, token=token)
-    send_email(_('[PieFed] Reset Your Password'),
+        custom = overridden('password_reset', {
+            'name': Value(user.display_name()), 'site_name': Value(mail_name(user)),
+            'reset_url': Value(url_for('auth.reset_password', token=token, _external=True))})
+        text_body = custom.text_body if custom else render_template('email/reset_password.txt', user=user, token=token)
+        html_body = custom.html_body if custom else render_template('email/reset_password.html', user=user, token=token)
+    send_email(custom.subject if custom else _('[PieFed] Reset Your Password'),
                sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
                recipients=[user.email],
                text_body=text_body,
@@ -44,21 +49,40 @@ def send_password_reset_email(user):
 
 def send_verification_email(user):
     with home_storefront(user):
-        text_body = render_template('email/verification.txt', user=user)
-        html_body = render_template('email/verification.html', user=user)
-    send_email(_('[PieFed] Please verify your email address'),
+        custom = overridden('verify_email', {
+            'name': Value(user.display_name()), 'site_name': Value(mail_name(user)),
+            'verify_url': Value(url_for('auth.verify_email', token=user.verification_token, _external=True))})
+        text_body = custom.text_body if custom else render_template('email/verification.txt', user=user)
+        html_body = custom.html_body if custom else render_template('email/verification.html', user=user)
+    send_email(custom.subject if custom else _('[PieFed] Please verify your email address'),
                sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
                recipients=[user.email],
                text_body=text_body,
                html_body=html_body)
 
 
-def send_prepaid_reminder(user, plan: str, ends) -> None:
-    """A period paid for in advance is about to run out, and doesn't renew by itself (spec M4)."""
+def send_prepaid_reminder(user, plan: str, ends, days_left: int) -> None:
+    """A period paid for in advance is about to run out, and doesn't renew by itself (spec M4): sent daily from ten
+    days before, encouraging the member to renew (spec 2026-11-24-admin-messaging MS5, D20)."""
     with home_storefront(user):
-        text_body = render_template('email/prepaid_reminder.txt', user=user, plan=plan, ends=ends)
-        html_body = render_template('email/prepaid_reminder.html', user=user, plan=plan, ends=ends)
-    send_email(_('Your subscription runs out on %(date)s', date=ends.strftime('%Y-%m-%d')),
+        renew_url = plans_page_url(external=True)
+        custom = overridden('subscription_expiring', {
+            'name': Value(user.display_name()), 'site_name': Value(mail_name(user)), 'plan': Value(plan),
+            'expiry_date': Value(ends.strftime('%Y-%m-%d')), 'days_left': Value(str(days_left)),
+            'renew_url': Value(renew_url)})
+        context = dict(user=user, plan=plan, ends=ends, days_left=days_left, renew_url=renew_url)
+        text_body = custom.text_body if custom else render_template('email/prepaid_reminder.txt', **context)
+        html_body = custom.html_body if custom else render_template('email/prepaid_reminder.html', **context)
+    if custom:
+        subject = custom.subject
+    elif days_left > 1:
+        subject = ngettext('Your subscription runs out in %(num)d day - renew it to keep it going',
+                           'Your subscription runs out in %(num)d days - renew it to keep it going', days_left)
+    elif days_left == 1:
+        subject = _('Your subscription runs out tomorrow - renew it to keep it going')
+    else:
+        subject = _('Your subscription runs out today - renew it to keep it going')
+    send_email(subject,
                sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
                recipients=[user.email],
                text_body=text_body,
@@ -69,7 +93,15 @@ def send_registration_approved_email(user):
     subject = _('Your application has been approved - welcome to PieFed')
     body = get_setting('registration_approved_email', '')
     with home_storefront(user):
-        if body:
+        # no token, no link: as welcome.html does
+        unsubscribe = url_for('user.user_newsletter_unsubscribe', user_id=user.id, token=user.verification_token,
+                              _external=True) if user.verification_token else None
+        custom = overridden('welcome', {
+            'name': Value(user.display_name()), 'site_name': Value(mail_name(user)),
+            'site_url': Value(storefront_url())}, unsubscribe, _('Unsubscribe from the newsletter'))
+        if custom:   # the admin's override comes before the older body setting (D4)
+            subject, body = custom.subject, custom.html_body
+        elif body:
             # markdown_to_html moves our hosts onto the canonical one, for stored text; this is mail to one account
             body = render_template('email/welcome.html', user=user, email_body=storefront_html(markdown_to_html(body)))
         else:
@@ -82,8 +114,8 @@ def send_registration_approved_email(user):
     send_email(subject,
                sender=f'{mail_name(user)} <{mail_from}>',
                recipients=[user.email],
-               text_body=html_to_text(body),
-               html_body=body, reply_to=contact_email)
+               text_body=custom.text_body if custom else html_to_text(body),
+               html_body=body, reply_to=contact_email, list_unsubscribe=unsubscribe if custom else None)
 
 
 def send_topic_suggestion(communities_for_topic, user, recipients, subject, topic_name):

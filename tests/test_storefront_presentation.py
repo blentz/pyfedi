@@ -293,12 +293,12 @@ def test_default_storefront_renders_under_the_default_and_restores(app, storefro
 
 def test_newsletter_sent_from_the_onion_links_to_the_default(app, storefront_presentation_world):
     founder = storefront_presentation_world[0]
-    grant_permission(founder, 'change instance settings')
+    grant_permission(founder, 'send newsletter')
     sent = []
-    with patch('app.admin.util.send_email', side_effect=lambda **kwargs: sent.append(kwargs)):
-        response = post_on_onion(app, founder, '/admin/newsletter',
-                                 {'subject': 'Hi', 'body_text': 'text', 'body_html': '<p>html</p>'})
-    assert response.status_code == 302
+    with patch('app.messaging.messages.send_email', side_effect=lambda subject, **kwargs: sent.append(kwargs)):
+        response = post_on_onion(app, founder, '/admin/messaging/new',
+                                 {'subject': 'Hi', 'body': 'text, see {site_url}', 'audience': 'all', 'send_now': 'y'})
+    assert response.status_code == 302 and sent
     _assert_on_default([body for kwargs in sent for body in (kwargs['text_body'], kwargs['html_body'])])
 
 

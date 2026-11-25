@@ -1,12 +1,9 @@
-"""Round 238: the newsletter, and the instance chooser's hide flag.
+"""Round 238: the newsletter (now a message on /admin/messaging), and the instance chooser's hide flag.
 
 Two admin surfaces in `app/admin/routes.py` with no rows.
 
-`/admin/newsletter` mails every subscriber -- `newsletter == True`, not banned, local -- up
-to 40,000 of them. A mistake here is not a broken page: it is mail to tens of thousands of
-strangers, or a test send that goes to all of them instead of to the admin. `send_newsletter`
-already stops after the first message in test mode; nothing said so, and a row is what keeps
-it that way.
+A message to all members mails every subscriber -- `newsletter == True`, not banned, local. A mistake here is not a broken page: it is mail to tens of thousands of
+strangers, or a test send that goes to all of them instead of to the admin.
 
 `/admin/instance/<id>/edit` reads and writes a `hide` column in `instance_chooser`, a table
 with no model, through raw SQL -- and only for instances whose software is `piefed`. Both
@@ -69,28 +66,25 @@ def a_subscriber(env, name, email):
 
 
 # --------------------------------------------------------------------------
-# /admin/newsletter
+# /admin/messaging: a message to every member, which replaced /admin/newsletter
 # --------------------------------------------------------------------------
 
 
 class TestSendingANewsletter:
 
-    def _post(self, env, **fields):
-        data = {'subject': 'Hello', 'body_text': 'plain words',
-                'body_html': '<p>rich words</p>',
+    def _post(self, env, button='send_now', **fields):
+        data = {'subject': 'Hello', 'body': 'plain *words*', 'audience': 'all', button: 'y',
                 'csrf_token': csrf(env.app, env.client)}
         data.update(fields)
         sent = []
-        # `send_newsletter` calls the `send_email` bound in `app.admin.util`.
-        with patch('app.admin.util.send_email',
-                   side_effect=lambda **kwargs: sent.append(kwargs)):
-            response = env.client.post('/admin/newsletter', data=data)
+        # `mail_one` calls the `send_email` bound in `app.messaging.messages`.
+        with patch('app.messaging.messages.send_email',
+                   side_effect=lambda subject, **kwargs: sent.append(dict(kwargs, subject=subject))):
+            response = env.client.post('/admin/messaging/new', data=data)
         return response, sent
 
     def test_a_real_send_reaches_every_subscriber_once(self, env):
-        """The subscriber list is `newsletter == True AND banned == False AND ap_id IS
-        NULL`. Each address appears exactly once, and the subject and both bodies are the
-        admin's.
+        """Each address appears exactly once, and the subject and both bodies are the admin's.
 
         `User.newsletter` DEFAULTS to True, so every local account the fixtures made is
         already a subscriber -- the assertions name the two seeded here and count their
@@ -106,18 +100,16 @@ class TestSendingANewsletter:
         assert addresses.count(first.email) == 1
         assert addresses.count(second.email) == 1
         assert {call['subject'] for call in sent} == {'Hello'}
-        assert all('rich words' in call['html_body'] for call in sent)
-        assert all('plain words' in call['text_body'] for call in sent)
+        assert all('<em>words</em>' in call['html_body'] for call in sent)
+        assert all('plain *words*' in call['text_body'] for call in sent)
 
     def test_a_test_send_is_one_email_to_the_admin(self, env):
-        """`if form.test.data: break`. Without it a test send is one message PER
-        SUBSCRIBER, all of them to the admin's own inbox -- the loop is over recipients
-        either way, and only the address is swapped. Two subscribers are seeded so that
-        'one email' is a claim about the break and not about the list being short."""
+        """Two subscribers are seeded so that 'one email' is a claim about the test send and not about the list being
+        short."""
         a_subscriber(env, 'readerone', 'one@example.com')
         a_subscriber(env, 'readertwo', 'two@example.com')
 
-        response, sent = self._post(env, test='y')
+        response, sent = self._post(env, button='send_test')
 
         assert response.status_code == 302
         assert len(sent) == 1
@@ -139,10 +131,11 @@ class TestSendingANewsletter:
 
     def test_an_account_that_did_not_subscribe_is_not_mailed(self, env):
         """`newsletter == True`. The column is the consent, so this is the row that says
-        mail goes only to accounts that asked for it."""
+        mail goes only to accounts that asked for it (messaging spec MS4)."""
         subscribed = a_subscriber(env, 'readerone', 'one@example.com')
         other = make_user(env.baseline.instance_local, 'quiet', local=True)
         other.email = 'quiet@example.com'
+        other.verified = True
         other.newsletter = False
         db.session.commit()
 
@@ -160,6 +153,7 @@ class TestSendingANewsletter:
         remote = make_user(peer, 'faraway')
         remote.email = 'faraway@mailpeer.example'
         remote.newsletter = True
+        remote.verified = True
         db.session.commit()
         local = a_subscriber(env, 'readerone', 'one@example.com')
 
@@ -170,8 +164,8 @@ class TestSendingANewsletter:
         assert remote.email not in addresses
 
     def test_an_empty_form_sends_nothing(self, env):
-        """`form.validate_on_submit()`. Subject and both bodies are `DataRequired`, so a
-        half-filled form re-renders the page rather than mailing an empty newsletter."""
+        """`form.validate_on_submit()`. Subject and body are `DataRequired`, so a
+        half-filled form re-renders the page rather than mailing an empty message."""
         a_subscriber(env, 'readerone', 'one@example.com')
 
         response, sent = self._post(env, subject='')
@@ -188,9 +182,8 @@ class TestSendingANewsletter:
             session['_user_id'] = str(ordinary.id)
             session['_fresh'] = True
 
-        response = client.get('/admin/newsletter')
-
-        assert response.status_code == 302
+        for path in ('/admin/messaging', '/admin/messaging/new', '/admin/newsletter'):
+            assert client.get(path).status_code == 302
 
 
 # --------------------------------------------------------------------------

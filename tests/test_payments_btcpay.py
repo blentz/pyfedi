@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+import re
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,7 +15,7 @@ from flask_wtf.csrf import generate_csrf
 
 from app import db
 from app.constants import DONOR_WHILE_SUBSCRIBED
-from app.models import BtcDailyRate, PromoCode, MemberSubscription, Offer, Payment, PaymentProvider, Site, SiteDomain, \
+from app.models import BtcDailyRate, EmailTemplate, PromoCode, MemberSubscription, Offer, Payment, PaymentProvider, Site, SiteDomain, \
     utcnow
 from app.payments.adapters.base import InvalidWebhook, ProviderError
 from app.payments.adapters.btcpay_adapter import BtcpayAdapter, from_minor, to_minor
@@ -386,21 +387,75 @@ class TestReminders:
         db.session.commit()
         return row
 
-    def test_a_period_about_to_run_out_is_mentioned_once(self, env):
+    def test_a_period_about_to_run_out_is_mentioned_once_a_day(self, env):
+        """Messaging spec MS5, D19: however often the task runs, one reminder per UTC day."""
         row = self.due(env)
         with patch('app.payments.core.send_prepaid_reminder') as mail:
             assert remind_expiring_prepaid() == 1
             assert remind_expiring_prepaid() == 0
 
-        mail.assert_called_once_with(env.member, 'Prepaid', row.current_period_end)
+        mail.assert_called_once_with(env.member, 'Prepaid', row.current_period_end,
+                                     (row.current_period_end.date() - utcnow().date()).days)
         assert row.reminded_at is not None
 
-    def test_one_with_longer_to_go_isnt(self, env):
-        self.due(env, days=8)
+    def test_one_reminded_yesterday_is_reminded_again_today(self, env):
+        row = self.due(env)
+        row.reminded_at = utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(seconds=1)
+        db.session.commit()
         with patch('app.payments.core.send_prepaid_reminder') as mail:
+            assert remind_expiring_prepaid() == 1
+
+        mail.assert_called_once()
+        assert row.reminded_at.date() == utcnow().date()
+
+    def test_one_reminded_earlier_today_is_not(self, env):
+        row = self.due(env)
+        row.reminded_at = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        db.session.commit()
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            assert remind_expiring_prepaid() == 0
+
+        mail.assert_not_called()
+
+    def test_it_starts_ten_days_before(self, env):
+        """Ten days or less: exactly ten days left is reminded, the moment after it is not yet."""
+        row = self.due(env, days=10)
+        with patch('app.payments.core.utcnow', return_value=row.current_period_end - timedelta(days=10)), \
+                patch('app.payments.core.send_prepaid_reminder') as mail:
+            assert remind_expiring_prepaid() == 1
+
+        assert mail.call_args.args[3] == 10
+
+    def test_one_with_longer_to_go_isnt(self, env):
+        row = self.due(env, days=11)
+        with patch('app.payments.core.utcnow', return_value=row.current_period_end - timedelta(days=10, seconds=1)), \
+                patch('app.payments.core.send_prepaid_reminder') as mail:
             remind_expiring_prepaid()
 
         mail.assert_not_called()
+
+    def test_every_day_until_it_runs_out(self, env):
+        """Ten reminders for ten days, counting down, and none once it has run out."""
+        row = self.due(env, days=10)
+        end = row.current_period_end
+        days_left = []
+        with patch('app.payments.core.send_prepaid_reminder') as mail:
+            for day in range(12):
+                with patch('app.payments.core.utcnow', return_value=end - timedelta(days=10) + timedelta(days=day)):
+                    remind_expiring_prepaid()
+            days_left = [call.args[3] for call in mail.call_args_list]
+
+        assert days_left == [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+
+    def test_on_its_last_day_it_says_today(self, env):
+        row = self.due(env, days=1)
+        row.current_period_end = row.current_period_end.replace(hour=18, minute=0, second=0, microsecond=0)
+        db.session.commit()
+        with patch('app.payments.core.utcnow', return_value=row.current_period_end.replace(hour=6)), \
+                patch('app.payments.core.send_prepaid_reminder') as mail:
+            remind_expiring_prepaid()
+
+        assert mail.call_args.args[3] == 0
 
     def test_one_already_over_isnt(self, env):
         self.due(env, days=-1)
@@ -450,14 +505,44 @@ class TestReminders:
 
         assert mail.call_args.args[1] == ''
 
-    def test_the_mail_says_when_and_where(self, env):
+    def test_the_mail_says_when_and_where_to_renew(self, env):
         row = self.due(env)
         with patch('app.email.send_email') as send:   # no request: the daily task has none
-            send_prepaid_reminder(env.member, 'Prepaid', row.current_period_end)
+            send_prepaid_reminder(env.member, 'Prepaid', row.current_period_end, 5)
 
         date = row.current_period_end.strftime('%Y-%m-%d')
-        assert date in send.call_args.args[0]
-        assert date in send.call_args.kwargs['text_body'] and '/donations' in send.call_args.kwargs['html_body']
+        assert send.call_args.args[0] == 'Your subscription runs out in 5 days - renew it to keep it going'
+        text, body = send.call_args.kwargs['text_body'], send.call_args.kwargs['html_body']
+        assert date in text and 'runs out in 5 days' in text and 'Renew it now' in text
+        assert '/donations' in text and '/donations">Renew my subscription</a>' in body
+        assert 'remind you each day' in body
+
+    @pytest.mark.parametrize('days_left, subject, line', [
+        (1, 'Your subscription runs out tomorrow - renew it to keep it going', 'runs out tomorrow,'),
+        (0, 'Your subscription runs out today - renew it to keep it going', 'runs out today,'),
+    ])
+    def test_tomorrow_and_today_are_said_so(self, env, days_left, subject, line):
+        row = self.due(env, days=days_left)
+        with patch('app.email.send_email') as send:
+            send_prepaid_reminder(env.member, 'Prepaid', row.current_period_end, days_left)
+
+        assert send.call_args.args[0] == subject
+        assert line in send.call_args.kwargs['text_body'] and line in send.call_args.kwargs['html_body']
+
+    def test_the_admins_text_is_used_when_there_is_one(self, env):
+        """Messaging spec D3, D20: every placeholder filled in."""
+        row = self.due(env)
+        db.session.add(EmailTemplate(key='subscription_expiring', subject='{days_left} days left on {plan}',
+                                     body='Hi {name}, {plan} ends {expiry_date}. [Renew]({renew_url}) at {site_name}'))
+        db.session.commit()
+        with patch('app.email.send_email') as send:
+            send_prepaid_reminder(env.member, 'Prepaid', row.current_period_end, 5)
+
+        date = row.current_period_end.strftime('%Y-%m-%d')
+        assert send.call_args.args[0] == '5 days left on Prepaid'
+        text = send.call_args.kwargs['text_body']
+        assert f'Hi {env.member.display_name()}, Prepaid ends {date}.' in text and '/donations)' in text
+        assert re.search(r'<a href="[^"]*/donations"[^>]*>Renew</a>', send.call_args.kwargs['html_body'])
 
     def test_the_daily_task_sends_them(self, env):
         self.due(env)

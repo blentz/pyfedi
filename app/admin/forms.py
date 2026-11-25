@@ -577,14 +577,6 @@ class ExpiryForm(FlaskForm):
     submit = SubmitField(_l('Set expiry'))
 
 
-class SendNewsletterForm(FlaskForm):
-    subject = StringField(_l('Subject'), validators=[DataRequired()])
-    body_text = TextAreaField(_l('Body (text)'), render_kw={"rows": 10}, validators=[DataRequired()])
-    body_html = TextAreaField(_l('Body (html)'), render_kw={"rows": 20}, validators=[DataRequired()])
-    test = BooleanField(_l('Test mode'), render_kw={'checked': True})
-    submit = SubmitField(_l('Send newsletter'))
-
-
 class MoveCommunityForm(FlaskForm):
     new_url = StringField(_l('New url'), validators=[DataRequired()])
     new_owner = BooleanField(_l('Set new owner'))

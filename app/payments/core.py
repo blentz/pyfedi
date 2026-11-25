@@ -32,7 +32,7 @@ PERIOD_DAYS = {'month': 30, 'year': 365}   # what one payment buys, where nothin
 def period_days(offer: Offer, periods: int) -> int:
     """How many days `periods` of the tier's billing period come to: as many payments would buy (a gift's length)."""
     return periods * PERIOD_DAYS.get(offer.interval, PERIOD_DAYS['month'])
-REMINDER_DAYS = 7
+REMINDER_DAYS = 10   # reminded daily from this many days before a prepaid period runs out (MS5)
 
 
 def _row(model, row_id):
@@ -186,20 +186,26 @@ def prepaid_start(user: User, offer: Offer) -> datetime:
 
 
 def remind_expiring_prepaid() -> int:
-    """What the daily task does first. Nothing renews by itself, so a member is told once, while there's time. A mail that
-    fails is tried again the next day."""
+    """What the daily task does first. Nothing renews by itself, so a member is told once a day from REMINDER_DAYS
+    before it runs out (spec 2026-11-24-admin-messaging MS5, D19), and never twice on one UTC day, however often the
+    task runs. A mail that fails is tried again on the next run."""
     now, sent = utcnow(), 0
-    due = MemberSubscription.query.filter(MemberSubscription.status == 'active', MemberSubscription.reminded_at.is_(None),
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    due = MemberSubscription.query.filter(MemberSubscription.status == 'active',
+                                          or_(MemberSubscription.reminded_at.is_(None),
+                                              MemberSubscription.reminded_at < today),
                                           MemberSubscription.ends_at.is_(None),   # cancelled: nothing to pay (B7)
                                           MemberSubscription.current_period_end > now,
-                                          MemberSubscription.current_period_end < now + timedelta(days=REMINDER_DAYS)).all()
+                                          MemberSubscription.current_period_end <= now + timedelta(days=REMINDER_DAYS)) \
+        .order_by(MemberSubscription.id).all()
     for subscription in due:
         user = db.session.get(User, subscription.user_id)
         if user.deleted or not user.email:
             continue
         offer = _row(Offer, subscription.offer_id)
+        days_left = (subscription.current_period_end.date() - now.date()).days
         try:
-            send_prepaid_reminder(user, offer.title if offer else '', subscription.current_period_end)
+            send_prepaid_reminder(user, offer.title if offer else '', subscription.current_period_end, days_left)
         except Exception as error:
             current_app.logger.warning(f'prepaid reminder failed for account {user.id}: {type(error).__name__}')
             continue

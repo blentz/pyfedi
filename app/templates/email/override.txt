@@ -1,0 +1,6 @@
+{{ content | safe }}
+{% if unsubscribe_url %}
+
+
+{{ unsubscribe_label }}: {{ unsubscribe_url }}
+{% endif %}

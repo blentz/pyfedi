@@ -42,7 +42,9 @@ CATALOGUE = (
     Permission('change instance settings', 'site', False, False,
                'Site profile, misc settings, the instance chooser, federation, activities, emoji, moving a community'),
     Permission('masquerade', 'site', False, False, 'Log in as another user'),
-    Permission('send newsletter', 'site', False, False, 'Write and send the newsletter'),
+    Permission('send newsletter', 'site', False, False, 'Write, schedule and send messages to members'),
+    Permission('edit email templates', 'site', False, False,
+               'Change the text of the emails the site sends by itself, password resets and email checks included'),
     Permission('edit cms pages', 'site', False, False, 'Create, edit and delete the CMS pages'),
     Permission('manage monetization', 'site', False, False, 'Payment providers, offers and the payment ledger'),
     # domains

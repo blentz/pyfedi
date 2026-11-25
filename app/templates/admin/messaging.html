@@ -1,0 +1,73 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% set active_child = 'admin_messaging' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+
+<div class="row">
+    <div class="col">
+        <h1>{{ _('Messaging') }}</h1>
+        <p>{{ _('Every email this site sends: when, and to whom. Messages you write are below the list.') }}</p>
+
+        <h2 class="h4 mt-4">{{ _('Emails the site sends by itself') }}</h2>
+        <div class="table-responsive">
+        <table class="table table-sm" id="built_in_emails">
+            <thead><tr><th>{{ _('Email') }}</th><th>{{ _('When it is sent') }}</th><th>{{ _('To') }}</th><th>{{ _('Text') }}</th></tr></thead>
+            <tbody>
+            {% for entry in catalogue %}
+                <tr id="email_{{ entry.key }}">
+                    <td>{{ entry.name }}</td>
+                    <td>{{ entry.when }}</td>
+                    <td>{{ entry.recipients }}</td>
+                    <td>
+                        {% if entry.editable %}
+                            {{ _('Your text') if entry.key in overrides else _('Default') }}
+                            {% if can_edit_templates %}<br><a href="{{ url_for('admin.messaging_template', key=entry.key) }}">{{ _('Edit') }}</a>{% endif %}
+                        {% elif entry.key == 'admin_message' %}
+                            {{ _('Yours, below') }}
+                        {% else %}
+                            <span class="text-muted">{{ _('Fixed') }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+
+        <h2 class="h4 mt-4">{{ _('Your messages') }}</h2>
+        <p><a class="btn btn-primary" href="{{ url_for('admin.messaging_new') }}">{{ _('New message') }}</a></p>
+        {% if messages %}
+        <div class="table-responsive">
+        <table class="table table-sm" id="admin_messages">
+            <thead><tr><th>{{ _('Subject') }}</th><th>{{ _('Status') }}</th><th>{{ _('When') }}</th><th>{{ _('Sent') }}</th></tr></thead>
+            <tbody>
+            {% for message in messages %}
+                <tr>
+                    <td><a href="{{ url_for('admin.messaging_edit', message_id=message.id) }}">{{ message.subject }}</a>{% if message.service_notice %} <span class="badge bg-warning text-dark">{{ _('Service notice') }}</span>{% endif %}</td>
+                    <td>{{ {'draft': _('Draft'), 'scheduled': _('Scheduled'), 'sending': _('Sending'), 'sent': _('Sent')}[message.status] }}</td>
+                    <td>{% if message.sent_at %}{{ message.sent_at.strftime('%Y-%m-%d %H:%M') }}{% elif message.scheduled_for %}{{ message.scheduled_for.strftime('%Y-%m-%d %H:%M') }}{% endif %} {% if message.sent_at or message.scheduled_for %}UTC{% endif %}</td>
+                    <td>{% if message.status in ('sending', 'sent') %}{{ message.sent_count }}{% if message.failed_count %} ({{ _('%(num)d failed', num=message.failed_count) }}){% endif %}{% endif %}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <p>{{ _('None yet.') }}</p>
+        {% endif %}
+    </div>
+</div>
+<hr />
+<div class="row">
+    <div class="col">
+        {% include 'admin/_nav.html' %}
+    </div>
+</div>
+<hr />
+{% endblock %}

@@ -38,6 +38,9 @@ from app.constants import NOTIF_COMMUNITY, NOTIF_POST, NOTIF_REPLY, POST_STATUS_
     POST_TYPE_LINK, POST_TYPE_POLL, POST_TYPE_IMAGE, NOTIF_REMINDER, POST_TYPE_VIDEO, POST_TYPE_ARTICLE, SRC_API, \
     ANNOUNCE_MAX_OBJECTS
 from app.email import mail_name, send_email
+from app.messaging.messages import dispatch_due as dispatch_due_messages
+from app.messaging.render import overridden
+from app.messaging.values import digest_values
 from app.federation_urls import activity_id
 from app.error_counts import KEEP_DAYS
 from app.onion_media import DEFAULT_CACHE_BYTES, evict
@@ -1092,6 +1095,8 @@ def register(app):
 
                         reminders()
 
+                        dispatch_due_messages()   # admin messages now due (messaging spec D15, D17)
+
                         if current_app.config['RSS_FEEDS']:
                             rss_feeds()
 
@@ -1755,16 +1760,19 @@ def register(app):
                                     # still gets its email (N3). Each run's check looks up only the stamped ones.
                                     continue
                                 posts = without_local_only(posts, Post, True).limit(20).all()
-                                text_body = flask.render_template('email/unread_notifications.txt', user=user,
-                                                                  notifications=notifications, site=site)
-                                html_body = flask.render_template('email/unread_notifications.html', user=user,
-                                                                  notifications=notifications,
-                                                                  posts=posts, site=site)
                                 # no token, no link: as unread_notifications.html does
                                 unsubscribe = flask.url_for('user.user_email_notifs_unsubscribe', user_id=user.id,
                                                             token=user.verification_token, _external=True) \
                                     if user.verification_token else None
-                            send_email(_('[PieFed] You have unread notifications'),
+                                custom = overridden('unread_notifications', digest_values(user, notifications, posts),
+                                                    unsubscribe, _('Unsubscribe from these emails'))
+                                text_body = custom.text_body if custom else \
+                                    flask.render_template('email/unread_notifications.txt', user=user,
+                                                          notifications=notifications, site=site)
+                                html_body = custom.html_body if custom else \
+                                    flask.render_template('email/unread_notifications.html', user=user,
+                                                          notifications=notifications, posts=posts, site=site)
+                            send_email(custom.subject if custom else _('[PieFed] You have unread notifications'),
                                        sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
                                        recipients=[user.email],
                                        text_body=text_body,

@@ -8,11 +8,11 @@ import pytest
 from flask import current_app, g, has_request_context, url_for
 
 from app import cache, cli, db
-from app.admin.util import send_newsletter
 from app.auth.util import send_email_verification
 from app.constants import NOTIF_POST
 from app.email import send_password_reset_email, send_registration_approved_email, send_verification_email
-from app.models import Notification, Site, SiteDomain
+from app.messaging.messages import deliver
+from app.models import AdminMessage, Notification, Site, SiteDomain
 from app.storefront import (clear_domain_cache, default_storefront, home_storefront, storefront_memo_name,
                             storefront_url)
 from app.utils import utcnow
@@ -142,16 +142,16 @@ def test_the_requests_own_storefront_comes_back_after_a_failure(app, accounts, m
 
 
 def test_a_newsletter_is_rendered_for_each_recipient(app, accounts):
+    """A message to all members (messaging spec D10), sent from a request on the onion: each copy names its reader's
+    own domain, in its links, its {site_url} and its List-Unsubscribe header."""
     onion_user, clear_user = accounts
-    form = type('Form', (), {})()
-    form.subject = type('Field', (), {'data': 'News'})()
-    form.body_text = type('Field', (), {'data': 'hello'})()
-    form.body_html = type('Field', (), {'data': '<p>hello</p>'})()
-    form.test = type('Field', (), {'data': False})()
+    message = AdminMessage(subject='News', body='hello, see {site_url}', audience='all', status='sending')
+    db.session.add(message)
+    db.session.commit()
     context = on_request(app, ONION)
     try:
-        with patch('app.admin.util.send_email') as send:
-            send_newsletter(form)
+        with patch('app.messaging.messages.send_email') as send:
+            deliver(message.id)
     finally:
         context.pop()
     by_recipient = {call.kwargs['recipients'][0]: call.kwargs['text_body'] + call.kwargs['html_body']

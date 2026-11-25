@@ -1,0 +1,100 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
+{% set active_child = 'admin_messaging' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+
+<div class="row">
+    <div class="col">
+        <p><a href="{{ url_for('admin.messaging') }}">&larr; {{ _('Messaging') }}</a></p>
+        <h1>{{ message.subject if message else _('New message') }}</h1>
+
+        {% if message %}
+        <p id="message_status">
+            {% if message.status == 'draft' %}{{ _('Draft: not sent.') }}
+            {% elif message.status == 'scheduled' %}{{ _('Scheduled for %(when)s UTC.', when=message.scheduled_for.strftime('%Y-%m-%d %H:%M')) }}
+            {% elif message.status == 'sending' %}{{ _('Sending: %(num)d so far.', num=message.sent_count) }}
+            {% else %}{{ _('Sent %(when)s UTC to %(num)d members.', when=message.sent_at.strftime('%Y-%m-%d %H:%M'), num=message.sent_count) }}{% if message.failed_count %} {{ _('%(num)d could not be sent.', num=message.failed_count) }}{% endif %}
+            {% endif %}
+            {% if count is not none and message.status in ('draft', 'scheduled') %}<br>{{ ngettext('It would reach %(num)d member now.', 'It would reach %(num)d members now.', count) }}{% endif %}
+        </p>
+        {% endif %}
+
+        {% if problems %}
+        <div class="alert alert-danger" role="alert" id="message_problems"><ul class="mb-0">{% for problem in problems %}<li>{{ problem }}</li>{% endfor %}</ul></div>
+        {% endif %}
+
+        {% if read_only %}
+            <h2 class="h5">{{ _('Subject') }}</h2>
+            <p>{{ message.subject }}</p>
+            <h2 class="h5">{{ _('Text') }}</h2>
+            <pre class="border p-2" style="white-space: pre-wrap;">{{ message.body }}</pre>
+        {% else %}
+        <form method="post" id="message_form">
+            {{ form.csrf_token }}
+            {{ render_field(form.subject) }}
+            {{ render_field(form.body) }}
+            <p class="small text-muted">{{ _('You can use:') }}
+                {% for p in placeholders %}<code>{{ '{' + p.name + '}' }}</code> {{ p.description }}{% if not loop.last %}, {% endif %}{% endfor %}.
+                {{ _('Write {{ or }} for a brace.') }}</p>
+            {{ render_field(form.audience) }}
+            <fieldset class="border p-2 mb-3" id="audience_filters">
+                <legend class="h6">{{ _('Filters (all that you set must match)') }}</legend>
+                {{ render_field(form.domains) }}
+                {{ render_field(form.roles) }}
+                {{ render_field(form.subscription) }}
+                {{ render_field(form.offers) }}
+            </fieldset>
+            {{ render_field(form.picked) }}
+            {{ render_field(form.service_notice) }}
+            <p class="small text-muted">{{ _('Without it, members who turned the newsletter off do not get the message, and each copy has a link to turn it off. Use it only for news every member needs, such as changes to the terms or the service.') }}</p>
+            {{ render_field(form.scheduled_for) }}
+            {{ render_field(form.save, button_style='secondary') }}
+            {{ render_field(form.send_test, button_style='secondary') }}
+            {{ render_field(form.schedule) }}
+            {{ render_field(form.send_now, button_style='danger') }}
+        </form>
+        {% endif %}
+
+        {% if message %}
+        <div class="mt-3 d-flex gap-2">
+            {% if message.status == 'scheduled' %}
+            <form method="post" action="{{ url_for('admin.messaging_unschedule', message_id=message.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-outline-secondary" type="submit">{{ _('Unschedule') }}</button>
+            </form>
+            {% endif %}
+            {% if message.status == 'draft' %}
+            <form method="post" action="{{ url_for('admin.messaging_delete', message_id=message.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-outline-danger" type="submit">{{ _('Delete draft') }}</button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ url_for('admin.messaging_duplicate', message_id=message.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-outline-secondary" type="submit">{{ _('Copy into a new draft') }}</button>
+            </form>
+        </div>
+        {% endif %}
+
+        {% if preview %}
+        <h2 class="h5 mt-4">{{ _('Preview, with sample values') }}</h2>
+        <p><strong>{{ preview.subject }}</strong></p>
+        <iframe sandbox="" class="border w-100" style="min-height: 20em;" srcdoc="{{ preview.html_body }}" title="{{ _('Preview') }}"></iframe>
+        {% endif %}
+    </div>
+</div>
+<hr />
+<div class="row">
+    <div class="col">
+        {% include 'admin/_nav.html' %}
+    </div>
+</div>
+<hr />
+{% endblock %}

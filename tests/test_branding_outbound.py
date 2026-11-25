@@ -20,11 +20,11 @@ from flask import current_app, g, has_request_context, session as flask_session
 from flask_wtf.csrf import generate_csrf
 
 from app import cache, cli, db
-from app.admin.util import send_newsletter
+from app.messaging.messages import deliver
 from app.constants import NOTIF_POST
 from app.email import (mail_name, send_password_reset_email, send_registration_approved_email,
                        send_topic_suggestion, send_verification_email)
-from app.models import DomainConfig, Notification, Site, User
+from app.models import AdminMessage, DomainConfig, Notification, Site, User
 from app.storefront import clear_domain_cache, domain_for_host
 from app.utils import utcnow
 from tests.test_c3_golden_documents import AP, DISCOVERY_PATHS, GOLDEN_PATHS, SHOP, golden_copy
@@ -176,15 +176,13 @@ def test_a_newsletter_is_from_each_readers_home_domain(app, shop_rows):
         user.newsletter = True
     db.session.commit()
     brand(shop, **SHOP_OWN)
-    form = type('Form', (), {})()
-    form.subject = type('Field', (), {'data': 'News'})()
-    form.body_text = type('Field', (), {'data': 'hello'})()
-    form.body_html = type('Field', (), {'data': '<p>hello</p>'})()
-    form.test = type('Field', (), {'data': False})()
+    message = AdminMessage(subject='News', body='hello', audience='all', status='sending')
+    db.session.add(message)
+    db.session.commit()
     with app.test_request_context(base_url=f'https://{FIRST}'):
         app.preprocess_request()
-        with patch('app.admin.util.send_email') as send:
-            send_newsletter(form)
+        with patch('app.messaging.messages.send_email') as send:
+            deliver(message.id)
     by_recipient = {call.kwargs['recipients'][0]: call.kwargs for call in send.call_args_list}
     mail_from = current_app.config['MAIL_FROM']
     assert by_recipient[shop_user.email]['sender'] == f'Shop Branded <{mail_from}>'

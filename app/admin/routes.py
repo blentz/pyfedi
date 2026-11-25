@@ -42,13 +42,13 @@ from app.admin.constants import ReportTypes
 from app.payments.offers import offers_on
 from app.payments.status import FILTERS as SUBSCRIPTION_FILTERS, subscription_filter, subscription_statuses
 from app.admin.forms import ADMIN_SCOPE_ROLE_DEFAULT, FederationForm, SiteMiscForm, SiteProfileForm, EditCommunityForm, EditUserForm, \
-    EditTopicForm, SendNewsletterForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
+    EditTopicForm, AddUserForm, PreLoadCommunitiesForm, ImportExportBannedListsForm, \
     EditInstanceForm, RemoteInstanceScanForm, MoveCommunityForm, EditBlockedImageForm, AddBlockedImageForm, \
     CmsPageForm, CreateOfflineInstanceForm, InstanceChooserForm, CloseInstanceForm, EmojiForm, TopicImportForm, \
     EmojiFilterForm, ContactInstanceForm, MastodonDirectoryScanForm, SiteDomainForm, CustomThemeForm, DomainSettingsForm, \
     ComplimentaryForm
 from flask_wtf import FlaskForm
-from app.admin.util import ban_list_entries, unsubscribe_from_everything_then_delete, unsubscribe_from_community, send_newsletter, \
+from app.admin.util import ban_list_entries, unsubscribe_from_everything_then_delete, unsubscribe_from_community, \
     topics_for_form, move_community_images_to_here, switch_to_unsilenced, switch_to_silenced, serialize_topic_tree, \
     create_topic_and_children, fetch_mastodon_directory, directory_candidates, remote_instance_software
 from app.auth.util import send_email_verification, random_token
@@ -3248,20 +3248,6 @@ def admin_reports():
                            reports=reports, local_remote=local_remote, search=search, report_types=report_types,
                            report_types_list=ReportTypes.get_choices(),
                            roles_with=roles_with('administer all users'))
-
-
-@bp.route('/newsletter', methods=['GET', 'POST'])
-@login_required
-@permission_required('send newsletter')
-def newsletter():
-    form = SendNewsletterForm()
-    if form.validate_on_submit():
-        send_newsletter(form)
-        flash(_('Newsletter sent'))
-        return redirect(url_for('admin.newsletter'))
-
-    return render_template("admin/newsletter.html", form=form, title=_('Send newsletter'),
-                           roles_with=roles_with('send newsletter'))
 
 
 @bp.route('/instances', methods=['GET', 'POST'])
