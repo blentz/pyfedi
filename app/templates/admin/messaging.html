@@ -27,7 +27,7 @@
                     <td>
                         {% if entry.editable %}
                             {{ _('Your text') if entry.key in overrides else _('Default') }}
-                            {% if can_edit_templates %}<br><a href="{{ url_for('admin.messaging_template', key=entry.key) }}">{{ _('Edit') }}</a>{% endif %}
+                            {% if can_edit_templates and (is_admin or not entry.admin_only) %}<br><a href="{{ url_for('admin.messaging_template', key=entry.key) }}">{{ _('Edit') }}</a>{% elif entry.admin_only %}<br><small class="text-muted">{{ _('Admin only') }}</small>{% endif %}
                         {% elif entry.key == 'admin_message' %}
                             {{ _('Yours, below') }}
                         {% else %}

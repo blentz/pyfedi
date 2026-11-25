@@ -147,25 +147,27 @@ def deliver(message_id: int) -> int:
     message = db.session.get(AdminMessage, message_id)
     if message is None or message.status != 'sending':
         return 0
-    mailed = 0
-    for user_id in audience_query(message).order_by(User.id).with_entities(User.id).all():
-        user_id = user_id[0]
+    mailed = handled = 0
+    for (user_id,) in audience_query(message).order_by(User.id).with_entities(User.id).all():
         if not _claim(message.id, user_id):
             continue
         user = db.session.get(User, user_id)
         delivery = db.session.get(AdminMessageDelivery, (message.id, user_id))
+        # Counted in SQL, not read and written back: a run that took over from a quiet one may overlap it (D17)
         try:
             mail_one(message, user)
         except Exception as error:
             delivery.error = type(error).__name__[:255]
-            message.failed_count += 1
+            counts = {'failed_count': AdminMessage.failed_count + 1}
             current_app.logger.warning(f'admin message {message.id} to account {user_id} failed: {delivery.error}')
         else:
             delivery.sent_at = utcnow()
-            message.sent_count += 1
+            counts = {'sent_count': AdminMessage.sent_count + 1}
             mailed += 1
-        if (message.sent_count + message.failed_count) % HEARTBEAT_EVERY == 0:
-            message.heartbeat_at = utcnow()
+        handled += 1
+        if handled % HEARTBEAT_EVERY == 0:
+            counts['heartbeat_at'] = utcnow()
+        db.session.execute(update(AdminMessage).where(AdminMessage.id == message.id).values(**counts))
         db.session.commit()
     message.status, message.sent_at, message.heartbeat_at = 'sent', utcnow(), None
     db.session.commit()

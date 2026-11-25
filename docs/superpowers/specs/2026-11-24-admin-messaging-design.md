@@ -103,6 +103,15 @@ Owner rulings, 2026-11-24.
   send messages to members").
 - **D22** Editing built-in text needs a new permission, `edit email templates`. The password-reset and verification
   emails carry the links that sign people in, so this is kept apart from sending newsletters.
+- **D23** A placeholder whose link carries a sign-in token (`{reset_url}`, `{verify_url}`) is a *secret* link. Otherwise
+  someone holding `edit email templates` could send every member's token to their own server, for example in an image's
+  address or inside a URL of theirs, and so take over any account, an admin's too. So:
+  - Saving refuses a secret link anywhere but standing on its own or as the whole target of a Markdown link
+    (`[words]({reset_url})`, not an image), and refuses it in the subject.
+  - Rendering fills it only there too: in HTML only as the whole `href` of a link, or as a link of its own in text.
+    Anywhere else it is dropped, so a row written some other way cannot leak it either.
+  - Only the built-in Admin may change the emails that carry one (`password_reset`, `verify_email`). Other holders of
+    `edit email templates` see them as "Admin only".
 
 ## Tests
 

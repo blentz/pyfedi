@@ -147,6 +147,7 @@ def messaging():
                                            AdminMessage.scheduled_for, AdminMessage.updated_at.desc()).all()
     return render_template('admin/messaging.html', title=_('Messaging'), catalogue=CATALOGUE, overrides=overrides,
                            messages=messages, can_edit_templates=user_access('edit email templates', current_user.id),
+                           is_admin=current_user.is_admin(),
                            roles_with=roles_with('send newsletter'))
 
 
@@ -260,9 +261,12 @@ def messaging_duplicate(message_id):
 
 
 def _entry(key: str):
+    """The editable entry, or 404; one whose text carries a sign-in token is the built-in Admin's alone (D23)."""
     entry = BY_KEY.get(key)
     if entry is None or not entry.editable:
         abort(404)
+    if entry.admin_only and not current_user.is_admin():
+        abort(403)
     return entry
 
 

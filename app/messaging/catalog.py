@@ -9,7 +9,8 @@ class Placeholder(NamedTuple):
     name: str
     description: str
     sample: str
-    kind: str = 'text'   # text; url (a link where it stands alone); list (rendered by code, D8)
+    kind: str = 'text'   # text; url (a link where it stands alone); secret (a url carrying a sign-in token, D23);
+    #                      list (rendered by code, D8)
     required: bool = False
 
 
@@ -25,6 +26,11 @@ class BuiltIn(NamedTuple):
     @property
     def editable(self) -> bool:
         return bool(self.placeholders)
+
+    @property
+    def admin_only(self) -> bool:
+        """Its text carries a sign-in token, so only the built-in Admin may change it (D23)."""
+        return any(p.kind == 'secret' for p in self.placeholders)
 
     def placeholder(self, name: str) -> Placeholder | None:
         return next((p for p in self.placeholders if p.name == name), None)
@@ -46,13 +52,13 @@ CATALOGUE = (
             _l('The address being checked'), ('verification',),
             (_NAME, _SITE_NAME,
              Placeholder('verify_url', _l('The link that verifies the address'),
-                         'https://piefed.example/auth/verify_email/abc123', 'url', True))),
+                         'https://piefed.example/auth/verify_email/abc123', 'secret', True))),
     BuiltIn('password_reset', _l('Reset password'),
             _l('When someone asks to reset their password.'),
             _l('The account'), ('reset_password',),
             (_NAME, _SITE_NAME,
              Placeholder('reset_url', _l('The link that sets a new password'),
-                         'https://piefed.example/auth/reset_password/abc123', 'url', True))),
+                         'https://piefed.example/auth/reset_password/abc123', 'secret', True))),
     BuiltIn('subscription_expiring', _l('Subscription expiring soon'),
             _l('Once a day, from 10 days before a subscription paid for in advance runs out, until it runs out or '
                'is renewed. Not for subscriptions that renew by themselves, or ones that were cancelled.'),
