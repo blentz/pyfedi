@@ -1,6 +1,8 @@
 {{ _('Hello %(name)s,', name=user.display_name()) }}
 
-{{ _('Your subscription %(plan)s has been paid up until %(date)s. It does not renew by itself.', plan=plan, date=ends.strftime('%Y-%m-%d')) }}
+{% if days_left > 1 %}{{ ngettext('Your subscription %(plan)s runs out in %(num)d day, on %(date)s. It does not renew by itself.', 'Your subscription %(plan)s runs out in %(num)d days, on %(date)s. It does not renew by itself.', days_left, plan=plan, date=ends.strftime('%Y-%m-%d')) }}{% elif days_left == 1 %}{{ _('Your subscription %(plan)s runs out tomorrow, %(date)s. It does not renew by itself.', plan=plan, date=ends.strftime('%Y-%m-%d')) }}{% else %}{{ _('Your subscription %(plan)s runs out today, %(date)s. It does not renew by itself.', plan=plan, date=ends.strftime('%Y-%m-%d')) }}{% endif %}
 
-{{ _('To carry on, pay for another period before then. Any time you have left carries over:') }}
-{{ plans_page_url(external=True) }}
+{{ _('Renew it now to keep everything it gives you. Any time you have left carries over, so renewing early costs you nothing:') }}
+{{ renew_url }}
+
+{{ _('We will remind you each day until it runs out or is renewed.') }}

@@ -9,5 +9,6 @@ from app.admin import payments_routes  # noqa: E402,F401  /admin/payments (monet
 from app.admin import sidebar_routes  # noqa: E402,F401  /admin/sidebar (the sidebars' boxes)
 from app.admin import hls_routes  # noqa: E402,F401  /admin/video_hls (videos as HLS too)
 from app.admin import connections_routes  # noqa: E402,F401  /admin/connections (connected accounts)
+from app.admin import messaging_routes  # noqa: E402,F401  /admin/messaging (every email, admin messages)
 from app.discovery import admin_views as discovery_admin_views  # noqa: E402,F401  fork (interop D24): /admin/federation/discovery
 from app.relays import admin_views as relay_admin_views  # noqa: E402,F401  fork: /admin/federation/relays

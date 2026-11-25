@@ -4,10 +4,9 @@ from typing import List, Tuple
 
 import boto3
 import httpx
-from flask import current_app, flash, render_template, url_for
+from flask import current_app
 from flask_babel import _
-from flask_login import current_user
-from sqlalchemy import text, desc
+from sqlalchemy import text
 
 from app import db, celery
 from app.payments.core import end_subscriptions_of
@@ -16,12 +15,11 @@ from app.community.routes import do_subscribe
 from app.community.util import search_for_community
 from app.constants import POST_TYPE_IMAGE
 from app.federation_urls import activity_id
-from app.storefront import acting_as_default, federating_base, home_storefront, hosted_instance_ids
+from app.storefront import acting_as_default, federating_base, hosted_instance_ids
 from app.models import User, Community, Instance, CommunityMember, Post, Topic
 from app.utils import gibberish, topic_tree, get_request, store_files_in_s3, ensure_directory_exists, guess_mime_type, get_task_session, patch_db_session, sanitize_svg_bytes, \
     remote_instance_software, MEDIA_MAX_BYTES, MEDIA_MAX_SECONDS, PAGE_MAX_BYTES, canonical_host
 import shutil
-from app.email import mail_name, send_email
 
 
 def unsubscribe_from_everything_then_delete(user_id):
@@ -103,37 +101,6 @@ def unsubscribe_from_community(community, user):
         'object': follow
     }
     send_post_request(community.ap_inbox_url, undo, user.private_key, user.public_url() + '#main-key')
-
-
-def send_newsletter(form):
-    recipients = User.query.filter(User.newsletter == True, User.ap_id == None, User.verified.is_(True),
-                                   User.banned.is_(False), User.deleted.is_(False)).\
-        order_by(desc(User.id)).limit(40000)
-
-
-    if recipients.count() == 0:
-        flash(_('No recipients'), 'error')
-
-    for recipient in recipients:
-        reader = recipient if not form.test.data else current_user
-        with home_storefront(reader):   # each reader's links name their own domain (spec §3.2)
-            body_text = render_template('email/newsletter.txt', recipient=reader, content=form.body_text.data)
-            body_html = render_template('email/newsletter.html', recipient=reader, content=form.body_html.data)
-            # an account without a token has no link, in the body or the header, as newsletter.html does
-            unsubscribe = url_for('user.user_newsletter_unsubscribe', user_id=reader.id,
-                                  token=reader.verification_token, _external=True) \
-                if reader.verification_token else None
-        if form.test.data:
-            to = current_user.email
-        else:
-            to = recipient.email
-
-        send_email(subject=form.subject.data, sender=f'{mail_name(reader)} <{current_app.config["MAIL_FROM"]}>',
-                   recipients=[to],
-                   text_body=body_text, html_body=body_html, list_unsubscribe=unsubscribe)
-
-        if form.test.data:
-            break
 
 
 def topics_for_form(current_topic: int) -> List[Tuple[int, str]]:

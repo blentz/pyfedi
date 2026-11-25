@@ -57,7 +57,7 @@
                 <a class="nav-link{% if active_child == 'admin_instances' %} active{% endif %}" id="instances-tab" type="button" role="tab" href="/admin/instances" style="view-transition-name: instances">{{ _('Instances') }}</a>
             {% endif -%}
             {% if user_access('send newsletter', current_user.id) %}
-                <a class="nav-link{% if active_child == 'admin_newsletter' %} active{% endif %}" id="newsletter-tab" type="button" role="tab" href="/admin/newsletter" style="view-transition-name: newsletter">{{ _('Newsletter') }}</a>
+                <a class="nav-link{% if active_child == 'admin_messaging' %} active{% endif %}" id="messaging-tab" type="button" role="tab" href="/admin/messaging" style="view-transition-name: messaging">{{ _('Messaging') }}</a>
             {% endif -%}
             {% if user_access('change instance settings', current_user.id) %}
                 <a class="nav-link{% if active_child == 'admin_activities' %} active{% endif %}" id="activities-tab" type="button" role="tab" href="/admin/activities" style="view-transition-name: activities">{{ _('Activities') }}</a>

@@ -7066,7 +7066,7 @@ class MemberSubscription(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow)
     ended_at = db.Column(db.DateTime)
     ends_at = db.Column(db.DateTime)   # cancelled, and paid up until then (plan phase 3, S22)
-    reminded_at = db.Column(db.DateTime)   # told their prepaid period is about to run out, which is once per period
+    reminded_at = db.Column(db.DateTime)   # last told their prepaid period is about to run out: daily, from 10 days before
     # One that renews by itself: the provider's next billing date, so what it is paid through. Prepaid ones keep their end
     # in current_period_end, which the expiry sweep keeps to; this one ends only when the provider says so.
     renews_at = db.Column(db.DateTime)
@@ -7692,3 +7692,54 @@ class ConnectionApp(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
     __table_args__ = (db.UniqueConstraint('site_domain_id', 'kind', name='uq_connection_app_domain_kind'),)
+
+
+class EmailTemplate(db.Model):
+    """An admin's text for a built-in email (spec 2026-11-24-admin-messaging D3): its subject and Markdown body, with
+    the catalogue's placeholders. No row means the bundled templates."""
+    __tablename__ = 'email_template'
+    key = db.Column(db.String(50), primary_key=True)   # app.messaging.catalog
+    subject = db.Column(db.String(255), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+    updated_by = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'))
+
+
+class AdminMessage(db.Model):
+    """A message an admin writes to members (spec 2026-11-24-admin-messaging D10-D17)."""
+    __tablename__ = 'admin_message'
+    id = db.Column(db.Integer, primary_key=True)
+    subject = db.Column(db.String(255), nullable=False)
+    body = db.Column(db.Text, nullable=False)   # Markdown, with {name}, {site_name}, {site_url}
+    audience = db.Column(db.String(10), nullable=False, default='all')   # all, filtered, picked (D12)
+    domain_ids = db.Column(MutableList.as_mutable(ARRAY(db.Integer)))   # filtered: home domain is one of these
+    role_ids = db.Column(MutableList.as_mutable(ARRAY(db.Integer)))   # filtered: holds one of these roles
+    subscription = db.Column(db.String(10))   # filtered: None, 'any', 'none' or 'offers'
+    offer_ids = db.Column(MutableList.as_mutable(ARRAY(db.Integer)))   # subscription 'offers': holds one of these
+    service_notice = db.Column(db.Boolean, nullable=False, default=False)   # reaches opted-out members (MS4)
+    status = db.Column(db.String(10), nullable=False, default='draft')   # draft, scheduled, sending, sent (D11)
+    scheduled_for = db.Column(db.DateTime, index=True)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'))
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+    heartbeat_at = db.Column(db.DateTime)   # last sign of life of the task sending it (D17)
+    sent_at = db.Column(db.DateTime)
+    sent_count = db.Column(db.Integer, nullable=False, default=0)
+    failed_count = db.Column(db.Integer, nullable=False, default=0)
+
+
+class AdminMessagePick(db.Model):
+    """An account an admin message with audience 'picked' goes to (D12)."""
+    __tablename__ = 'admin_message_pick'
+    message_id = db.Column(db.Integer, db.ForeignKey('admin_message.id', ondelete='CASCADE'), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+
+
+class AdminMessageDelivery(db.Model):
+    """One recipient of an admin message, claimed before the mail is handed over, so nobody gets it twice (D16)."""
+    __tablename__ = 'admin_message_delivery'
+    message_id = db.Column(db.Integer, db.ForeignKey('admin_message.id', ondelete='CASCADE'), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), primary_key=True)
+    claimed_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    sent_at = db.Column(db.DateTime)
+    error = db.Column(db.String(255))

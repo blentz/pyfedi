@@ -345,6 +345,7 @@ scan. The backfill `UPDATE`s touch only rows that are actually NULL.
 | 49 | `e6a2c9d4f8b1` connection_apps | Creates `connection_app` (a domain's own Meta, Instagram, Google and Bluesky app credentials, secrets sealed) and adds `app_domain_id` and `app_client_id` to `social_connection`: the app each connection was made with. (`a960a103`) | No |
 | 50 | `f3b7d1a9c5e2` crosspost_progress | Adds `progress` (JSON) to `social_crosspost`, what a copy's sending did so far, and widens its `state` to 20 characters for `unconfirmed`. The downgrade turns unconfirmed copies into failed ones. | No |
 | 51 | `a95a82e17b01` atproto_groundwork | Adds `is_identity` (one per member, a partial unique index), `import_own`, `slot_state` and `slot_pinned` to `social_connection` and marks every Bluesky connection and copy `oauth`; adds `post.requires_login` and `user.requires_login` (NOT NULL, default false); creates `atproto_record` (ATProto records that are not post copies) and `atproto_cursor` (the Jetstream position). The downgrade deletes hosted Bluesky connections. | No |
+| 52 | `b4d8e2f6a913` admin_messaging | Creates `email_template` (an admin's subject and text for a built-in email), `admin_message` (a message admins write: text, audience, schedule, counts), `admin_message_pick` (the accounts one picked) and `admin_message_delivery` (each recipient, claimed before it is mailed). | No |
 
 Downgrades remove defaults, constraints, columns and the new tables, but do
 not restore the NULLs, invented counters, rankings, cross-post links or
@@ -471,6 +472,8 @@ aarch64 wheel, which is why it must stay out of the production install.
   theme.
 
 ### 2.3 Behaviour changes operators and users will notice
+
+**The Newsletter page is now Messaging, and the expiring-subscription email is daily.** `/admin/newsletter` redirects to `/admin/messaging`, which lists every email the site sends, with when and to whom. A message is stored, can be scheduled, and is sent by a background task from `send-queue` instead of inside the request. Its body is one Markdown text where the old form had a text and an HTML body, and its test send goes to the admin writing it. A member whose prepaid subscription has ten days or less left now gets the reminder once a day until it runs out or is renewed, where before they got one, seven days before. (spec `2026-11-24-admin-messaging-design.md`)
 
 **State-changing links became POST forms.** Actions that changed state on a
 GET (and so could be triggered by any page a signed-in user visited) are now
@@ -2108,6 +2111,8 @@ is described in 2.3 to 2.5:
 | A user's own sidebar order | `2026-11-22-user-sidebar-order-design.md` | Settings, Sidebar: a signed-in user chooses which of the home page's and community pages' sidebar boxes they see and in what order, each sidebar separately, with the same up, down and hide buttons as the admins' page, and can go back to the site's order. Only the boxes the domain shows are offered: a box the admins hide stays hidden. Migration `5b7e0c3d9a41` |
 | Sidebar live feed box | `2026-11-22-sidebar-live-feed-design.md` | A "Live feed" box for the home and community sidebars: the newest posts, kept current like the Live tabs. Off by default; an optional box, offered to every user whatever the domain chose (an admin who shows it shows it to everyone who has not hidden it). All posts by default, microblogs included (which the All tab leaves out), or (Settings, Sidebar) only from the people and communities the user follows. Signed-in readers only; its fragment `/sidebar/live_posts` has its own 12/minute budget. A post the teaser would blur or fade is left out. Migration `8d2f6a1c4e70` |
 | Tag page sorts | | `/tag/<name>` takes the front page's sorts as `?sort=`: Hot, Top (1 hour to all time), New, Live, Active, Scaled and Old, with the front page's sort buttons and, at narrow widths, its dropdown. A category filter is kept across sorts. Live is offered to a logged-in reader on the first page without a category filter, and polls `/tag/<name>/live_posts` (no SSE wake-up key). **Behaviour change:** with no `?sort=` the page uses the reader's default sort, as the front page does, so Hot for logged-out visitors (was: always newest first) |
+
+| Messaging | `2026-11-24-admin-messaging-design.md` | `/admin/messaging` replaces the Newsletter page. It lists every email the site sends, when each is sent and to whom. Holders of the new `edit email templates` permission can reword the welcome, verification, password reset, subscription expiring, unread notifications and community invite emails, with placeholders such as `{name}` and `{renew_url}`, then preview them, send a test, or reset to the default. Holders of `send newsletter` write messages to all members, to members matching domain, role and subscription filters, or to accounts picked by name, and send them at once or at a set time. A message honours the newsletter opt-out unless it is marked a service notice. |
 
 ---
 

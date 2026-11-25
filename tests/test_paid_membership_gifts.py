@@ -123,14 +123,15 @@ class TestAGift:
         assert start_gift(env.member, code) is None
         assert len(gifts_of(env.member)) == 1
 
-    def test_its_end_is_mentioned_once_beforehand(self, env):
+    def test_its_end_is_mentioned_once_a_day_beforehand(self, env):
         """A gift is prepaid-like (G3): the member is told before it runs out, as for a paid period."""
         subscription = start_gift(env.member, a_code(env))
         subscription.current_period_end = utcnow() + timedelta(days=3)   # three days of its month left
         db.session.commit()
         with patch('app.payments.core.send_prepaid_reminder') as mail:
             assert remind_expiring_prepaid() == 1 and remind_expiring_prepaid() == 0
-        mail.assert_called_once_with(env.member, 'Furcas', subscription.current_period_end)
+        mail.assert_called_once_with(env.member, 'Furcas', subscription.current_period_end,
+                                     (subscription.current_period_end.date() - utcnow().date()).days)
 
     def test_it_ends_when_its_time_is_up(self, env):
         subscription = start_gift(env.member, a_code(env))

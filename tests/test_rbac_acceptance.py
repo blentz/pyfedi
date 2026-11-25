@@ -131,7 +131,8 @@ def test_a_holder_runs_x_and_nothing_else(world):
     for path in (f'/admin/user/{y.user.id}/edit',
                  f'/admin/community/{y.community.id}/edit', f'/admin/user/{world.remote.id}/edit',
                  f'/admin/community/{world.far.id}/edit',
-                 '/admin/misc', '/admin/pages', '/admin/newsletter', '/admin/roles', '/admin/federation',
+                 '/admin/misc', '/admin/pages', '/admin/newsletter', '/admin/messaging', '/admin/messaging/new',
+                 '/admin/messaging/email/welcome', '/admin/roles', '/admin/federation',
                  '/admin/topics', '/admin/media', '/admin/instances'):
         assert not opens(client, path), f'should be refused: {path}'
     assert world.grantee.id in shown_as_admin_ids(world.x.id) and world.grantee.id not in shown_as_admin_ids(world.y.id)

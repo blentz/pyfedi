@@ -30,7 +30,7 @@ from flask import current_app, g
 from app import db
 from app.admin.util import (directory_candidates, fetch_mastodon_directory,
                             move_community_images_to_here,
-                            remote_instance_software, send_newsletter,
+                            remote_instance_software,
                             switch_to_silenced, switch_to_unsilenced,
                             topics_for_form,
                             unsubscribe_from_community,
@@ -190,116 +190,6 @@ class TestLeavingACommunityOnTheWayOut:
         with patch('app.admin.util.send_post_request') as send:
             unsubscribe_from_community(remote_community, env.member)
         assert send.call_count == 0
-
-
-# --------------------------------------------------------------------------
-# the newsletter
-# --------------------------------------------------------------------------
-
-class _Field:
-    def __init__(self, data):
-        self.data = data
-
-
-class _NewsletterForm:
-    def __init__(self, subject='A newsletter', body_text='hello',
-                 body_html='<p>hello</p>', test=False):
-        self.subject = _Field(subject)
-        self.body_text = _Field(body_text)
-        self.body_html = _Field(body_html)
-        self.test = _Field(test)
-
-
-class TestTheNewsletter:
-    @pytest.fixture(autouse=True)
-    def nobody_subscribed(self, env):
-        """The column defaults to True, so opting everybody out first is
-        what makes "who gets it" observable at all."""
-        for user in User.query.all():
-            user.newsletter = False
-        db.session.commit()
-
-    @pytest.fixture
-    def subscriber(self, env):
-        subscriber = env.member
-        subscriber.newsletter = True
-        subscriber.email = 'reader@probeland.test'
-        db.session.commit()
-        return subscriber
-
-    def test_it_goes_to_everybody_who_asked_for_it(self, env, subscriber):
-        with patch('app.admin.util.send_email') as send:
-            send_newsletter(_NewsletterForm())
-        assert send.call_count == 1
-        assert send.call_args.kwargs['recipients'] == \
-            ['reader@probeland.test']
-
-    def test_an_account_with_a_token_gets_a_one_click_unsubscribe_header(self, env, subscriber):
-        subscriber.verification_token = 'tok9'
-        db.session.commit()
-        with patch('app.admin.util.send_email') as send:
-            send_newsletter(_NewsletterForm())
-        assert send.call_args.kwargs['list_unsubscribe'].endswith(f'/user/newsletter/{subscriber.id}/tok9/unsubscribe')
-
-    def test_one_without_a_token_gets_none(self, env, subscriber):
-        """newsletter.html leaves the link out too; url_for cannot build one."""
-        subscriber.verification_token = None
-        db.session.commit()
-        with patch('app.admin.util.send_email') as send:
-            send_newsletter(_NewsletterForm())
-        assert send.call_args.kwargs['list_unsubscribe'] is None
-
-    def test_it_does_not_go_to_anybody_who_did_not(self, env, subscriber):
-        subscriber.newsletter = False
-        db.session.commit()
-        with patch('app.admin.util.send_email') as send, \
-                patch('app.admin.util.flash'):
-            send_newsletter(_NewsletterForm())
-        assert send.call_count == 0
-
-    def test_nor_to_a_banned_account(self, env, subscriber):
-        subscriber.banned = True
-        db.session.commit()
-        with patch('app.admin.util.send_email') as send, \
-                patch('app.admin.util.flash'):
-            send_newsletter(_NewsletterForm())
-        assert send.call_count == 0
-
-    def test_nor_to_a_remote_one(self, env, subscriber):
-        subscriber.ap_id = 'reader@remote.test'
-        db.session.commit()
-        with patch('app.admin.util.send_email') as send, \
-                patch('app.admin.util.flash'):
-            send_newsletter(_NewsletterForm())
-        assert send.call_count == 0
-
-    def test_an_admin_is_told_when_there_is_nobody_to_send_to(self, env):
-        with patch('app.admin.util.send_email'), \
-                patch('app.admin.util.flash') as flash:
-            send_newsletter(_NewsletterForm())
-        assert flash.call_count == 1
-
-    def test_a_test_send_goes_to_the_admin_and_stops_there(self, env,
-                                                           subscriber):
-        second = make_user(env.baseline.instance_local, 'another', local=True)
-        second.newsletter = True
-        second.email = 'another@probeland.test'
-        db.session.commit()
-        with env.app.test_request_context('/'), \
-                patch('app.admin.util.send_email') as send:
-            from flask_login import login_user
-            login_user(env.baseline.user1)
-            send_newsletter(_NewsletterForm(test=True))
-        assert send.call_count == 1
-        assert send.call_args.kwargs['recipients'] == \
-            [env.baseline.user1.email]
-
-    def test_what_the_body_carries(self, env, subscriber):
-        with patch('app.admin.util.send_email') as send:
-            send_newsletter(_NewsletterForm(body_text='the news',
-                                            body_html='<p>the news</p>'))
-        assert 'the news' in send.call_args.kwargs['text_body']
-        assert 'the news' in send.call_args.kwargs['html_body']
 
 
 # --------------------------------------------------------------------------

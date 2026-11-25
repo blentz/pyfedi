@@ -19,7 +19,8 @@ import app.chat.util as chat_util
 from app.community.forms import EditCommunityForm
 from app.community.util import community_theme_list, save_banner_file, save_icon_file
 from app.constants import *
-from app.email import send_email
+from app.email import mail_name, send_email
+from app.messaging.render import Value, overridden
 from app.federation_urls import object_base
 from app.local_only import community_local_only, one_here, user_local_only
 from app.local_names import local_named
@@ -225,12 +226,18 @@ def invite_with_email(community_id: int, to: str, src, auth=None):
         subscribe = f'accept_invite/{user.lemmy_link()}'
 
     with default_storefront():   # the invitee may not use the inviter's storefront (onion spec §3.4)
+        host = storefront_url()
+        custom = overridden('community_invite', {
+            'inviter': Value(user.display_name()), 'community': Value(community.display_name()),
+            'register_url': Value(f'{host}/auth/register'),
+            'join_url': Value(f'{host}/c/{community.link()}/{subscribe}'), 'site_name': Value(mail_name())})
         message = flask.render_template('email/invite_to_community.txt', user=user, community=community,
-                                        host=storefront_url(), subscribe=subscribe)
+                                        host=host, subscribe=subscribe)
 
-    send_email(f"{community.display_name()} on {current_app.config['SERVER_NAME']}",
+    send_email(custom.subject if custom else f"{community.display_name()} on {current_app.config['SERVER_NAME']}",
                f"{user.display_name()} <{current_app.config['MAIL_FROM']}>",
-               [to], message, markdown_to_html(message))
+               [to], custom.text_body if custom else message,
+               custom.html_body if custom else markdown_to_html(message))
     return 1
 
 

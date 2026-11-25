@@ -1,0 +1,62 @@
+{% if theme() != 'piefed' and file_exists('app/templates/themes/' + theme() + '/base.html') -%}
+    {% extends 'themes/' + theme() + '/base.html' -%}
+{% else -%}
+    {% extends "base.html" -%}
+{% endif -%}
+{% from 'bootstrap5/form.html' import render_field %}
+{% set active_child = 'admin_messaging' %}
+
+{% block app_content %}
+{% include 'admin/_tabbed_nav.html' %}
+<br>
+
+<div class="row">
+    <div class="col">
+        <p><a href="{{ url_for('admin.messaging') }}">&larr; {{ _('Messaging') }}</a></p>
+        <h1>{{ entry.name }}</h1>
+        <dl>
+            <dt>{{ _('When it is sent') }}</dt><dd id="email_when">{{ entry.when }}</dd>
+            <dt>{{ _('To') }}</dt><dd>{{ entry.recipients }}</dd>
+            <dt>{{ _('Text in use') }}</dt>
+            <dd id="email_text_in_use">{% if row %}{{ _('Yours, since %(when)s UTC. It is the same in every language.', when=row.updated_at.strftime('%Y-%m-%d %H:%M')) }}{% else %}{{ _('The default, translated into each member\'s language.') }}{% if entry.key == 'welcome' %} {{ _('If the welcome text in the misc settings is filled in, that is used.') }}{% endif %}{% endif %}</dd>
+        </dl>
+
+        {% if problems %}
+        <div class="alert alert-danger" role="alert" id="template_problems"><ul class="mb-0">{% for problem in problems %}<li>{{ problem }}</li>{% endfor %}</ul></div>
+        {% endif %}
+
+        <form method="post" id="template_form">
+            {{ form.csrf_token }}
+            {{ render_field(form.subject) }}
+            {{ render_field(form.body) }}
+            <p class="small text-muted">{{ _('Placeholders:') }}</p>
+            <ul class="small text-muted" id="placeholders">
+                {% for p in entry.placeholders %}<li><code>{{ '{' + p.name + '}' }}</code> {{ p.description }}{% if p.required %} <strong>({{ _('required') }})</strong>{% endif %}</li>{% endfor %}
+                <li>{{ _('Write {{ or }} for a brace.') }}</li>
+            </ul>
+            {{ render_field(form.preview, button_style='secondary') }}
+            {{ render_field(form.save) }}
+            {{ render_field(form.send_test, button_style='secondary') }}
+        </form>
+        {% if row %}
+        <form method="post" action="{{ url_for('admin.messaging_template_reset', key=entry.key) }}" class="mt-2">
+            {{ reset_form.csrf_token }}
+            {{ render_field(reset_form.reset, button_style='outline-danger') }}
+        </form>
+        {% endif %}
+
+        {% if preview %}
+        <h2 class="h5 mt-4">{{ _('Preview, with sample values') }}</h2>
+        <p><strong>{{ preview.subject }}</strong></p>
+        <iframe sandbox="" class="border w-100" style="min-height: 20em;" srcdoc="{{ preview.html_body }}" title="{{ _('Preview') }}"></iframe>
+        {% endif %}
+    </div>
+</div>
+<hr />
+<div class="row">
+    <div class="col">
+        {% include 'admin/_nav.html' %}
+    </div>
+</div>
+<hr />
+{% endblock %}

@@ -40,7 +40,7 @@
         <a href="{{ url_for('admin.admin_activities') }}">{{ _('Activities') }}</a> |
     {% endif %}
     {% if user_access('send newsletter', current_user.id) %}
-        <a href="{{ url_for('admin.newsletter') }}">{{ _('Newsletter') }}</a> |
+        <a href="{{ url_for('admin.messaging') }}">{{ _('Messaging') }}</a> |
     {% endif %}
     {% if current_user.is_admin() %}
         <a href="{{ url_for('admin.admin_roles') }}">{{ _('Roles') }}</a> |

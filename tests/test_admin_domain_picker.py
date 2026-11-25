@@ -48,7 +48,7 @@ def picked(client):
         return session.get(SESSION_KEY)
 
 
-INSTANCE_PAGES = ['/admin/federation', '/admin/emoji', '/admin/instances', '/admin/activities', '/admin/newsletter']
+INSTANCE_PAGES = ['/admin/federation', '/admin/emoji', '/admin/instances', '/admin/activities', '/admin/messaging']
 
 
 @pytest.mark.parametrize('path', INSTANCE_PAGES)
@@ -123,7 +123,7 @@ def test_an_instance_wide_page_shows_no_picker_to_one_who_cannot_change_instance
     grant_permission(user, 'send newsletter')
     client = app.test_client()
     login(client, user)
-    body = get(client, '/admin/newsletter')
+    body = get(client, '/admin/messaging')
     assert 'id="typeTab"' in body   # the admin tabs are there
     assert 'id="domain-picker"' not in body
 
