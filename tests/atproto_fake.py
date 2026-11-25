@@ -35,6 +35,7 @@ class FakePDS:
         self.invites: set[str] = set()
         self.notifications: dict[str, list] = {}   # did -> its notifications, newest first
         self.servers: dict[str, str] = {}          # did -> the server its document names, when not this one (a move)
+        self.preferences: dict[str, list] = {}   # did -> its app.bsky preferences
         self.calls: list[str] = []
         self.requests: list[httpx.Request] = []
         self.fail: dict[str, httpx.Response] = {}   # nsid -> the answer it gives instead, once
@@ -180,6 +181,19 @@ class FakePDS:
         if self._caller(request) is None:
             return self._error(401, 'AuthMissing')
         return httpx.Response(200, json={'name': body['name'], 'password': 'abcd-efgh-ijkl-mnop'})
+
+    def _app_bsky_actor_getPreferences(self, request, body):
+        did = self._caller(request)
+        if did is None:
+            return self._error(401, 'AuthMissing')
+        return httpx.Response(200, json={'preferences': self.preferences.get(did, [])})
+
+    def _app_bsky_actor_putPreferences(self, request, body):
+        did = self._caller(request)
+        if did is None:
+            return self._error(401, 'AuthMissing')
+        self.preferences[did] = body['preferences']
+        return httpx.Response(200)
 
     def _com_atproto_repo_uploadBlob(self, request, body):
         if self._caller(request) is None:

@@ -103,6 +103,13 @@
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Get an app password') }}</button>
                                 </form>
+                                <form method="post" class="d-flex flex-wrap gap-1" action="{{ url_for('user.user_bluesky_birthdate', connection_id=connection.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <label class="visually-hidden" for="birthdate_{{ connection.id }}">{{ _('Birthdate') }}</label>
+                                    <input type="date" class="form-control form-control-sm w-auto" name="birthdate" id="birthdate_{{ connection.id }}" min="1900-01-01" required>
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">{{ _('Set birthdate on Bluesky') }}</button>
+                                    <div class="small text-muted w-100">{{ _('Bluesky apps ask for it, and an app password cannot set it. It goes to Bluesky and is not kept here.') }}</div>
+                                </form>
                                 <form method="post" action="{{ url_for('user.user_bluesky_turn_off', connection_id=connection.id) }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-sm btn-outline-secondary confirm_first">{{ _('Turn off') }}</button>

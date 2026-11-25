@@ -7,7 +7,7 @@ import itertools
 import json
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -17,7 +17,7 @@ import respx
 from app import db, storefront
 from app.atproto import budget, records
 from app.clock import utcnow
-from app.connections import AuthFailed, Permanent, Progress, QuotaWait, SERVICES, Transient, setting_name
+from app.connections import AuthFailed, Permanent, Progress, QuotaWait, SERVICES, ServiceError, Transient, setting_name
 from app.connections import bluesky
 from app.connections import bluesky_hosted as hosted
 from app.connections.apps import set_domain_switch
@@ -433,6 +433,40 @@ def test_renaming(hosted_world):
 
 def test_an_app_password(hosted_world):
     assert hosted.app_password(a_hosted(hosted_world, hosted_world.author)) == 'abcd-efgh-ijkl-mnop'
+
+
+def test_a_birthdate_replaces_only_its_own_preference(hosted_world):
+    connection = a_hosted(hosted_world, hosted_world.author)
+    feed = {'$type': 'app.bsky.actor.defs#savedFeedsPrefV2', 'items': []}
+    hosted_world.pds.preferences[connection.remote_id] = [
+        feed, {'$type': hosted.PERSONAL_DETAILS, 'birthDate': '1999-09-09T00:00:00.000Z'}, 'not a preference']
+    hosted.set_birthdate(connection, date(1990, 2, 3))
+    assert hosted_world.pds.preferences[connection.remote_id] == [
+        feed, 'not a preference', {'$type': hosted.PERSONAL_DETAILS, 'birthDate': '1990-02-03T00:00:00.000Z'}]
+
+
+def test_a_birthdate_on_an_account_with_no_preferences(hosted_world):
+    connection = a_hosted(hosted_world, hosted_world.author)
+    hosted.set_birthdate(connection, hosted.OLDEST_BIRTH)
+    assert hosted_world.pds.preferences[connection.remote_id] == [
+        {'$type': hosted.PERSONAL_DETAILS, 'birthDate': '1900-01-01T00:00:00.000Z'}]
+
+
+@pytest.mark.parametrize('birth', [date(1899, 12, 31), date(2999, 1, 1)])
+def test_a_birthdate_out_of_range_is_refused_before_bluesky_is_asked(hosted_world, birth):
+    connection = a_hosted(hosted_world, hosted_world.author)
+    calls = len(hosted_world.pds.calls)
+    with pytest.raises(ValueError):
+        hosted.set_birthdate(connection, birth)
+    assert len(hosted_world.pds.calls) == calls
+
+
+def test_a_birthdate_bluesky_refuses_is_a_service_error(hosted_world):
+    connection = a_hosted(hosted_world, hosted_world.author)
+    hosted_world.pds.fail['app.bsky.actor.putPreferences'] = httpx.Response(500)
+    with pytest.raises(ServiceError):
+        hosted.set_birthdate(connection, date(1990, 2, 3))
+    assert connection.remote_id not in hosted_world.pds.preferences
 
 
 # --------------------------------------------------------------------------

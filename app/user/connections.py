@@ -5,6 +5,7 @@ service knows the redirect addresses registered with it. What the sign-in hands 
 CONNECTIONS_SECRETS_KEY, since Flask's session cookie is signed but readable.
 """
 import secrets
+from datetime import date
 
 from flask import abort, flash, jsonify, make_response, redirect, request, session, url_for
 from flask_babel import _
@@ -395,3 +396,23 @@ def user_bluesky_app_password(connection_id):
                                              user=current_user, handle=connection.remote_name, password=password))
     response.headers['Cache-Control'] = 'no-store'
     return response
+
+
+@bp.route('/user/settings/connections/<int:connection_id>/birthdate', methods=['POST'])
+@login_required
+def user_bluesky_birthdate(connection_id):
+    """The account's birthdate, set on Bluesky with the account's own session (apps refuse it from an app password).
+    Sent there, never stored here."""
+    connection = _own_hosted_or_404(connection_id)
+    if connection.slot_state != hosted.ACTIVE:
+        abort(400)
+    try:
+        birth = date.fromisoformat(request.form.get('birthdate', '')[:10])
+        hosted.set_birthdate(connection, birth)
+    except ValueError:
+        flash(_('That is not a birthdate Bluesky takes.'), 'warning')
+    except ServiceError as failure:
+        flash(_('Bluesky could not be reached: %(error)s', error=failure.message), 'error')
+    else:
+        flash(_('Your birthdate is set on Bluesky.'))
+    return redirect(url_for('user.user_connections'))
