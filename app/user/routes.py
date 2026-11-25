@@ -34,6 +34,7 @@ from app.local_only import accounts_shown_here_sql, actor_hidden_from, hidden_he
     remote_contact_refusal_message, user_local_only, without_local_only, without_local_only_actors
 from app.visibility import OPEN_VISIBILITIES, visible_to_clause
 from app.log_scrub import log_ldap_sync_failure
+from app.auth.util import oauth_client_id
 from app.onion import has_real_ip, is_onion_request
 from app.onion_store import onion_store_needed, request_redis
 from app.models import Post, Community, CommunityMember, User, PostReply, Notification, utcnow, File, Site, \
@@ -888,9 +889,9 @@ def connect_oauth():
 
     onion = is_onion_request()   # the redirect_uri would name the onion host to the provider
     oauth_providers = {
-        'google': not onion and current_app.config["GOOGLE_OAUTH_CLIENT_ID"] != '',
-        'mastodon': not onion and current_app.config["MASTODON_OAUTH_CLIENT_ID"] != '',
-        'discord': not onion and current_app.config["DISCORD_OAUTH_CLIENT_ID"] != ''
+        'google': not onion and oauth_client_id('google') != '',
+        'mastodon': not onion and oauth_client_id('mastodon') != '',
+        'discord': not onion and oauth_client_id('discord') != ''
     }
 
     # Handle disconnect requests

@@ -21,6 +21,7 @@ from app.auth.oauth_util import (
 from app.storefront import current_storefront, paid_registration, signup_open_to
 from app.referral import normalise_code, referral_mode_on
 from app.auth.util import (
+    oauth_on_this_domain,
     handle_abandoned_open_instance,
     notify_admins_of_registration,
     process_login,
@@ -60,7 +61,7 @@ def oauth_provider(name: str):
     def decorator(view):
         @wraps(view)
         def guarded(*args, **kwargs):
-            if not provider_configured(name):
+            if not provider_configured(name) or not oauth_on_this_domain(name):
                 abort(404)
             return view(*args, **kwargs)
         return guarded

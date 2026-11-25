@@ -678,6 +678,12 @@ The values for them are found by registering your instance with Google as 'an ap
 to begin. Create a new project, enable the People API, go to APIs & Services > Credentials and create a new OAuth client ID.
 Under "Authorized Redirect URIs", use `https://yourdomain.tld/auth/google_authorize`.
 
+If the instance serves several domains, the login (Google, Discord or Mastodon) is offered on every one unless you
+list the ones its app is set up for: `GOOGLE_OAUTH_FOR_DOMAINS`, `DISCORD_OAUTH_FOR_DOMAINS` or
+`MASTODON_OAUTH_FOR_DOMAINS`, comma-separated (`yourdomain.tld,otherdomain.tld`). Each listed domain needs its own
+redirect URIs in the provider's app (`/auth/<provider>_authorize` and `/auth/<provider>_connect_callback`); on the
+others the button is hidden and those routes are not found.
+
 #### Log in with LDAP
 
 PieFed can connect to a LDAP server and use it in two different ways (you can enable one of the two, or both):

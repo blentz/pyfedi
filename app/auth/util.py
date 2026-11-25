@@ -635,10 +635,21 @@ def register_from_api(data: dict) -> dict:
             'verify_email_sent': verify_email_sent}
 
 
+def oauth_on_this_domain(provider) -> bool:
+    """The provider's login is set up for the domain this request came to: its `<PROVIDER>_OAUTH_FOR_DOMAINS` names it,
+    or is empty (every domain). Elsewhere the provider would refuse the redirect_uri, which names this domain."""
+    listed = {name.strip().lower() for name in current_app.config.get(f"{provider.upper()}_OAUTH_FOR_DOMAINS", '').split(',')}
+    listed.discard('')
+    return not listed or current_storefront().domain.lower() in listed
+
+
 def oauth_client_id(provider):
     """The provider's client id, which is what the login and registration pages test to offer its button; empty on
-    the onion, where the redirect_uri would name the onion host to the provider."""
-    return '' if is_onion_request() else current_app.config[f"{provider.upper()}_OAUTH_CLIENT_ID"]
+    the onion, where the redirect_uri would name the onion host to the provider, and on a domain it is not set up
+    for (oauth_on_this_domain)."""
+    if is_onion_request() or not oauth_on_this_domain(provider):
+        return ''
+    return current_app.config[f"{provider.upper()}_OAUTH_CLIENT_ID"]
 
 
 def render_registration_form(form, paid_offer=None, tiers=()):

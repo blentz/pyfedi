@@ -219,6 +219,12 @@ class Config(object):
     DISCORD_OAUTH_CLIENT_ID = os.environ.get('DISCORD_OAUTH_CLIENT_ID') or ""
     DISCORD_OAUTH_SECRET = os.environ.get('DISCORD_OAUTH_SECRET') or ""
 
+    # The domains each social login is offered on, comma-separated (`a.example,b.example`): those whose redirect URIs
+    # the provider's app lists. Empty: every domain.
+    GOOGLE_OAUTH_FOR_DOMAINS = os.environ.get('GOOGLE_OAUTH_FOR_DOMAINS') or ''
+    MASTODON_OAUTH_FOR_DOMAINS = os.environ.get('MASTODON_OAUTH_FOR_DOMAINS') or ''
+    DISCORD_OAUTH_FOR_DOMAINS = os.environ.get('DISCORD_OAUTH_FOR_DOMAINS') or ''
+
     # enable the aplha api
     ENABLE_ALPHA_API = os.environ.get('ENABLE_ALPHA_API') or False
     # D1396. A list, always. Set from the environment this was a string, and
