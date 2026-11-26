@@ -1,5 +1,7 @@
 """/admin/messaging: every email the site sends, the admins' text for the built-in ones, and messages admins write to
 members (spec docs/superpowers/specs/2026-11-24-admin-messaging-design.md). Replaces /admin/newsletter (D21)."""
+from contextlib import nullcontext
+
 from flask import abort, current_app, flash, redirect, request, url_for
 from flask_babel import _, lazy_gettext as _l
 from flask_login import current_user, login_required
@@ -19,7 +21,7 @@ from app.messaging.messages import mail_one, recipient_count, send_now, schedule
 from app.messaging.render import compose, problems, sample_values
 from app.models import AdminMessage, AdminMessagePick, EmailTemplate, Offer, Role, User, utcnow
 from app.permissions import user_access
-from app.storefront import domain_by_id, domain_rows
+from app.storefront import domain_by_id, domain_rows, domain_storefront
 from app.utils import permission_required, render_template, roles_with
 
 EDITABLE_STATUSES = ('draft', 'scheduled')
@@ -128,6 +130,15 @@ def _load_form(form: MessageForm, message: AdminMessage) -> None:
     form.scheduled_for.data = message.scheduled_for
 
 
+def _preview(message: AdminMessage):
+    """The message with sample values, laid out as a copy from the domain it is sent from: that domain's logo and
+    links (MS6). Sent from each member's home domain, it shows the domain this page is on."""
+    place = domain_storefront(domain_by_id(message.from_domain_id)) if message.from_domain_id is not None \
+        else nullcontext()
+    with place:
+        return compose(message.subject, message.body, MESSAGE_PLACEHOLDERS, sample_values(MESSAGE_PLACEHOLDERS))
+
+
 def _from_domain_name(message: AdminMessage) -> str:
     """Where the page says the message is sent from."""
     if message.from_domain_id is None:
@@ -197,8 +208,7 @@ def _edit_message(message: AdminMessage | None):
     stored = message is not None and message.id is not None
     return render_template('admin/messaging_message.html', title=_('Message'), form=form, message=message,
                            problems=found, placeholders=MESSAGE_PLACEHOLDERS,
-                           preview=compose(message.subject, message.body, MESSAGE_PLACEHOLDERS,
-                                           sample_values(MESSAGE_PLACEHOLDERS)) if stored else None,
+                           preview=_preview(message) if stored else None,
                            count=recipient_count(message) if stored else None,
                            read_only=stored and message.status not in EDITABLE_STATUSES,
                            from_domain=_from_domain_name(message) if stored else None,

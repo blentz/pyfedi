@@ -635,6 +635,52 @@ class TestSendingFrom:
             messaging.mail_one(message, env.admin)
         assert sent[0]['sender'].startswith('Other Site <')
 
+    def logos(self, env):
+        configure(env.default, logo='/static/media/home_100.png')
+        configure(env.other, logo='/static/media/other_100.png')
+        db.session.commit()
+        clear_domain_cache()
+        cache.clear()
+
+    def test_each_copy_carries_its_home_domains_logo_by_default(self, env):
+        self.logos(env)
+        at_home, away = member(env, 'athome'), member(env, 'away', site_domain_id=env.other.id)
+        message = a_message(status='sending')
+        sent = Sent()
+        with patch('app.messaging.messages.send_email', sent):
+            deliver(message.id)
+        assert f'src="https://{DEFAULT_HOST}/static/media/home_100.png"' in sent.to(at_home.email)[0]['html_body']
+        assert 'src="https://other.example/static/media/other_100.png"' in sent.to(away.email)[0]['html_body']
+
+    def test_every_copy_carries_the_picked_domains_logo(self, env):
+        self.logos(env)
+        at_home, away = member(env, 'athome'), member(env, 'away', site_domain_id=env.other.id)
+        message = a_message(status='sending', from_domain_id=env.other.id)
+        sent = Sent()
+        with patch('app.messaging.messages.send_email', sent):
+            deliver(message.id)
+        for user in (at_home, away):
+            html = sent.to(user.email)[0]['html_body']
+            assert 'src="https://other.example/static/media/other_100.png"' in html and 'home_100' not in html
+
+    def test_the_preview_is_laid_out_as_from_the_picked_domain(self, env):
+        self.logos(env)
+        message = a_message(from_domain_id=env.other.id)
+        preview = self.preview(env, message)
+        assert 'other.example/static/media/other_100.png' in preview and 'home_100' not in preview
+
+    def test_the_preview_from_home_domains_is_laid_out_as_this_page_s_domain(self, env):
+        self.logos(env)
+        message = a_message()
+        preview = self.preview(env, message)
+        assert 'static/media/home_100.png' in preview and 'other_100' not in preview
+
+    @staticmethod
+    def preview(env, message) -> str:
+        """The preview frame's document alone: the page round it shows the page's own domain's logo."""
+        (srcdoc,) = re.findall(r'srcdoc="([^"]*)"', text_of(env.client.get(f'/admin/messaging/{message.id}')))
+        return srcdoc
+
     def test_a_deleted_domain_falls_back_to_home_domains(self, env):
         message = a_message(from_domain_id=env.other.id)
         db.session.execute(db.text('DELETE FROM domain_config WHERE site_domain_id = :id'), {'id': env.other.id})

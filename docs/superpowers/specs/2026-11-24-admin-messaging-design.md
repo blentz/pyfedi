@@ -91,8 +91,9 @@ Owner rulings, 2026-11-24.
   changing anything.
 - **D24** `admin_message.from_domain_id` (MS6) is the domain every copy is sent from, or null for each reader's home
   domain (the default, as before). Each copy renders under that domain (`domain_storefront`): the sender's display
-  name and `{site_name}` are its branding's name, and `{site_url}`, the unsubscribe link and Markdown links name its
-  address. The From address stays `MAIL_FROM`, which is one per server. A deleted domain sets it back to null. A copy
+  name and `{site_name}` are its branding's name, the logo is its branding's logo, and `{site_url}`, the unsubscribe
+  link and Markdown links name its address. The page's preview renders under it too; sent from home domains, the
+  preview shows the domain the page is on. The From address stays `MAIL_FROM`, which is one per server. A deleted domain sets it back to null. A copy
   of a message keeps it, and a test to the admin uses it.
 
 ### Subscription expiring (D19-D20)
