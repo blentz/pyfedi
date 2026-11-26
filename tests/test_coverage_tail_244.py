@@ -246,6 +246,11 @@ class TestTranslatingAString:
         monkeypatch.setitem(app.extensions['cache'], cache, SimpleCache())
         return cache
 
+    @pytest.fixture
+    def endpoint(self, app, monkeypatch):
+        monkeypatch.setitem(app.config, 'TRANSLATE_ENDPOINT', 'http://translate.example:5000')
+        return 'http://translate.example:5000/translate'
+
     def test_the_translated_text_is_returned(self, env, real_cache):
         with patch('app.utils.LibreTranslateAPI') as api:
             api.return_value.translate.return_value = 'bonjour'
@@ -260,6 +265,56 @@ class TestTranslatingAString:
         with patch('app.utils.LibreTranslateAPI',
                    side_effect=Exception('the endpoint is down')):
             assert libretranslate_string('hello', 'en', 'fr') == ''
+
+    def test_a_rejected_request_is_one_error_line_without_a_traceback(self, env, real_cache, endpoint, http_mock, caplog):
+        """LibreTranslate answers 400 for a language pair it has no model for. That is its
+        answer, not a bug here: one error line with its reason, no traceback."""
+        http_mock.post(endpoint).respond(
+            400, json={'error': 'zz is not supported'})
+
+        assert libretranslate_string('hello', 'zz', 'en') == ''
+
+        record, = [r for r in caplog.records if r.name == env.app.logger.name]
+        assert record.levelname == 'ERROR'
+        assert record.exc_info is None
+        assert '400' in record.getMessage()
+        assert 'zz is not supported' in record.getMessage()
+        assert 'zz->en' in record.getMessage()
+
+    def test_a_non_json_rejection_logs_its_body_shortened(self, env, real_cache, endpoint, http_mock, caplog):
+        http_mock.post(endpoint).respond(
+            502, text='Bad Gateway' + 'x' * 1000)
+
+        assert libretranslate_string('hello', 'en', 'fr') == ''
+
+        record, = [r for r in caplog.records if r.name == env.app.logger.name]
+        assert record.exc_info is None
+        assert '502' in record.getMessage() and 'Bad Gateway' in record.getMessage()
+        assert len(record.getMessage()) < 400
+
+    def test_a_json_rejection_that_is_not_an_object_logs_its_body(self, env, real_cache, endpoint, http_mock,
+                                                                 caplog):
+        """A proxy in front of LibreTranslate may answer with any JSON; reading its reason must not raise
+        out of the except block."""
+        http_mock.post(endpoint).respond(400, json=['unexpected'])
+
+        assert libretranslate_string('hello', 'en', 'fr') == ''
+
+        record, = [r for r in caplog.records if r.name == env.app.logger.name]
+        assert record.exc_info is None
+        assert 'unexpected' in record.getMessage()
+
+    def test_an_unreachable_endpoint_is_one_error_line_without_a_traceback(self, env, real_cache, endpoint,
+                                                                          http_mock, caplog):
+        http_mock.post(endpoint).mock(
+            side_effect=httpx.ConnectError('connection refused'))
+
+        assert libretranslate_string('hello', 'en', 'fr') == ''
+
+        record, = [r for r in caplog.records if r.name == env.app.logger.name]
+        assert record.levelname == 'ERROR'
+        assert record.exc_info is None
+        assert 'connection refused' in record.getMessage()
 
     def test_the_answer_is_cached_per_string_and_language_pair(self, env, real_cache):
         """`@cache.memoize`. A translation is an outbound request per string, so the

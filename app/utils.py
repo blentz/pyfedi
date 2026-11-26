@@ -7915,6 +7915,19 @@ def libretranslate_string(text: str, source: str, target: str):
     try:
         lt = LibreTranslateAPI(current_app.config['TRANSLATE_ENDPOINT'], api_key=current_app.config['TRANSLATE_KEY'])
         return lt.translate(text, source=source, target=target)
+    except httpx.HTTPStatusError as e:
+        # LibreTranslate refusing a request (e.g. 400 for a language pair it has no model for) is its answer, not a
+        # bug here: one line with its reason, no traceback.
+        try:
+            body = e.response.json()
+        except ValueError:
+            body = None
+        reason = str((body.get('error') if isinstance(body, dict) else None) or e.response.text)[:200]
+        current_app.logger.error(f'LibreTranslate {source}->{target} failed: HTTP {e.response.status_code}: {reason}')
+        return ''
+    except httpx.RequestError as e:
+        current_app.logger.error(f'LibreTranslate {source}->{target} failed: {type(e).__name__}: {e}')
+        return ''
     except Exception as e:
         current_app.logger.exception(str(e))
         return ''
