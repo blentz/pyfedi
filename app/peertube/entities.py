@@ -15,6 +15,7 @@ from app import db
 from app.constants import POST_TYPE_VIDEO
 from app.mastodon.entities import timestamp
 from app.mastodon.timelines import readable
+import app.profile_privacy as profile_privacy
 from app.models import (HLS_SETTING, Community, CommunityMember, Language, Post, User, hls_master, hls_of, media_of,
                         rendition_name, renditions_of)
 from app.storefront import current_storefront, domain_base_url, storefront_link
@@ -212,7 +213,8 @@ def account(user: User) -> dict:
     return {'id': user.id, 'name': user.user_name, 'host': _host(user.lemmy_link()),
             'displayName': user.display_name(), 'url': _absolute(user.public_url()),
             'avatars': _avatars(user.avatar_image(), user.created), 'description': user.about or '',
-            'followersCount': user.num_followers or 0, 'followingCount': user.num_following or 0,
+            # 0 when the person discloses none of their followers (spec 2026-11-26-profile-privacy)
+            'followersCount': profile_privacy.follower_count_shown(user, viewer_id(), user.num_followers or 0), 'followingCount': user.num_following or 0,
             'createdAt': _when(user.created), 'updatedAt': _when(user.created)}
 
 

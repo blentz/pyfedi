@@ -47,7 +47,9 @@ def get_account(handle):
 @signed_in(optional=True)
 def account_videos(handle):
     person = find_person(handle)
-    return videos(Listing(sort='', person_id=person.id, ignore_sticky=True)) if person is not None else not_found()
+    # a person's videos as their profile shows them (spec 2026-11-26-profile-privacy)
+    return videos(Listing(sort='', person_id=person.id, ignore_sticky=True, profile_privacy=True)) \
+        if person is not None else not_found()
 
 
 @bp.route('/api/v1/users/me/videos')

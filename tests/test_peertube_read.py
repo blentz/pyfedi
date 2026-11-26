@@ -262,11 +262,26 @@ def test_a_deleted_reply_is_left_out(world):
 
 def test_a_person_is_an_account_listing_their_videos(world):
     upload = _upload(world)
+    world['author'].profile_community_posts = True   # a community video, which the author shows (spec 2026-11-26)
+    db.session.commit()
     account = _get(world, '/api/v1/accounts/ptauthor').get_json()
     assert account['name'] == 'ptauthor' and account['displayName'] and account['host']
     assert _listed(_get(world, '/api/v1/accounts/ptauthor/videos'), [upload]) == [upload.id]
     host = account['host']
     assert _get(world, f'/api/v1/accounts/ptauthor@{host}').get_json()['id'] == world['author'].id
+
+
+def test_an_accounts_videos_follow_its_profile_settings(world):
+    """Profile privacy (spec 2026-11-26-profile-privacy): community videos only when the person shows them."""
+    upload = _upload(world)
+    assert _listed(_get(world, '/api/v1/accounts/ptauthor/videos'), [upload]) == []
+
+
+@pytest.mark.parametrize('setting, count', [('list', 4), ('count', 4), ('none', 0)])
+def test_an_accounts_followers_count_follows_its_profile_settings(world, setting, count):
+    world['author'].num_followers, world['author'].profile_followers = 4, setting
+    db.session.commit()
+    assert _get(world, '/api/v1/accounts/ptauthor').get_json()['followersCount'] == count
 
 
 def test_a_numeric_account_is_still_mastodons(world):
