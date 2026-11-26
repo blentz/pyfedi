@@ -10,7 +10,7 @@ from app.payments.core import end_subscriptions_of
 from app.activitypub.signature import signed_get_request, send_post_request
 from app.activitypub.util import actor_json_to_model, canonical_handle, find_actor_or_create, is_user_actor, \
     webfinger_self_link_allowed
-from app.constants import AP_FETCH_ACCEPT, POST_STATUS_REVIEWING
+from app.constants import AP_FETCH_ACCEPT, COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING
 from app.federation_urls import MissingInstanceKey, activity_id, instance_actor_signing
 from app.local_names import default_domain_user, local_named, split_local_name
 from app.mentions import stored_user, user_address_parts
@@ -28,6 +28,7 @@ from app.visibility import visible_to_clause, visible_to_sql
 from app.permissions import user_access
 import httpx
 import app as app_pkg
+import app.profile_privacy as profile_privacy
 
 
 def user_for_actor(actor: str, allow_banned: bool = False) -> User | None:
@@ -290,6 +291,9 @@ def _get_user_posts(user, post_page):
         query = base_query.filter(Post.deleted == False, Post.status > POST_STATUS_REVIEWING,
                                   _outside_private_communities(Post, viewer_id)).order_by(desc(Post.posted_at))
     
+    if (hidden := profile_privacy.hidden_posts_clause(user, viewer_id)) is not None:
+        query = query.filter(hidden)   # community posts only when the person shows them (spec 2026-11-26)
+
     # Get all post IDs (capped at 1000)
     all_post_ids = query.with_entities(Post.id).limit(1000).all()
     all_post_ids = [pid[0] for pid in all_post_ids]
@@ -329,6 +333,9 @@ def _get_user_post_replies(user, replies_page):
         query = base_query.filter(PostReply.deleted == False,
                                   _outside_private_communities(PostReply, viewer_id)).order_by(desc(PostReply.posted_at))
     
+    if (hidden := profile_privacy.hidden_replies_clause(user, viewer_id)) is not None:
+        query = query.filter(hidden)   # comments only when the person shows them (spec 2026-11-26)
+
     # Get all reply IDs (capped at 1000)
     all_reply_ids = query.with_entities(PostReply.id).limit(1000).all()
     all_reply_ids = [rid[0] for rid in all_reply_ids]
@@ -386,9 +393,15 @@ def _get_user_posts_and_replies(user, page):
     reply_select += f" AND {visible_to_sql('post_reply', reply=True)}"
     post_select += f" AND NOT {hidden_here_sql('post', Post)}"   # spec §3.4, follow-up F6
     reply_select += f" AND NOT {hidden_here_sql('post_reply', PostReply)}"
+    # what the person shows on their profile (spec 2026-11-26-profile-privacy)
+    if not profile_privacy.shows_community_posts(user, viewer_id):
+        post_select += " AND community_id IN (SELECT id FROM community WHERE kind = :microblogs_kind AND ap_id IS NULL)"
+    if not profile_privacy.shows_comments(user, viewer_id):
+        reply_select += " AND FALSE"
 
     full_query = post_select + " UNION " + reply_select + f" ORDER BY posted_at DESC LIMIT {per_page + 1} OFFSET {offset_val};"
-    query_result = db.session.execute(text(full_query), {'visibility_viewer_id': viewer_id})
+    query_result = db.session.execute(text(full_query), {'visibility_viewer_id': viewer_id,
+                                                         'microblogs_kind': COMMUNITY_KIND_MICROBLOGS})
 
     for row in query_result:
         if row.type == "post":      # the query selects these two literals and

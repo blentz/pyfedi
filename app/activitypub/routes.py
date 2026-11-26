@@ -51,6 +51,7 @@ import app.chat.util as chat_util
 from app.chat import membership
 import app.community.live as community_live
 import app.microblog_feed as microblog_feed
+import app.profile_privacy as profile_privacy
 import app.community.routes as community_routes
 import app.plain_names as plain_names
 from app.community.util import send_to_remote_instance, send_to_remote_instance_fast
@@ -698,11 +699,15 @@ def local_actor_user(actor: str) -> User:
     abort(410 if gone is not None and not user_local_only(gone) and not owned_elsewhere(gone) else 404)
 
 
-def count_only_collection(collection_id: str, total: int):
+def count_only_collection(collection_id: str, total: int | None):
     """A user's followers or following collection (interop C1 item 6, owner ruling): the real count and no items, as
-    D175 serves a community's followers, so no follower or followed account is disclosed."""
-    resp = jsonify({"@context": default_context(), "type": "OrderedCollection", "id": collection_id,
-                    "totalItems": total, "orderedItems": []})
+    D175 serves a community's followers, so no follower or followed account is disclosed. A `total` of None leaves
+    the count out too: a person who discloses none of their followers (spec 2026-11-26-profile-privacy)."""
+    collection = {"@context": default_context(), "type": "OrderedCollection", "id": collection_id,
+                  "orderedItems": []}
+    if total is not None:
+        collection["totalItems"] = total
+    resp = jsonify(collection)
     resp.content_type = ap_media_type()
     resp.headers.set('Cache-Control', AP_CACHE_COLLECTION)
     resp.headers.set('Vary', 'Accept')
@@ -2770,7 +2775,9 @@ def user_followers(actor):
     if not is_activitypub_request():
         return redirect(url_for('activitypub.user_profile', actor=actor))
     user = local_actor_user(actor)
-    return count_only_collection(user.followers_url(), user_followers_count(user.id))
+    # another server is no viewer the settings exempt
+    hidden = profile_privacy.followers_shown(user, None) == profile_privacy.FOLLOWERS_NONE
+    return count_only_collection(user.followers_url(), None if hidden else user_followers_count(user.id))
 
 
 @bp.route('/u/<actor>/following', methods=['GET'])

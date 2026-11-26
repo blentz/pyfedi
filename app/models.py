@@ -2461,6 +2461,11 @@ class User(UserMixin, db.Model):
     microblog_feed = db.Column(db.String(16), nullable=False, default='microblog', server_default='microblog')
     # A new microblog post is private (local_only: not federated) unless the author says otherwise (spec 2026-11-22)
     microblogs_private = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    # What other people see on this user's profile (app.profile_privacy, spec 2026-11-26): microblog posts always,
+    # community posts and comments only when opted in, and their followers as a list, a count or not at all
+    profile_community_posts = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    profile_comments = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    profile_followers = db.Column(db.String(8), nullable=False, default='list', server_default='list')
     # The sidebars' boxes as this user arranged them, NULL for the domain's order (app/sidebar.py)
     home_sidebar = db.Column(db.Text)
     community_sidebar = db.Column(db.Text)

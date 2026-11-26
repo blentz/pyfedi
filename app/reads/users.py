@@ -20,6 +20,8 @@ from app.constants import POST_STATUS_REVIEWING
 from app.local_only import hidden_here, hidden_here_clause, hides_nothing, one_here, without_local_only_actors
 from app.models import Community, CommunityMember, Post, PostReply, User
 from app.permissions import user_access
+from app.microblog_feed import microblog_community_ids
+import app.profile_privacy as profile_privacy
 from app.reads.viewer import Restrictions
 from app.storefront import current_instance_id, current_storefront, domain_for_host, on_domain
 from app.visibility import visible_to_clause
@@ -162,7 +164,9 @@ def listable_counts(people, viewer_id: int | None) -> dict[int, tuple]:
     are not a member of (app/reads/posts.py `_visible`, app/reads/replies.py `_without_unjoined_private`), visible to
     them (`visible_to_clause`: followers-only to followers) and not hidden here (`hidden_here_clause`: local-only from
     a logged-out viewer). The viewer's own preferences (blocks, languages, NSFW) are not counted out: a count is not a
-    listing. One statement for all of `people`, whatever their number (a person list's page among them)."""
+    listing. A local person's profile settings (app.profile_privacy) count out what their profile does not show the
+    viewer: community posts and comments unless they show them. One statement for all of `people`, whatever their
+    number (a person list's page among them)."""
     counts = {person.id: (person.post_count, person.post_reply_count)
               for person in people if sees_all_of(person, viewer_id)}
     others = [person.id for person in people if person.id not in counts]
@@ -170,6 +174,11 @@ def listable_counts(people, viewer_id: int | None) -> dict[int, tuple]:
         return counts
     signed_in = viewer_id is not None
     member_of = Restrictions(viewer_id).private_community_ids
+    unbound = [person.id for person in people if person.id in others and profile_privacy.exempt(person, viewer_id)]
+
+    def shown(*opted_in):
+        """The person is remote, exempts the viewer, or opted in (spec 2026-11-26-profile-privacy)."""
+        return or_(User.ap_id.isnot(None), User.id.in_(unbound), *opted_in)
 
     def listable(model, *published):
         open_or_joined = Community.private == False
@@ -182,7 +191,10 @@ def listable_counts(people, viewer_id: int | None) -> dict[int, tuple]:
             *clauses).scalar_subquery()
 
     rows = db.session.execute(select(User.id, listable(Post, Post.deleted == False,
-                                                       Post.status > POST_STATUS_REVIEWING),
-                                     listable(PostReply, PostReply.deleted == False)).where(User.id.in_(others)))
+                                                       Post.status > POST_STATUS_REVIEWING,
+                                                       shown(User.profile_community_posts,
+                                                             Post.community_id.in_(microblog_community_ids()))),
+                                     listable(PostReply, PostReply.deleted == False,
+                                              shown(User.profile_comments))).where(User.id.in_(others)))
     counts.update({row[0]: (row[1], row[2]) for row in rows})
     return counts

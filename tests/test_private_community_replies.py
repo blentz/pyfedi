@@ -36,6 +36,7 @@ def world(app, api_baseline):
     private.private = True
     public = make_community('townsquare')
     author = make_user(api_baseline.instance_local, 'insider', local=True)
+    author.profile_community_posts = author.profile_comments = True   # shows everything on its profile (spec 2026-11-26-profile-privacy)
     reader = make_user(api_baseline.instance_local, 'outsider', local=True)
     make_community_member(author, private)
     make_community_member(author, public)

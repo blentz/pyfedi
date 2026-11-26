@@ -85,6 +85,15 @@ class SettingsForm(FlaskForm):
     indexable = BooleanField(_l('My posts appear in search results'))
     hide_read_posts = BooleanField(_l('Do not display posts with which I have already interacted (opened/upvoted/downvoted)'))
     show_subscribed_communities = BooleanField(_l("Show communities I've joined on my profile"))
+    # spec 2026-11-26-profile-privacy: microblog posts are always shown, the rest only when opted in
+    profile_community_posts = BooleanField(_l('Show my posts in communities on my profile'))
+    profile_comments = BooleanField(_l('Show my comments on my profile'))
+    profile_followers_choices = [('list', _l('Show who follows me')),
+                                 ('count', _l('Show only how many follow me')),
+                                 ('none', _l("Don't show my followers")),
+                                 ]
+    profile_followers = SelectField(_l('My followers'), choices=select_choices(profile_followers_choices),
+                                    validators=[DataRequired()], coerce=str, render_kw={'class': 'form-select'})
     manually_approves_followers = BooleanField(_l('Manually approve followers'))
     federate_votes = BooleanField(_l('Federate votes'))
     microblog_feeds = [('microblog', _l('Microblog posts only')),

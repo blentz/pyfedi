@@ -112,7 +112,8 @@ def get_post_list(auth, data, user_id=None, search_type='Posts') -> dict:
     listing = reads_posts.Listing(type=type, sort=sort, community_id=community_id, community_name=community_name,
                       feed_id=feed_id, topic_id=topic_id, person_id=person_id, liked_only=liked_only,
                       saved_only=saved_only, ignore_sticky=ignore_sticky, minimum_upvotes=minimum_upvotes,
-                      nsfw=nsfw, query=query, search_type=search_type)
+                      nsfw=nsfw, query=query, search_type=search_type,
+                      profile_privacy=True)   # a person's posts as their profile shows them (spec 2026-11-26)
     named_community = None
     if community_name:
         if '@' not in community_name:
@@ -411,7 +412,8 @@ def get_post_list2(auth, data, user_id=None, search_type='Posts') -> dict:
     listing = reads_posts.Listing(type=type, sort=sort, community_id=community_id, community_name=community_name,
                       feed_id=feed_id, topic_id=topic_id, person_id=person_id, liked_only=liked_only,
                       saved_only=saved_only, ignore_sticky=ignore_sticky, minimum_upvotes=minimum_upvotes,
-                      nsfw=nsfw, query=query, search_type=search_type)
+                      nsfw=nsfw, query=query, search_type=search_type,
+                      profile_privacy=True)   # a person's posts as their profile shows them (spec 2026-11-26)
     named_community = None
     if community_name:
         if '@' not in community_name:

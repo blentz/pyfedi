@@ -83,6 +83,7 @@ def settings_payload(token, **overrides):
             'page_length': '20', 'compaction': '',
             'max_hours_per_day': '', 'max_hours_change_restriction': 'anytime',
             'accept_private_messages': '3', 'microblog_feed': 'microblog', 'microblog_privacy': 'public',
+            'profile_followers': 'list',
             'submit': 'Save',
             'csrf_token': token}
     data.update(overrides)

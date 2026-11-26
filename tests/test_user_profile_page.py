@@ -51,6 +51,8 @@ def env(app, db_session):
     db.session.commit()
     for user in (viewer, subject):
         user.ap_profile_id = f'https://test.piefed.local/u/{user.user_name}'
+    # the profile's other rules, for a subject who shows everything (spec 2026-11-26-profile-privacy)
+    subject.profile_community_posts = subject.profile_comments = True
     db.session.commit()
     return as_user(app, viewer), viewer, subject
 

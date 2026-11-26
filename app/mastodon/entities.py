@@ -3,6 +3,7 @@ app decodes are always there; Tusky's decoder, the strictest, fails a whole page
 from flask import has_request_context, request
 
 from app.models import User
+import app.profile_privacy as profile_privacy
 from app.reads.users import listable_counts
 from app.storefront import current_storefront, domain_base_url
 
@@ -43,15 +44,18 @@ def account(user: User, viewer_id: int | None, with_source: bool = False, counts
         'discoverable': bool(user.searchable), 'indexable': bool(user.indexable), 'group': False,
         'created_at': timestamp(user.created), 'note': user.about_html or '', 'url': user.public_url(),
         'uri': user.profile_id(), 'avatar': avatar, 'avatar_static': avatar, 'header': header,
-        'header_static': header, 'followers_count': user.num_followers or 0,
+        'header_static': header,
+        'followers_count': profile_privacy.follower_count_shown(user, viewer_id, user.num_followers or 0),
         'following_count': user.num_following or 0, 'statuses_count': (posts or 0) + (comments or 0),
-        'last_status_at': None, 'hide_collections': False, 'noindex': not user.indexable, 'emojis': [],
+        'last_status_at': None, 'noindex': not user.indexable, 'emojis': [],
+        # unless the person lists their followers (spec 2026-11-26-profile-privacy)
+        'hide_collections': profile_privacy.followers_of(user) != profile_privacy.FOLLOWERS_LIST,
         'roles': [], 'fields': _fields(user),
     }
     if with_source:
         entity['source'] = {'privacy': 'public', 'sensitive': False, 'language': None, 'note': user.about or '',
                             'fields': _fields(user), 'follow_requests_count': 0,
-                            'hide_collections': False, 'discoverable': bool(user.searchable),
+                            'hide_collections': entity['hide_collections'], 'discoverable': bool(user.searchable),
                             'indexable': bool(user.indexable)}
     if has_request_context() and request.args.get('_pe') == '1':
         # Pixelfed's extended account: its app badges one "Remote" unless it is `local`

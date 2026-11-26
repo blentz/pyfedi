@@ -46,6 +46,7 @@ def world(app, db_session, monkeypatch):
     # a PUBLIC reply, by a local follower, under the followers-only post
     w.open_reply = make_post_reply(w.post, w.follower, PUBLIC_REPLY)
     w.open_reply.ap_id = 'https://m.example/r/77'
+    w.follower.profile_comments = True   # its profile shows its comments (spec 2026-11-26-profile-privacy)
     db.session.commit()
     return w
 

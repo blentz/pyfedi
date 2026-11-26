@@ -15,7 +15,8 @@ from datetime import timedelta
 from sqlalchemy import and_, asc, desc, exists, or_, text
 
 from app import db
-from app.constants import POST_STATUS_REVIEWING, POST_TYPE_EVENT, POST_TYPE_POLL
+from app.constants import COMMUNITY_KIND_MICROBLOGS, POST_STATUS_REVIEWING, POST_TYPE_EVENT, POST_TYPE_POLL
+import app.profile_privacy as profile_privacy
 # The modules, not the names: each reaches this file through app.activitypub before its function is defined (import
 # cycles: feed.routes, topic.routes), as in app/api/alpha/utils/post.py
 import app.feed.routes as feed_routes
@@ -53,6 +54,7 @@ class Listing:
     nsfw: str = ''
     query: str = ''
     search_type: str = 'Posts'
+    profile_privacy: bool = False   # `person_id`'s profile settings bind the viewer (spec 2026-11-26-profile-privacy)
 
 
 @dataclass(frozen=True)
@@ -152,6 +154,8 @@ def post_listing(user: User | None, restrictions: Restrictions, listing: Listing
     user_id = user.id if user else None
     signed_in = user_id is not None
     content_filters, by_author = _scope(b, user_id, restrictions, listing, named_community)
+    if listing.profile_privacy and listing.person_id:
+        _profile_privacy(b, listing.person_id, user_id)
     profile_listing = by_author or bool(user and (listing.liked_only or listing.saved_only))
     _visible(b, user_id, signed_in, restrictions, profile_listing)
     if listing.query:
@@ -269,6 +273,16 @@ def _scope(b: _Builder, user_id, restrictions: Restrictions, listing: Listing, n
         b.sql('show_all is true')
         content_filters = user_filters_home(user_id) if user_id else {}
     return content_filters, profile_listing
+
+
+def _profile_privacy(b: _Builder, person_id: int, user_id):
+    """Leave out the posts of `person_id` that their profile does not show the viewer: a filter on that author alone,
+    so it holds whichever scope the listing has, and on the raw-SQL path too."""
+    person = db.session.get(User, person_id)
+    if person is not None and (hidden := profile_privacy.hidden_posts_clause(person, user_id)) is not None:
+        b.where(hidden, '(p.user_id != :profile_person_id OR p.community_id IN (SELECT id FROM community WHERE '
+                        'kind = :profile_microblogs_kind AND ap_id IS NULL))',
+                profile_person_id=person_id, profile_microblogs_kind=COMMUNITY_KIND_MICROBLOGS)
 
 
 def _feed_community_ids(feed_id: int, user_id) -> list[int]:

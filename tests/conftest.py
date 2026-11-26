@@ -1049,6 +1049,8 @@ def api_baseline(app, db_session):
     - PostReply on post1, authored by user2: ``.reply1`` (plain, undeleted).
     - Pre-existing NotificationSubscription rows for user1: community2
       (NOTIF_COMMUNITY), post2 (NOTIF_POST), user2 (NOTIF_USER).
+    - Every local user shows their community posts and comments on their
+      profile (``profile_community_posts``, ``profile_comments``).
     - CommunityBan: user1 banned from community3 (deliberately not
       community1/2, so it does not interfere with the membership/subscription
       rows above).
@@ -1088,6 +1090,10 @@ def api_baseline(app, db_session):
     user4 = make_user(instance_local, 'user4', local=True)
     banned_user = make_user(instance_local, 'banneduser', local=True)
     banned_user.banned = True
+    # The person listings these tests were written for show every post and comment: the baseline's people show
+    # them on their profiles (spec 2026-11-26-profile-privacy; its defaults are tests/test_profile_privacy.py's)
+    for user in (user1, user2, user3, user4, banned_user):
+        user.profile_community_posts = user.profile_comments = True
     db.session.commit()
 
     def remote_community(name, post_count, banned=False):

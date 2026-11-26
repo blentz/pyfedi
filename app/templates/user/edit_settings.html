@@ -30,6 +30,10 @@
             {{ render_field(form.indexable) }}
             {{ render_field(form.hide_read_posts) }}
             {{ render_field(form.show_subscribed_communities) }}
+            {{ render_field(form.profile_community_posts) }}
+            {{ render_field(form.profile_comments) }}
+            <small class="field_hint">{{ _('Your microblog posts are always on your profile. Your posts in communities and your comments are shown there only if you tick these. You and the admins always see everything.') }}</small>
+            {{ render_field(form.profile_followers) }}
             {{ render_field(form.manually_approves_followers) }}
             <hr>
             <h5>{{ _('User interface') }}</h5>

@@ -106,6 +106,7 @@ def test_a_warning_is_escaped_in_the_feed(seeded):
 def _feed_author(alice):
     """The profile feed finds a local account by its profile id (as tests/test_user_profile_feed.py's author)."""
     alice.ap_profile_id = f'https://test.piefed.local/u/{alice.user_name}'
+    alice.profile_community_posts = True   # the feed carries community posts (spec 2026-11-26-profile-privacy)
     db.session.commit()
 
 

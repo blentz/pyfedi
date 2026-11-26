@@ -14,6 +14,7 @@ def world(app, api_baseline, monkeypatch):
     monkeypatch.setitem(app.config, 'ENABLE_ALPHA_API', 'true')
     cache.clear()
     person, author = make_user(None, 'lemmyreader', local=True), make_user(None, 'lemmywriter', local=True)
+    author.profile_community_posts = author.profile_comments = True   # shows everything on its profile (spec 2026-11-26-profile-privacy)
     community = make_community('lemmyreads')
     community.title = 'Lemmy reads'
     make_community_member(author, community, is_moderator=True)

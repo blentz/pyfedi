@@ -31,6 +31,7 @@ def world(app, api_baseline):
     public = make_community('openmods')
     db.session.commit()
     mod = make_user(api_baseline.instance_local, 'quietmod', local=True)
+    mod.profile_community_posts = mod.profile_comments = True   # shows everything on its profile (spec 2026-11-26-profile-privacy)
     make_community_member(mod, hush, is_moderator=True)
     make_community_member(mod, public, is_moderator=True)
     post = make_post(hush, mod, 'https://test.piefed.local/post/hush1', title='in hush')

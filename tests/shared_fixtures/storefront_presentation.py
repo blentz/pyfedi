@@ -36,6 +36,8 @@ def storefront_presentation_world(app, storefront_presentation_onion):
     author = make_user(local, 'author', local=True)
     author.ap_profile_id = f'https://{CANONICAL}/u/author'
     author.ap_public_url = f'https://{CANONICAL}/u/author'
+    # their profiles show every post and comment, as these tests were written for (spec 2026-11-26-profile-privacy)
+    author.profile_community_posts = author.profile_comments = True
     community = make_community('general')
     make_community_member(author, community)
     image = File(file_path=MEDIA, thumbnail_path=THUMB, source_url=f'https://{CANONICAL}/static/media/posts/ab/cd/'

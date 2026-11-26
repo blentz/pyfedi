@@ -32,6 +32,8 @@ def local_only_invisible_world(app, db_session):
     onionite.ap_profile_id = onionite.ap_public_url = 'http://abc.onion/u/onionite'
     for user in (alice, bob, onionite):
         user.last_seen = utcnow()
+        # their profiles show every post and comment, as these tests were written for (spec 2026-11-26-profile-privacy)
+        user.profile_community_posts = user.profile_comments = True
     clearnet = make_community('clearnet', host=app.config['SERVER_NAME'])
     hidden = make_community('hidden', host='abc.onion')
     clearnet.user_id = hidden.user_id = alice.id

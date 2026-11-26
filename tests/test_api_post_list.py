@@ -88,6 +88,7 @@ def env(app, api_baseline):
     # two posts, and a `person_id` listing ignores `show_all`, so sharing the
     # account would put those posts into every by-person count here.
     author = make_user(api_baseline.instance_local, 'writer', local=True)
+    author.profile_community_posts = author.profile_comments = True   # shows everything on its profile (spec 2026-11-26-profile-privacy)
     make_community_member(author, community)
     posts = []
     from datetime import timedelta

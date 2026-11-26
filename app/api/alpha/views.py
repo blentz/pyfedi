@@ -39,6 +39,7 @@ from app.visibility import can_view, visible_to_sql
 
 from app.permissions import user_access
 import app.reads.users as reads_users   # the module, looked up when called, as app/api/alpha/utils/user.py does
+import app.profile_privacy as profile_privacy
 # 'stub' param: set to True to exclude optional fields
 
 
@@ -544,10 +545,8 @@ def user_view(user: User | int, variant, stub=False, user_id=None, flair_communi
         else:
             counts["following_count"] = 0
 
-        if user.num_followers:
-            counts["follower_count"] = user.num_followers
-        else:
-            counts["follower_count"] = 0
+        # 0 when the person discloses none of their followers (spec 2026-11-26-profile-privacy)
+        counts["follower_count"] = profile_privacy.follower_count_shown(user, user_id, user.num_followers or 0)
         
         user_sub = False
         if user_id and user_id != user.id:

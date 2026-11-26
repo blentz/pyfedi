@@ -65,6 +65,8 @@ def env(app, db_session):
     assert founder.id == 1  # fact 347
     author = make_user(local, 'author', local=True)
     author.ap_profile_id = 'https://test.piefed.local/u/author'
+    # the feed's rules for community posts, which the author shows (spec 2026-11-26-profile-privacy)
+    author.profile_community_posts = True
     db.session.commit()
     community = make_community('general')
     db.session.commit()

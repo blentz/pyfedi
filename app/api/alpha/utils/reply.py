@@ -49,7 +49,8 @@ def get_reply_list(auth, data, user_details=None):
         liked_only=liked_only, saved_only=saved_only, person_id=person_id, community_id=community_id,
         post_id=optional_int('post_id'), parent_id=optional_int('parent_id'),
         max_depth=optional_int('max_depth'), depth_first=bool('depth_first' in data and data['depth_first']),
-        page=page, limit=limit)
+        page=page, limit=limit,
+        profile_privacy=True)   # a person's comments as their profile shows them (spec 2026-11-26)
     # the viewer's blocks, but not on their own profile listing
     restrictions = Restrictions(user_id) if user_id and (person_id is None or user_id != person_id) \
         else Restrictions.none()

@@ -160,8 +160,9 @@
             {{ _('Joined') }}: {{ localize_datetime(user.created, locale) }}<br />
             {% if current_user.is_authenticated %}{{ _('Attitude') }}: <span title="{{ _('Ratio of upvotes cast to downvotes cast. Higher is more positive.') }}">{% if user.attitude %}{{ (user.attitude * 100) | round | int }}%{% endif %}</span><br />{% endif %}
             {% if user_access('administer all users', current_user.get_id(), on=user) and user.reputation %}{{ _('Reputation') }}: <span title="{{ _('Reputation: The Karma of the account. Total up votes minus down votes they got.') }}">{{ user.reputation | round | int }}</span><br />{% endif %}
-            {{ _('Posts') }}: {{ user.post_count }}<br />
-            {{ _('Comments') }}: {{ user.post_reply_count }}<br />
+            {{ _('Posts') }}: {{ profile_post_count }}<br />
+            {% if shows_comments %}{{ _('Comments') }}: {{ profile_comment_count }}<br />{% endif %}
+            {% if followers_count is not none %}{{ _('Followers') }}: {{ followers_count }}<br />{% endif %}
             {% if vote_quota_used -%}
             {{ _('Vote quota used') }} <progress value="{{ vote_quota_used | round(precision=2) }}"></progress><br />
             {% endif -%}
@@ -202,9 +203,11 @@
           <li class="nav-item">
             <a href="#post_list_tab" class="nav-link {{ 'active' if post_prev_url is not none or show_posts_tab }}" id="post-pill" data-bs-toggle="pill" role="tab" aria-current="page">{{ _('Posts') }}</a>
           </li>
+          {% if shows_comments %}
           <li class="nav-item">
             <a href="#comments_tab" class="nav-link {{ 'active' if replies_prev_url is not none }}" id="comments-pill" data-bs-toggle="pill" role="tab">{{ _('Comments') }}</a>
           </li>
+          {% endif %}
           {% if len(following) %}
               <li class="nav-item">
                 <a href="#following_tab" class="nav-link" id="following-pill" data-bs-toggle="pill" role="tab">{{ _('Following') }} ({{ len(following) }})</a>
@@ -288,7 +291,7 @@
             </div>
           {% endif %}
 
-          {% if post_replies %}
+          {% if post_replies and shows_comments %}
             <div class="tab-pane border-0 {{ 'active' if replies_prev_url is not none }}" id="comments_tab" role="tabpanel" aria-labelled-by="comments-pill">
               <h4 class="mt-2" id="comments">{{ _('Comments by %(user_name)s', user_name=user.display_name() if user.is_local()  else user.display_name() + ', ' + user.ap_id) }}</h4>
               <div class="post_list comments">
@@ -311,7 +314,7 @@
                       {% endif %}
               </nav>
             </div>
-          {% else %}
+          {% elif shows_comments %}
             <div class="tab-pane border-0 {{ 'active' if replies_prev_url is not none }}" id="comments_tab" role="tabpanel" aria-labelled-by="comments-pill">
               <p>{{ _('No comments yet.') }}</p>
             </div>

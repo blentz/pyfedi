@@ -61,6 +61,7 @@ def seeded(app, db_session):
     author.ap_profile_id = f'https://{HOST}/u/author'
     author.ap_public_url = f'https://{HOST}/u/author'
     author.ap_domain = HOST
+    author.profile_community_posts = True   # the feed carries community posts (spec 2026-11-26-profile-privacy)
     community = make_community('general')
     community.private = False
     post = make_post(community, author, f'https://{HOST}/p/1', title=SECRET)

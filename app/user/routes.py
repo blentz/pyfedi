@@ -46,6 +46,8 @@ from app.shared.upload import is_refused_upload, process_file_delete, process_up
 # The module, not the names: app.shared.user reaches this file through a blueprint
 # package before they are defined (import cycle: app.shared.user)
 import app.shared.user as shared_user
+import app.profile_privacy as profile_privacy
+import app.reads.users as reads_users
 from app.user import bp
 from app.user.forms import ProfileForm, SettingsForm, DeleteAccountForm, ReportUserForm, \
     FilterForm, KeywordFilterEditForm, RemoteFollowForm, ImportExportForm, UserNoteForm, BanUserForm, DeleteFileForm, \
@@ -199,6 +201,18 @@ def show_profile(user):
         filter(UserFollower.local_user_id == user.id, UserFollower.is_inward == False, UserFollower.is_accepted == True).all()
     followers = User.query.filter(User.banned == False).join(UserFollower, UserFollower.remote_user_id == User.id). \
         filter(UserFollower.local_user_id == user.id, UserFollower.is_inward == True, UserFollower.is_accepted == True).all()
+    # what the person discloses of their followers, and how many posts and comments the viewer is told of
+    # (spec 2026-11-26-profile-privacy)
+    viewer_id = current_user.get_id()
+    followers_shown = profile_privacy.followers_shown(user, viewer_id)
+    followers_count = len(followers) if followers_shown == profile_privacy.FOLLOWERS_COUNT else None
+    if followers_shown != profile_privacy.FOLLOWERS_LIST:
+        followers = []
+    shows_comments = profile_privacy.shows_comments(user, viewer_id)
+    if profile_privacy.shows_community_posts(user, viewer_id) and shows_comments:
+        profile_post_count, profile_comment_count = user.post_count, user.post_reply_count
+    else:
+        profile_post_count, profile_comment_count = reads_users.listable_counts([user], viewer_id)[user.id]
 
     bot_challenge = BotChallenge.query.filter(BotChallenge.user_id == user.id).first()
 
@@ -278,7 +292,9 @@ def show_profile(user):
                            overview_prev_url=overview_prev_url, same_ip_address=same_ip_address,
                            same_user_name=same_user_name,
                            archived_post_replies=archived_post_replies,
-                           followers=followers, following=following,
+                           followers=followers, following=following, followers_count=followers_count,
+                           profile_post_count=profile_post_count, profile_comment_count=profile_comment_count,
+                           shows_comments=shows_comments,
                            bot_challenge=bot_challenge, vote_quota_used=vote_quota_used,
                            ap_alternate=ap_alternate))
     # C1 item 1: the profile advertises its ActivityPub id as the post page does (D1086). `add`, not `set`: the
@@ -746,6 +762,9 @@ def user_settings():
         current_user.microblog_feed = form.microblog_feed.data
         current_user.microblogs_private = form.microblog_privacy.data == 'private'
         current_user.show_subscribed_communities = form.show_subscribed_communities.data
+        current_user.profile_community_posts = form.profile_community_posts.data
+        current_user.profile_comments = form.profile_comments.data
+        current_user.profile_followers = form.profile_followers.data
         current_user.ap_manually_approves_followers = form.manually_approves_followers.data
         if propagate_indexable:
             db.session.execute(text('UPDATE "post" set indexable = :indexable WHERE user_id = :user_id'),
@@ -865,6 +884,9 @@ def user_settings():
         form.code_style.data = current_user.code_style or 'fruity'
         form.additional_css.data = current_user.additional_css
         form.show_subscribed_communities.data = current_user.show_subscribed_communities
+        form.profile_community_posts.data = current_user.profile_community_posts
+        form.profile_comments.data = current_user.profile_comments
+        form.profile_followers.data = profile_privacy.followers_of(current_user)
         form.manually_approves_followers.data = current_user.ap_manually_approves_followers
         form.max_hours_per_day.data = request.cookies.get('max_hours_per_day', '')
         form.max_hours_change_restriction.data = request.cookies.get('max_hours_change_restriction', 'anytime')
@@ -2737,6 +2759,9 @@ def show_profile_rss(actor):
         filter(Community.private == False, Community.banned == False). \
         filter(Post.from_bot == False, Post.deleted == False, Post.visibility.in_(OPEN_VISIBILITIES),
                Post.status > POST_STATUS_REVIEWING)
+    # a feed has no viewer: the person's community posts only when they show them (spec 2026-11-26-profile-privacy)
+    if (hidden := profile_privacy.hidden_posts_clause(user, None)) is not None:
+        posts = posts.filter(hidden)
     posts = without_local_only(posts, Post, visible=local_only_visible_rss()).order_by(desc(Post.created_at)).\
         limit(limit).all()
 

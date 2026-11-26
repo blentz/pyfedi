@@ -16,6 +16,9 @@ def per_domain_html_routes_world(app, two_domains, monkeypatch):
     first_bob, first_art = two_domains.local_user('bob', first), two_domains.local_community('art', first)
     onion_art.title, first_art.title = 'Onion art', 'First art'
     onion_bob.set_password('onion password')
+    # their profiles show every post and comment, as these tests were written for (spec 2026-11-26-profile-privacy)
+    for bob in (onion_bob, first_bob):
+        bob.profile_community_posts = bob.profile_comments = True
     first_bob.set_password('first password')
     viewers = {ONION: two_domains.local_user('viewer', onion), FIRST: two_domains.local_user('watcher', first)}
     for viewer in viewers.values():

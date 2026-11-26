@@ -20,6 +20,7 @@ from sqlalchemy.orm import aliased
 from app import db
 from app.local_only import found_here, without_local_only
 from app.models import Community, Post, PostReply, User, utcnow
+import app.profile_privacy as profile_privacy
 import app.reads.post as reads_post   # a module, looked up when called: app.reads.post's own imports lead back here
 from app.reads.viewer import Restrictions
 from app.storefront import current_storefront, domain_base_url, domain_rows, on_domain
@@ -184,6 +185,7 @@ class CommentListing:
     depth_first: bool = False
     page: int = 1
     limit: int = 10
+    profile_privacy: bool = False   # `person_id`'s profile settings bind the viewer (spec 2026-11-26-profile-privacy)
 
 
 @dataclass(frozen=True)
@@ -304,6 +306,10 @@ def _listing(replies, user_id, restrictions: Restrictions, listing: CommentListi
         replies = replies.filter_by(post_id=listing.post_id)
     if listing.max_depth is not None:
         replies = replies.filter(PostReply.depth < listing.max_depth)
+    if listing.profile_privacy and listing.person_id is not None and \
+            (person := db.session.get(User, listing.person_id)) is not None and \
+            (hidden := profile_privacy.hidden_replies_clause(person, user_id)) is not None:
+        replies = replies.filter(hidden)   # the person's comments only when their profile shows them
     return replies
 
 
