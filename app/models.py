@@ -7717,6 +7717,8 @@ class AdminMessage(db.Model):
     subscription = db.Column(db.String(10))   # filtered: None, 'any', 'none' or 'offers'
     offer_ids = db.Column(MutableList.as_mutable(ARRAY(db.Integer)))   # subscription 'offers': holds one of these
     service_notice = db.Column(db.Boolean, nullable=False, default=False)   # reaches opted-out members (MS4)
+    # The domain every copy is sent from, its name and links (MS6, D24); None: each reader's home domain
+    from_domain_id = db.Column(db.Integer, db.ForeignKey('site_domain.id', ondelete='SET NULL'))
     status = db.Column(db.String(10), nullable=False, default='draft')   # draft, scheduled, sending, sent (D11)
     scheduled_for = db.Column(db.DateTime, index=True)
     created_by = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'))

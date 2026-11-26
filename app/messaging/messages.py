@@ -8,12 +8,13 @@ from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app import celery, db
-from app.email import mail_name, send_email
+from app.branding import branding_for
+from app.email import send_email
 from app.messaging.catalog import MESSAGE_PLACEHOLDERS
 from app.messaging.render import Mail, Value, compose
 from app.models import AdminMessage, AdminMessageDelivery, AdminMessagePick, MemberSubscription, RoleGrant, \
     SiteDomain, User, utcnow
-from app.storefront import home_storefront, storefront_url
+from app.storefront import DomainInfo, current_storefront, domain_by_id, domain_storefront, storefront_url
 from app.utils import get_task_session, patch_db_session
 
 AUDIENCES = ('all', 'filtered', 'picked')
@@ -67,22 +68,29 @@ def recipient_count(message: AdminMessage) -> int:
 
 def render_for(message: AdminMessage, user: User) -> tuple[Mail, str | None]:
     """The message as `user` gets it, and its List-Unsubscribe link: none on a service notice (MS4), none without a
-    token (as newsletter.html has always done). Call it under the user's storefront."""
+    token (as newsletter.html has always done). Call it under the storefront it is sent from (`sent_from`)."""
     unsubscribe = None
     if not message.service_notice and user.verification_token:
         unsubscribe = url_for('user.user_newsletter_unsubscribe', user_id=user.id, token=user.verification_token,
                               _external=True)
-    values = {'name': Value(user.display_name()), 'site_name': Value(mail_name(user)),
+    values = {'name': Value(user.display_name()), 'site_name': Value(branding_for(current_storefront()).name),
               'site_url': Value(storefront_url())}
     mail = compose(message.subject, message.body, MESSAGE_PLACEHOLDERS, values, unsubscribe,
                    _('Unsubscribe from the newsletter'))
     return mail, unsubscribe
 
 
+def sent_from(message: AdminMessage, user: User) -> DomainInfo:
+    """The domain `user`'s copy goes out as: the one the admin picked (MS6, D24), else the reader's home domain, whose
+    links they log in on (spec §3.2)."""
+    return domain_by_id(message.from_domain_id) if message.from_domain_id is not None else user.home_domain()
+
+
 def mail_one(message: AdminMessage, user: User, to: str | None = None) -> None:
-    with home_storefront(user):   # each reader's links name their own domain (spec §3.2)
+    domain = sent_from(message, user)
+    with domain_storefront(domain):
         mail, unsubscribe = render_for(message, user)
-    send_email(mail.subject, sender=f'{mail_name(user)} <{current_app.config["MAIL_FROM"]}>',
+    send_email(mail.subject, sender=f'{branding_for(domain).name} <{current_app.config["MAIL_FROM"]}>',
                recipients=[to or user.email], text_body=mail.text_body, html_body=mail.html_body,
                list_unsubscribe=unsubscribe)
 

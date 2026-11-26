@@ -25,6 +25,7 @@ Owner rulings, 2026-11-24.
 | MS3 | An admin message is sent now or once at a chosen time. No recurring schedules. |
 | MS4 | Admin messages honour the newsletter opt-out, unless the admin marks one a **service notice**. |
 | MS5 | A member whose prepaid subscription has ten days or less left gets the expiring email once a day until it runs out or is renewed, encouraging them to renew. |
+| MS6 | An admin message can be sent from one chosen domain: its name, and links to its address, in every copy, whatever each member's home domain. By default each member gets it from their own home domain. (2026-11-26) |
 
 ## Non-goals
 
@@ -65,7 +66,7 @@ Owner rulings, 2026-11-24.
 - **D9** The layout around an override keeps what the default has around its text: the logo header, and the
   unsubscribe footer and `List-Unsubscribe` header where the default has them (`welcome`, `unread_notifications`).
 
-### Admin messages (D10-D18)
+### Admin messages (D10-D18, D24)
 
 - **D10** `admin_message`: subject, Markdown body, audience, `service_notice`, status, `scheduled_for`, creator,
   timestamps, and counts. Placeholders `{name}`, `{site_name}`, `{site_url}`.
@@ -88,6 +89,11 @@ Owner rulings, 2026-11-24.
   `send-queue` and carries on from where it stopped (D16).
 - **D18** "Send a test to me" mails the current admin one copy at once, for a built-in or an admin message, without
   changing anything.
+- **D24** `admin_message.from_domain_id` (MS6) is the domain every copy is sent from, or null for each reader's home
+  domain (the default, as before). Each copy renders under that domain (`domain_storefront`): the sender's display
+  name and `{site_name}` are its branding's name, and `{site_url}`, the unsubscribe link and Markdown links name its
+  address. The From address stays `MAIL_FROM`, which is one per server. A deleted domain sets it back to null. A copy
+  of a message keeps it, and a test to the admin uses it.
 
 ### Subscription expiring (D19-D20)
 

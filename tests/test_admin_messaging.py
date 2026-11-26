@@ -25,7 +25,8 @@ from app.models import (AdminMessage, AdminMessageDelivery, AdminMessagePick, Em
 from app.shared.community import invite_with_email
 from app.storefront import clear_domain_cache, home_storefront
 from app.utils import set_setting
-from tests.factories import (INSTANCE_SETTINGS, grant_permission, grant_permissions, make_admin, make_community,
+from tests.factories import (INSTANCE_SETTINGS, configure, grant_permission, grant_permissions, make_admin,
+                             make_community,
                              make_instance, make_user)
 
 DEFAULT_HOST = 'test.piefed.local'
@@ -553,6 +554,94 @@ class TestRendering:
         with home_storefront(user):
             _mail, unsubscribe = render_for(a_message(), user)
         assert unsubscribe is None
+
+
+class TestSendingFrom:
+    """MS6, D24: every copy from one picked domain, or each from the reader's home domain."""
+
+    def names(self, env):
+        configure(env.default, name='Home Site')
+        configure(env.other, name='Other Site')
+        db.session.commit()
+        clear_domain_cache()
+        cache.clear()
+
+    def test_by_default_each_reader_gets_it_from_their_home_domain(self, env):
+        self.names(env)
+        at_home, away = member(env, 'athome'), member(env, 'away', site_domain_id=env.other.id)
+        message = a_message(body='{site_name} at {site_url}', status='sending')
+        assert messaging.sent_from(message, at_home).id == env.default.id
+        assert messaging.sent_from(message, away).id == env.other.id
+        sent = Sent()
+        with patch('app.messaging.messages.send_email', sent):
+            deliver(message.id)
+        (home_copy,), (away_copy,) = sent.to(at_home.email), sent.to(away.email)
+        assert home_copy['sender'].startswith('Home Site <') and f'Home Site at https://{DEFAULT_HOST}' in \
+            home_copy['text_body']
+        assert away_copy['sender'].startswith('Other Site <') and 'Other Site at https://other.example' in \
+            away_copy['text_body']
+
+    def test_a_picked_domain_names_every_copy_and_its_links(self, env):
+        self.names(env)
+        at_home, away = member(env, 'athome'), member(env, 'away', site_domain_id=env.other.id)
+        message = a_message(body='{site_name} at {site_url}', status='sending', from_domain_id=env.other.id)
+        sent = Sent()
+        with patch('app.messaging.messages.send_email', sent):
+            assert deliver(message.id) == 2
+        for user in (at_home, away):
+            (mail,) = sent.to(user.email)
+            assert mail['sender'] == f'Other Site <{current_app.config["MAIL_FROM"]}>'
+            assert 'Other Site at https://other.example' in mail['text_body']
+            assert mail['list_unsubscribe'].startswith('https://other.example/user/newsletter/')
+        assert 'Home Site' not in str(sent)
+
+    def test_the_picked_domain_is_saved_shown_and_copied(self, env):
+        response = post(env, '/admin/messaging/new', MESSAGE, from_domain=env.other.id, save='y')
+        message = AdminMessage.query.one()
+        assert response.status_code == 302 and message.from_domain_id == env.other.id
+        body = text_of(env.client.get(f'/admin/messaging/{message.id}'))
+        assert re.search(rf'<option selected value="{env.other.id}">other.example</option>', body) or \
+            re.search(rf'<option value="{env.other.id}" selected>other.example</option>', body)
+        message.status, message.sent_at = 'sent', utcnow()
+        db.session.commit()
+        body = text_of(env.client.get(f'/admin/messaging/{message.id}'))
+        assert re.search(r'id="message_from_domain">other.example<', body)
+        post(env, f'/admin/messaging/{message.id}/duplicate')
+        copy = AdminMessage.query.filter(AdminMessage.id != message.id).one()
+        assert copy.from_domain_id == env.other.id
+
+    def test_home_domain_is_the_default_choice_and_stores_none(self, env):
+        body = text_of(env.client.get('/admin/messaging/new'))
+        assert 'name="from_domain"' in body and "Each member&#39;s home domain" in body
+        post(env, '/admin/messaging/new', MESSAGE, from_domain=0, save='y')
+        message = AdminMessage.query.one()
+        assert message.from_domain_id is None
+        message.status, message.sent_at = 'sent', utcnow()
+        db.session.commit()
+        assert "id=\"message_from_domain\">Each member&#39;s home domain<" in \
+            text_of(env.client.get(f'/admin/messaging/{message.id}'))
+
+    def test_a_domain_that_is_not_one_is_refused(self, env):
+        response = post(env, '/admin/messaging/new', MESSAGE, from_domain=999999, save='y')
+        assert response.status_code == 200 and AdminMessage.query.count() == 0
+
+    def test_the_test_copy_comes_from_the_picked_domain(self, env):
+        self.names(env)
+        env.admin.verification_token = 'tokadmin'
+        db.session.commit()
+        message = a_message(from_domain_id=env.other.id)
+        sent = Sent()
+        with patch('app.messaging.messages.send_email', sent):
+            messaging.mail_one(message, env.admin)
+        assert sent[0]['sender'].startswith('Other Site <')
+
+    def test_a_deleted_domain_falls_back_to_home_domains(self, env):
+        message = a_message(from_domain_id=env.other.id)
+        db.session.execute(db.text('DELETE FROM domain_config WHERE site_domain_id = :id'), {'id': env.other.id})
+        db.session.delete(env.other)
+        db.session.commit()
+        db.session.refresh(message)
+        assert message.from_domain_id is None
 
 
 class TestDispatch:

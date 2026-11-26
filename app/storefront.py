@@ -1596,7 +1596,14 @@ def home_storefront(user):
     account: an onion account's links name the onion, a clearnet account's its own domain even when an onion
     request triggered the send. Outside a request (a cron job) a request context for the domain is pushed, so
     `url_for(_external=True)` names it there too."""
-    domain = user.home_domain()
+    with domain_storefront(user.home_domain()):
+        yield
+
+
+@contextmanager
+def domain_storefront(domain: DomainInfo):
+    """Render under `domain` for the duration of the block, as `home_storefront` does for an account's home domain:
+    for mail an admin chose to send from one domain (admin messaging MS6)."""
     if has_request_context():
         with _pinned(domain):
             yield

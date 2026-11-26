@@ -33,6 +33,8 @@
         {% if read_only %}
             <h2 class="h5">{{ _('Subject') }}</h2>
             <p>{{ message.subject }}</p>
+            <h2 class="h5">{{ _('Sent from') }}</h2>
+            <p id="message_from_domain">{{ from_domain }}</p>
             <h2 class="h5">{{ _('Text') }}</h2>
             <pre class="border p-2" style="white-space: pre-wrap;">{{ message.body }}</pre>
         {% else %}
@@ -43,6 +45,8 @@
             <p class="small text-muted">{{ _('You can use:') }}
                 {% for p in placeholders %}<code>{{ '{' + p.name + '}' }}</code> {{ p.description }}{% if not loop.last %}, {% endif %}{% endfor %}.
                 {{ _('Write {{ or }} for a brace.') }}</p>
+            {{ render_field(form.from_domain) }}
+            <p class="small text-muted">{{ _("The domain whose name the message goes by, and whose address its links and {site_url} use. With each member's home domain, every member gets it from the domain their account is on.") }}</p>
             {{ render_field(form.audience) }}
             <fieldset class="border p-2 mb-3" id="audience_filters">
                 <legend class="h6">{{ _('Filters (all that you set must match)') }}</legend>

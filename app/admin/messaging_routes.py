@@ -19,7 +19,7 @@ from app.messaging.messages import mail_one, recipient_count, send_now, schedule
 from app.messaging.render import compose, problems, sample_values
 from app.models import AdminMessage, AdminMessagePick, EmailTemplate, Offer, Role, User, utcnow
 from app.permissions import user_access
-from app.storefront import domain_rows
+from app.storefront import domain_by_id, domain_rows
 from app.utils import permission_required, render_template, roles_with
 
 EDITABLE_STATUSES = ('draft', 'scheduled')
@@ -42,6 +42,7 @@ class MessageForm(FlaskForm):
     subject = StringField(_l('Subject'), validators=[DataRequired(), Length(max=255)])
     body = TextAreaField(_l('Text (Markdown)'), validators=[DataRequired(), Length(max=100000)], render_kw={'rows': 14})
     service_notice = BooleanField(_l('Service notice: send it to members who turned the newsletter off too'))
+    from_domain = SelectField(_l('Send from'), coerce=int, default=0, render_kw={'class': 'form-select'})
     audience = RadioField(_l('Send to'), default='all', choices=select_choices([
         ('all', _l('All members')), ('filtered', _l('Members matching the filters below')),
         ('picked', _l('Only the accounts listed below'))]))
@@ -62,6 +63,7 @@ class MessageForm(FlaskForm):
 
     def fill_choices(self):
         self.domains.choices = select_choices((row.id, row.domain) for row in domain_rows() if row.id is not None)
+        self.from_domain.choices = [(0, _("Each member's home domain"))] + list(self.domains.choices)
         self.roles.choices = select_choices((role.id, role.name)
                                             for role in Role.query.order_by(Role.built_in.desc(), Role.name))
         self.offers.choices = select_choices((offer.id, offer.title) for offer in Offer.query.filter(
@@ -99,6 +101,7 @@ def _form_problems(form: MessageForm, message: AdminMessage | None, users: list,
 def _store(message: AdminMessage, form: MessageForm, users: list) -> None:
     message.subject, message.body = form.subject.data.strip(), form.body.data
     message.service_notice = bool(form.service_notice.data)
+    message.from_domain_id = form.from_domain.data or None   # 0: each reader's home domain (MS6)
     message.audience = form.audience.data   # one of AUDIENCES: the form's choices are those
     filtered = message.audience == 'filtered'
     message.domain_ids = list(form.domains.data or []) if filtered else None
@@ -116,12 +119,20 @@ def _store(message: AdminMessage, form: MessageForm, users: list) -> None:
 def _load_form(form: MessageForm, message: AdminMessage) -> None:
     form.subject.data, form.body.data = message.subject, message.body
     form.service_notice.data, form.audience.data = message.service_notice, message.audience
+    form.from_domain.data = message.from_domain_id or 0
     form.domains.data, form.roles.data = list(message.domain_ids or []), list(message.role_ids or [])
     form.subscription.data, form.offers.data = message.subscription or '', list(message.offer_ids or [])
     picks = User.query.join(AdminMessagePick, AdminMessagePick.user_id == User.id) \
         .filter(AdminMessagePick.message_id == message.id).order_by(User.user_name).all()
     form.picked.data = '\n'.join(user.link() for user in picks)
     form.scheduled_for.data = message.scheduled_for
+
+
+def _from_domain_name(message: AdminMessage) -> str:
+    """Where the page says the message is sent from."""
+    if message.from_domain_id is None:
+        return _("Each member's home domain")
+    return domain_by_id(message.from_domain_id).domain
 
 
 def _message(message_id: int, lock: bool = False) -> AdminMessage:
@@ -190,6 +201,7 @@ def _edit_message(message: AdminMessage | None):
                                            sample_values(MESSAGE_PLACEHOLDERS)) if stored else None,
                            count=recipient_count(message) if stored else None,
                            read_only=stored and message.status not in EDITABLE_STATUSES,
+                           from_domain=_from_domain_name(message) if stored else None,
                            roles_with=roles_with('send newsletter'))
 
 
@@ -250,7 +262,8 @@ def messaging_duplicate(message_id):
     copy = AdminMessage(subject=original.subject, body=original.body, audience=original.audience,
                         domain_ids=original.domain_ids, role_ids=original.role_ids,
                         subscription=original.subscription, offer_ids=original.offer_ids,
-                        service_notice=original.service_notice, status='draft', created_by=current_user.id)
+                        service_notice=original.service_notice, from_domain_id=original.from_domain_id,
+                        status='draft', created_by=current_user.id)
     db.session.add(copy)
     db.session.flush()
     db.session.add_all(AdminMessagePick(message_id=copy.id, user_id=pick.user_id)
